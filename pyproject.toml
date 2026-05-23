@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "data-quality-toolkit"
+version = "0.1.0"
+description = "A toolkit for data quality checks, cleaning, and reporting"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "pandas",
+    "numpy",
+    "matplotlib",
+    "seaborn",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
