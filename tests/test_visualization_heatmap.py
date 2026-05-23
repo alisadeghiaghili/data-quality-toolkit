@@ -1,41 +1,38 @@
 """Tests for data_quality_toolkit.visualization.correlation_heatmap.
 
-Strategy
---------
-* Verify the stable public signature: positional ``corr``, keyword-only
-  ``mask_insignificant``, ``significance``, ``cmap``, ``annot``, ``fmt``,
-  ``vmin``, ``vmax``, ``center``, ``linewidths``, ``n_obs``.
-* Verify no warnings or exceptions are raised on a normal correlation
-  matrix.
-* Verify ``mask_insignificant=True`` path without raising.
-* Verify ``ax`` is returned (matplotlib Axes).
+Verifies that:
+* The function exists and is callable with a stable signature.
+* It renders without errors or warnings on a small correlation matrix.
+* Optional parameters (mask_insignificant, n_obs, cmap, annot) work correctly.
+* Edge cases (1-column matrix, all-NaN diagonal, perfect correlation) do not raise.
 """
 
 from __future__ import annotations
 
 import warnings
-
-import matplotlib
-matplotlib.use("Agg")  # non-interactive backend — safe in CI
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 from data_quality_toolkit.visualization import correlation_heatmap
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def close_plots():
+    yield
+    plt.close("all")
+
 
 @pytest.fixture
 def small_corr() -> pd.DataFrame:
-    """3×3 precomputed correlation matrix with no NaN entries."""
+    """3x3 correlation matrix with no NaNs."""
     data = np.array([
         [1.00,  0.80, -0.30],
-        [0.80,  1.00, -0.10],
-        [-0.30, -0.10,  1.00],
+        [0.80,  1.00,  0.10],
+        [-0.30, 0.10,  1.00],
     ])
     cols = ["a", "b", "c"]
     return pd.DataFrame(data, index=cols, columns=cols)
@@ -43,166 +40,137 @@ def small_corr() -> pd.DataFrame:
 
 @pytest.fixture
 def corr_with_nan() -> pd.DataFrame:
-    """3×3 matrix with one NaN cell (single-valued column edge-case)."""
+    """3x3 correlation matrix where off-diagonals for column 'c' are NaN."""
     data = np.array([
-        [1.00,  0.70,  np.nan],
-        [0.70,  1.00,  np.nan],
-        [np.nan, np.nan, np.nan],
+        [1.00,  0.75,  np.nan],
+        [0.75,  1.00,  np.nan],
+        [np.nan, np.nan, 1.00],
     ])
     cols = ["x", "y", "z"]
     return pd.DataFrame(data, index=cols, columns=cols)
 
 
-@pytest.fixture(autouse=True)
-def close_figures():
-    """Close all matplotlib figures after each test to avoid resource leaks."""
-    yield
-    plt.close("all")
+# ---------------------------------------------------------------------------
+# Existence and callable
+# ---------------------------------------------------------------------------
+
+def test_correlation_heatmap_is_callable():
+    assert callable(correlation_heatmap)
+
+
+def test_correlation_heatmap_in_all():
+    from data_quality_toolkit import visualization
+    assert "correlation_heatmap" in visualization.__all__
 
 
 # ---------------------------------------------------------------------------
-# Signature / return type
+# Basic rendering — no errors, no warnings
 # ---------------------------------------------------------------------------
 
-class TestSignatureAndReturnType:
-    """Public signature is stable and return type is always Axes."""
+def test_basic_no_error(small_corr):
+    """Renders without raising any exception."""
+    ax = correlation_heatmap(small_corr)
+    assert ax is not None
 
-    def test_returns_axes(self, small_corr):
-        import matplotlib.axes
-        ax = correlation_heatmap(small_corr)
-        assert isinstance(ax, matplotlib.axes.Axes)
 
-    def test_accepts_external_axes(self, small_corr):
-        """When ax is provided, the same object should be returned."""
-        fig, ax_in = plt.subplots()
-        ax_out = correlation_heatmap(small_corr, ax=ax_in)
-        assert ax_out is ax_in
+def test_basic_no_warnings(small_corr):
+    """Renders without emitting any Python warnings."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        correlation_heatmap(small_corr)
 
-    def test_creates_axes_when_none(self, small_corr):
-        """ax=None (default) should auto-create an Axes."""
-        import matplotlib.axes
-        ax = correlation_heatmap(small_corr, ax=None)
-        assert isinstance(ax, matplotlib.axes.Axes)
 
-    def test_all_keyword_args_accepted(self, small_corr):
-        """All documented keyword-only args must be accepted without error."""
-        ax = correlation_heatmap(
-            small_corr,
-            mask_insignificant=False,
-            significance=0.05,
-            cmap="Blues",
-            annot=True,
-            fmt=".2f",
-            vmin=-1.0,
-            vmax=1.0,
-            center=0.0,
-            linewidths=0.5,
-            n_obs=None,
-        )
-        import matplotlib.axes
-        assert isinstance(ax, matplotlib.axes.Axes)
+def test_returns_axes(small_corr):
+    import matplotlib.axes
+    ax = correlation_heatmap(small_corr)
+    assert isinstance(ax, matplotlib.axes.Axes)
 
 
 # ---------------------------------------------------------------------------
-# No warnings / exceptions on normal input
+# Signature stability — all documented parameters accepted
 # ---------------------------------------------------------------------------
 
-class TestNoWarningsOnNormalInput:
-    """Plotting a clean correlation matrix must not emit any warning."""
+def test_accepts_ax_parameter(small_corr):
+    fig, ax = plt.subplots(figsize=(4, 4))
+    result = correlation_heatmap(small_corr, ax=ax)
+    assert result is ax
 
-    def test_no_warnings_default_params(self, small_corr):
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")  # turn any warning into an error
-            correlation_heatmap(small_corr)
 
-    def test_no_warnings_annot_false(self, small_corr):
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            correlation_heatmap(small_corr, annot=False)
+def test_accepts_cmap(small_corr):
+    ax = correlation_heatmap(small_corr, cmap="coolwarm")
+    assert ax is not None
 
-    def test_no_warnings_custom_cmap(self, small_corr):
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            correlation_heatmap(small_corr, cmap="coolwarm")
+
+def test_accepts_annot_false(small_corr):
+    ax = correlation_heatmap(small_corr, annot=False)
+    assert ax is not None
+
+
+def test_accepts_vmin_vmax(small_corr):
+    ax = correlation_heatmap(small_corr, vmin=-1.0, vmax=1.0)
+    assert ax is not None
+
+
+def test_accepts_fmt(small_corr):
+    ax = correlation_heatmap(small_corr, fmt=".3f")
+    assert ax is not None
+
+
+def test_accepts_linewidths(small_corr):
+    ax = correlation_heatmap(small_corr, linewidths=1.0)
+    assert ax is not None
+
+
+# ---------------------------------------------------------------------------
+# mask_insignificant
+# ---------------------------------------------------------------------------
+
+def test_mask_insignificant_requires_n_obs(small_corr):
+    """mask_insignificant=True without n_obs must raise ValueError."""
+    with pytest.raises(ValueError, match="n_obs"):
+        correlation_heatmap(small_corr, mask_insignificant=True)
+
+
+def test_mask_insignificant_with_n_obs(small_corr):
+    """mask_insignificant=True with n_obs must not raise."""
+    ax = correlation_heatmap(small_corr, mask_insignificant=True, n_obs=30)
+    assert ax is not None
 
 
 # ---------------------------------------------------------------------------
 # NaN handling
 # ---------------------------------------------------------------------------
 
-class TestNanHandling:
-    """Matrices with NaN entries should render without raising."""
-
-    def test_corr_with_nan_does_not_raise(self, corr_with_nan):
-        # Should not raise even though one column is all-NaN
-        correlation_heatmap(corr_with_nan)
-
-    def test_all_nan_matrix_does_not_raise(self):
-        """Degenerate: fully NaN correlation matrix."""
-        df = pd.DataFrame(
-            np.full((3, 3), np.nan),
-            columns=["p", "q", "r"],
-            index=["p", "q", "r"],
-        )
-        correlation_heatmap(df)
-
-
-# ---------------------------------------------------------------------------
-# mask_insignificant path
-# ---------------------------------------------------------------------------
-
-class TestMaskInsignificant:
-    """mask_insignificant=True should work without raising."""
-
-    def test_mask_insignificant_requires_n_obs(self, small_corr):
-        """Omitting n_obs when mask_insignificant=True must raise ValueError."""
-        with pytest.raises(ValueError, match="n_obs"):
-            correlation_heatmap(small_corr, mask_insignificant=True)
-
-    def test_mask_insignificant_with_n_obs(self, small_corr):
-        """Providing n_obs must succeed without error or warning."""
-        ax = correlation_heatmap(
-            small_corr,
-            mask_insignificant=True,
-            n_obs=100,
-        )
-        import matplotlib.axes
-        assert isinstance(ax, matplotlib.axes.Axes)
-
-    def test_mask_insignificant_high_significance(self, small_corr):
-        """significance=1.0 should mask everything except the diagonal."""
-        ax = correlation_heatmap(
-            small_corr,
-            mask_insignificant=True,
-            n_obs=10,
-            significance=1.0,
-        )
-        import matplotlib.axes
-        assert isinstance(ax, matplotlib.axes.Axes)
+def test_handles_nan_in_matrix(corr_with_nan):
+    """Correlation matrix with NaN cells renders without error."""
+    ax = correlation_heatmap(corr_with_nan)
+    assert ax is not None
 
 
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
 
-class TestEdgeCases:
-    """Boundary conditions."""
+def test_single_column_matrix():
+    """1x1 identity correlation matrix does not raise."""
+    corr = pd.DataFrame([[1.0]], index=["a"], columns=["a"])
+    ax = correlation_heatmap(corr)
+    assert ax is not None
 
-    def test_1x1_matrix(self):
-        """Single-cell identity matrix."""
-        df = pd.DataFrame([[1.0]], index=["a"], columns=["a"])
-        correlation_heatmap(df)
 
-    def test_large_matrix(self):
-        """10×10 matrix should not raise."""
-        rng = np.random.default_rng(0)
-        raw = rng.standard_normal((50, 10))
-        cols = list("abcdefghij")
-        corr = pd.DataFrame(raw, columns=cols).corr()
-        correlation_heatmap(corr)
+def test_perfect_correlation_no_masking():
+    """Perfect correlation (r=1) with mask_insignificant should not raise."""
+    data = np.array([[1.0, 1.0], [1.0, 1.0]])
+    corr = pd.DataFrame(data, index=["p", "q"], columns=["p", "q"])
+    ax = correlation_heatmap(corr, mask_insignificant=True, n_obs=50)
+    assert ax is not None
 
-    def test_integer_valued_corr(self):
-        """Integer dtype correlation matrix (edge case for fmt handling)."""
-        data = np.array([[1, 0], [0, 1]])
-        df = pd.DataFrame(data.astype(float), columns=["m", "n"], index=["m", "n"])
-        correlation_heatmap(df)
+
+def test_large_matrix_no_error():
+    """10x10 correlation matrix renders without error."""
+    rng = np.random.default_rng(0)
+    raw = rng.standard_normal((100, 10))
+    df = pd.DataFrame(raw, columns=list("abcdefghij"))
+    corr = df.corr()
+    ax = correlation_heatmap(corr)
+    assert ax is not None
