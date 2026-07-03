@@ -3,17 +3,83 @@ requires = ["setuptools>=72.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "data-quality-toolkit"
+name = "dqt"
 version = "0.1.0"
-description = "A toolkit for data quality checks, cleaning, and reporting"
+description = "DQT — SQL Data Quality Toolkit for DBAs"
 readme = "README.md"
-requires-python = ">=3.8"
-dependencies = [
-    "pandas",
-    "numpy",
-    "matplotlib",
-    "seaborn",
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["data-quality", "sql", "dba", "profiling", "diagnostics"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Topic :: Database",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "mypy>=1.10",
+    "ruff>=0.4",
+    "pydantic>=2.0",
+]
+bridges = [
+    # optional: pip install dqt[bridges] to enable missingly bridge
+    # "missingly",
+]
+
+[project.scripts]
+dqt = "dqt.cli.plain:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "TID"]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["dqt"]
+
+# ---------------------------------------------------------------------------
+# Mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+no_implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--tb=short -q"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
