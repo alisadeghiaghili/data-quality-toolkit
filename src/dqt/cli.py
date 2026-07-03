@@ -1,35 +1,21 @@
 """
-DQT command-line interface.
+dqt.cli
+=======
 
-This module exposes a minimal DBA-oriented CLI built with argparse.  It is
-intentionally thin; all business logic lives in the pipeline and domain layers.
+Command-line interface for DQT.
 
-Commands
---------
-profile
-    Run the full DQT pipeline against a database and write an HTML report.
+Exposes a ``profile`` subcommand that runs the full DQT pipeline against a
+SQL database and prints a rich summary to the terminal.
 
-Usage examples
---------------
-# Minimal — profile all schemas in a SQLite database::
+Usage examples::
 
     python -m dqt profile --dsn sqlite:///mydb.db
-
-# Scope to a single schema::
-
     python -m dqt profile --dsn postgresql://user:pass@host/db --schema public
-
-# Custom output directory and run-store location::
-
-    python -m dqt profile \\
-        --dsn sqlite:///mydb.db \\
-        --schema main \\
-        --report-dir /tmp/reports \\
-        --store /tmp/dqt_runs.db
-
-# Load full pipeline config from YAML/JSON::
-
     python -m dqt profile --dsn sqlite:///mydb.db --config dqt_config.yaml
+    python -m dqt profile --dsn sqlite:///mydb.db --report-dir /tmp/reports
+
+All log/progress output is written to stderr; only the final report path is
+printed to stdout so the caller can capture it via shell substitution.
 """
 
 from __future__ import annotations
@@ -38,197 +24,382 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
+
+try:
+    import yaml  # type: ignore
+    _YAML_AVAILABLE = True
+except ImportError:
+    _YAML_AVAILABLE = False
+
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.table import Table
+from rich import box
+
+from dqt.common.models import ConnectionConfig, DQPipelineConfig
+from dqt.sql.pipeline import DQTPipeline
+from dqt.common.models import PipelineResult
+
+_err = Console(stderr=True)
+_out = Console()
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Argument parsing
 # ---------------------------------------------------------------------------
-
-
-def _load_pipeline_config(config_path: str | None, schema: str | None,
-                           exclude_tables: list[str]) -> dict:
-    """Load pipeline configuration from a YAML/JSON file or build from flags.
-
-    Args:
-        config_path: Optional path to a ``.yaml`` or ``.json`` config file.
-        schema: Schema filter from the ``--schema`` flag.
-        exclude_tables: Tables to exclude from ``--exclude-tables``.
-
-    Returns:
-        A dict compatible with ``DQPipelineConfig`` field names.
-    """
-    if config_path:
-        p = Path(config_path)
-        if not p.exists():
-            print(f"[dqt] ERROR: config file not found: {config_path}", file=sys.stderr)
-            sys.exit(1)
-        text = p.read_text(encoding="utf-8")
-        if p.suffix in (".yaml", ".yml"):
-            try:
-                import yaml  # type: ignore
-                data = yaml.safe_load(text)
-            except ImportError:
-                print(
-                    "[dqt] ERROR: PyYAML is required to load .yaml configs. "
-                    "Install it with: pip install pyyaml",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-        else:
-            data = json.loads(text)
-        return data if isinstance(data, dict) else {}
-
-    cfg: dict = {}
-    if schema:
-        cfg["include_schemas"] = [schema]
-    if exclude_tables:
-        cfg["exclude_tables"] = exclude_tables
-    return cfg
-
-
-# ---------------------------------------------------------------------------
-# Sub-command: profile
-# ---------------------------------------------------------------------------
-
-
-def _cmd_profile(args: argparse.Namespace) -> None:
-    """Execute the profile sub-command."""
-    # Late imports keep startup fast and errors local to the command.
-    from dqt.common.models import ConnectionConfig, DQPipelineConfig
-    from dqt.sql.pipeline import DQTPipeline
-
-    # -- Build connection config
-    conn_cfg = ConnectionConfig(
-        id=f"cli-{args.dsn.split('/')[-1]}",
-        dsn=args.dsn,
-        dialect=args.dsn.split("://")[0] if "://" in args.dsn else "sqlite",
-    )
-
-    # -- Build pipeline config
-    raw_cfg = _load_pipeline_config(
-        config_path=args.config,
-        schema=args.schema,
-        exclude_tables=args.exclude_tables or [],
-    )
-    pipeline_cfg = DQPipelineConfig(**raw_cfg)
-
-    # -- Resolve paths
-    report_dir = Path(args.report_dir) if args.report_dir else Path.cwd()
-    report_dir.mkdir(parents=True, exist_ok=True)
-    store_path = Path(args.store) if args.store else Path.cwd() / "dqt_runs.db"
-
-    print(f"[dqt] Connecting to: {args.dsn}")
-    print(f"[dqt] Report output : {report_dir}")
-    print(f"[dqt] Run store     : {store_path}")
-    if args.schema:
-        print(f"[dqt] Schema filter : {args.schema}")
-
-    # -- Run pipeline
-    pipeline = DQTPipeline(
-        connection_config=conn_cfg,
-        pipeline_config=pipeline_cfg,
-        store_path=store_path,
-        report_dir=report_dir,
-    )
-
-    try:
-        result, report_path = pipeline.run()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[dqt] ERROR: pipeline failed — {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    issues_by_sev: dict[str, int] = {}
-    for issue in result.issues:
-        issues_by_sev[issue.severity] = issues_by_sev.get(issue.severity, 0) + 1
-
-    print()
-    print(f"[dqt] Run ID        : {result.run_id}")
-    print(f"[dqt] Status        : {result.status}")
-    print(f"[dqt] Tables scanned: {len(result.tables)}")
-    print(f"[dqt] Metrics       : {len(result.metrics)}")
-    print(f"[dqt] Issues        : {sum(issues_by_sev.values())} "
-          f"({', '.join(f'{v} {k}' for k, v in sorted(issues_by_sev.items()))})")
-    print(f"[dqt] Report        : {report_path}")
-
-
-# ---------------------------------------------------------------------------
-# Parser
-# ---------------------------------------------------------------------------
-
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Build and return the top-level argument parser."""
+    """Build and return the CLI argument parser."""
     parser = argparse.ArgumentParser(
         prog="dqt",
         description="DQT — SQL Data Quality Toolkit",
     )
-    sub = parser.add_subparsers(dest="command", metavar="<command>")
-    sub.required = True
+    sub = parser.add_subparsers(dest="command", required=True)
 
-    # profile subcommand
-    profile_p = sub.add_parser(
+    # -- profile subcommand
+    profile = sub.add_parser(
         "profile",
-        help="Run the DQ pipeline and write an HTML report.",
+        help="Run the DQT pipeline and generate a data-quality report.",
     )
-    profile_p.add_argument(
+    profile.add_argument(
         "--dsn",
         required=True,
         metavar="DSN",
-        help="Database connection string, e.g. sqlite:///db.db or postgresql://user:pass@host/db",
+        help="SQLAlchemy-style DSN, e.g. sqlite:///mydb.db or "
+             "postgresql://user:pass@host/db",
     )
-    profile_p.add_argument(
+    profile.add_argument(
         "--schema",
+        dest="schema",
         default=None,
         metavar="SCHEMA",
         help="Restrict profiling to this schema (optional).",
     )
-    profile_p.add_argument(
-        "--exclude-tables",
-        nargs="+",
-        default=[],
-        metavar="TABLE",
-        help="Space-separated list of table names to exclude.",
-    )
-    profile_p.add_argument(
-        "--config",
-        default=None,
-        metavar="PATH",
-        help="Path to a YAML or JSON pipeline config file.",
-    )
-    profile_p.add_argument(
+    profile.add_argument(
         "--report-dir",
+        dest="report_dir",
         default=None,
         metavar="DIR",
-        help="Directory where the HTML report is written (default: current directory).",
+        help="Directory for the HTML report (default: current directory).",
     )
-    profile_p.add_argument(
+    profile.add_argument(
         "--store",
+        dest="store",
         default=None,
         metavar="PATH",
-        help="SQLite path for the RunStore (default: dqt_runs.db in current directory).",
+        help="Path to the RunStore SQLite file (default: dqt_runs.db).",
     )
-    profile_p.set_defaults(func=_cmd_profile)
-
+    profile.add_argument(
+        "--config",
+        dest="config",
+        default=None,
+        metavar="FILE",
+        help="Optional YAML or JSON config file with pipeline options.",
+    )
+    profile.add_argument(
+        "--connection-id",
+        dest="connection_id",
+        default="cli",
+        metavar="ID",
+        help="Logical connection identifier stored in run history (default: cli).",
+    )
     return parser
+
+
+# ---------------------------------------------------------------------------
+# Config loading
+# ---------------------------------------------------------------------------
+
+def _load_config_file(path: str) -> dict[str, Any]:
+    """Load a YAML or JSON config file and return it as a dict.
+
+    Args:
+        path: Path to a YAML (``.yaml``/``.yml``) or JSON (``.json``) file.
+
+    Returns:
+        Parsed configuration dict.
+
+    Raises:
+        SystemExit: If the file cannot be parsed or YAML is not installed.
+
+    Example::
+
+        cfg = _load_config_file("dqt_config.yaml")
+    """
+    p = Path(path)
+    if not p.exists():
+        _err.print(f"[red]Config file not found:[/red] {path}")
+        sys.exit(1)
+    raw = p.read_text(encoding="utf-8")
+    if p.suffix in (".yaml", ".yml"):
+        if not _YAML_AVAILABLE:
+            _err.print(
+                "[red]PyYAML is not installed.[/red] "
+                "Run: pip install pyyaml"
+            )
+            sys.exit(1)
+        return yaml.safe_load(raw) or {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _err.print(f"[red]Failed to parse config JSON:[/red] {exc}")
+        sys.exit(1)
+
+
+def _build_pipeline_config(
+    args: argparse.Namespace,
+    file_cfg: dict[str, Any],
+) -> DQPipelineConfig:
+    """Merge CLI args + config file into a DQPipelineConfig.
+
+    CLI args take precedence over file values.
+
+    Args:
+        args: Parsed CLI namespace.
+        file_cfg: Dict loaded from an optional config file.
+
+    Returns:
+        A populated DQPipelineConfig.
+
+    Example::
+
+        cfg = _build_pipeline_config(args, {})
+    """
+    include_schemas = None
+    if args.schema:
+        include_schemas = [args.schema]
+    elif file_cfg.get("include_schemas"):
+        include_schemas = file_cfg["include_schemas"]
+
+    return DQPipelineConfig(
+        include_schemas=include_schemas,
+        exclude_schemas=file_cfg.get("exclude_schemas"),
+        include_tables=file_cfg.get("include_tables"),
+        exclude_tables=file_cfg.get("exclude_tables"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Rich output helpers
+# ---------------------------------------------------------------------------
+
+_SEVERITY_STYLE = {
+    "critical": "bold red",
+    "error": "red",
+    "warning": "yellow",
+    "info": "dim",
+}
+
+
+def _print_metrics_table(result: PipelineResult) -> None:
+    """Render run-level metrics as a Rich table on stderr.
+
+    Args:
+        result: Completed pipeline result.
+
+    Example::
+
+        _print_metrics_table(result)
+    """
+    table = Table(
+        title="[bold]DQT Run Metrics[/bold]",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Schema", style="dim")
+    table.add_column("Table")
+    table.add_column("Column")
+    table.add_column("Dimension")
+    table.add_column("Score", justify="right")
+    table.add_column("Value", justify="right")
+
+    run_level = [m for m in result.metrics if m.table_name is None]
+    table_level = [m for m in result.metrics if m.table_name is not None and m.column_name is None]
+    col_level = [m for m in result.metrics if m.column_name is not None]
+
+    for m in run_level + table_level + col_level:
+        score = m.score
+        if score >= 0.9:
+            score_str = f"[green]{score:.2%}[/green]"
+        elif score >= 0.7:
+            score_str = f"[yellow]{score:.2%}[/yellow]"
+        else:
+            score_str = f"[red]{score:.2%}[/red]"
+        table.add_row(
+            m.schema_name or "",
+            m.table_name or "(run)",
+            m.column_name or "",
+            m.dimension,
+            score_str,
+            f"{m.value:.2f}" if m.value is not None else "",
+        )
+
+    _err.print(table)
+
+
+def _print_issues_table(result: PipelineResult) -> None:
+    """Render detected DQ issues as a Rich table on stderr.
+
+    Args:
+        result: Completed pipeline result.
+
+    Example::
+
+        _print_issues_table(result)
+    """
+    if not result.issues:
+        _err.print("[green]No data-quality issues detected.[/green]")
+        return
+
+    table = Table(
+        title="[bold]Data-Quality Issues[/bold]",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold red",
+    )
+    table.add_column("Severity")
+    table.add_column("Schema", style="dim")
+    table.add_column("Table")
+    table.add_column("Column")
+    table.add_column("Dimension")
+    table.add_column("Message")
+
+    for issue in sorted(result.issues, key=lambda i: i.severity, reverse=True):
+        sev_style = _SEVERITY_STYLE.get(issue.severity, "")
+        table.add_row(
+            f"[{sev_style}]{issue.severity.upper()}[/{sev_style}]",
+            issue.schema_name or "",
+            issue.table_name or "",
+            issue.column_name or "",
+            issue.dimension,
+            issue.message,
+        )
+
+    _err.print(table)
+
+
+# ---------------------------------------------------------------------------
+# Command handlers
+# ---------------------------------------------------------------------------
+
+def _cmd_profile(args: argparse.Namespace) -> int:
+    """Execute the profile command.
+
+    Builds ConnectionConfig + DQPipelineConfig from CLI args and an optional
+    config file, runs DQTPipeline with Rich progress display, and prints
+    a metrics + issues summary.
+
+    Args:
+        args: Parsed CLI namespace.
+
+    Returns:
+        Exit code (0 = success, 1 = error).
+
+    Example::
+
+        sys.exit(_cmd_profile(args))
+    """
+    file_cfg: dict[str, Any] = {}
+    if args.config:
+        file_cfg = _load_config_file(args.config)
+
+    connection_config = ConnectionConfig(
+        id=args.connection_id,
+        dsn=args.dsn,
+    )
+    pipeline_config = _build_pipeline_config(args, file_cfg)
+    report_dir = Path(args.report_dir) if args.report_dir else Path.cwd()
+    store_path = Path(args.store) if args.store else Path.cwd() / "dqt_runs.db"
+
+    pipeline = DQTPipeline(
+        connection_config=connection_config,
+        pipeline_config=pipeline_config,
+        store_path=store_path,
+        report_dir=report_dir,
+    )
+
+    _err.rule("[bold cyan]DQT Pipeline[/bold cyan]")
+
+    stages = [
+        "Discovering schema",
+        "Profiling tables",
+        "Running diagnostics",
+        "Applying rules",
+        "Computing metrics",
+        "Monitoring",
+        "Persisting results",
+        "Generating HTML report",
+    ]
+
+    result: PipelineResult | None = None
+    report_path: Path | None = None
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=_err,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Initializing...", total=len(stages))
+        for stage in stages:
+            progress.update(task, description=stage)
+            if stage == "Generating HTML report":
+                # Run the full pipeline on the last meaningful stage label
+                try:
+                    result, report_path = pipeline.run()
+                except Exception as exc:  # noqa: BLE001
+                    _err.print(f"[red]Pipeline error:[/red] {exc}")
+                    return 1
+            progress.advance(task)
+
+    if result is None or report_path is None:
+        _err.print("[red]Pipeline did not complete.[/red]")
+        return 1
+
+    _err.rule("[bold]Results[/bold]")
+    _err.print(
+        f"[bold]Run ID:[/bold] {result.run_id}  "
+        f"[bold]Status:[/bold] {'[green]' + result.status + '[/green]' if result.status == 'success' else '[red]' + result.status + '[/red]'}  "
+        f"[bold]Tables:[/bold] {len(result.tables)}  "
+        f"[bold]Metrics:[/bold] {len(result.metrics)}  "
+        f"[bold]Issues:[/bold] {len(result.issues)}"
+    )
+
+    _print_metrics_table(result)
+    _print_issues_table(result)
+
+    _err.rule()
+    _err.print(f"[bold]Report:[/bold] {report_path}")
+
+    # Only the report path goes to stdout for shell capture
+    _out.print(str(report_path))
+    return 0
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
+def main() -> None:
+    """CLI entry point — parse args and dispatch to the appropriate command.
 
-def main(argv: list[str] | None = None) -> None:
-    """DQT CLI entry point.
+    Example::
 
-    Args:
-        argv: Argument list; defaults to ``sys.argv[1:]``.
-
-    Example:
-        main(["profile", "--dsn", "sqlite:///test.db"])
+        # In pyproject.toml:
+        # [project.scripts]
+        # dqt = "dqt.cli:main"
     """
     parser = _build_parser()
-    args = parser.parse_args(argv)
-    args.func(args)
+    args = parser.parse_args()
+
+    if args.command == "profile":
+        sys.exit(_cmd_profile(args))
+    else:
+        parser.print_help()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
