@@ -1,18 +1,24 @@
 """
+dqt.sql.pipeline
+================
+
 Core SQL pipeline orchestrator for DQT.
 
-This module defines DQTPipeline, the SQL-first pipeline shell required by the
-DQT conventions. The current implementation provides a minimal but working
-slice:
-- connect to SQLite or PostgreSQL,
-- discover tables and columns,
-- compute simple profiling,
-- produce completeness diagnostics,
-- assemble a PipelineResult from DQT domain models,
-- persist run + metrics + issues via RunStore,
-- generate a self-contained HTML report.
+This module defines :class:`DQTPipeline`, the SQL-first pipeline that wires
+together all DQT stages into a single ``run()`` call:
 
-Stubbed stages: rules, cleansing, monitoring trend analysis, rich reports.
+1. **discover_schema** — enumerate tables and columns from the database.
+2. **profile_data** — compute per-column statistics (min/max, nulls, distinct counts).
+3. **run_diagnostics** — derive :class:`~dqt.common.models.DQIssue` objects from profiles.
+4. **apply_rules** — evaluate declarative YAML/JSON rules via SQL and collect additional issues.
+5. **cleanse** — apply reversible cleansing primitives (stub; implemented in :mod:`dqt.sql.cleansing`).
+6. **compute_metrics** — aggregate run-level :class:`~dqt.common.models.DQMetric` objects.
+7. **monitor** — pass metrics through the monitoring stage (stub; drift detection in future).
+8. **persist** — write run, metrics, and issues to :class:`~dqt.common.storage.RunStore`.
+9. **generate_report** — produce a self-contained HTML report.
+
+All stages are also exposed as individual public methods so they can be called
+in isolation for testing, scripting, or incremental pipelines.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from dqt.common.config_loader import load_rules
 from dqt.common.models import (
     ColumnResult,
     ConnectionConfig,
@@ -28,6 +35,7 @@ from dqt.common.models import (
     DQMetric,
     DQPipelineConfig,
     PipelineResult,
+    RuleRunResult,
     SchemaResult,
     TableResult,
 )
@@ -37,29 +45,44 @@ from dqt.sql.diagnostics import DQDiagnostics
 from dqt.sql.metrics import compute_run_metrics
 from dqt.sql.monitoring import monitor
 from dqt.sql.profiling import SqlProfiler, TableProfile
-from dqt.sql.reports import generate_html_report, generate_report
-from dqt.sql.rules import apply_rules
+from dqt.sql.reports import generate_html_report
+from dqt.sql.rules import apply_rules as _apply_rules_engine
 from dqt.sql.schema_discovery import DiscoveredTable, discover_schema
 
 
 class DQTPipeline:
     """SQL-first DQT pipeline orchestrator.
 
-    Orchestrates schema discovery, profiling, diagnostics, rules (stub),
-    cleansing (stub), metric aggregation, monitoring store write, and HTML
-    report generation in a single ``run()`` call.
+    Orchestrates all data-quality stages — schema discovery, profiling,
+    diagnostics, declarative rule evaluation, cleansing (stub), metric
+    aggregation, monitoring, persistence, and HTML report generation ---
+    in a single :meth:`run` call.
+
+    Each stage is also callable independently via its public method, which
+    is useful for incremental pipelines, scripting, and unit testing.
 
     Args:
-        connection_config: Database connection configuration.
-        pipeline_config: Per-run pipeline settings.
-        store_path: Optional SQLite path for RunStore persistence.
-            Defaults to ``dqt_runs.db`` in the current working directory.
-        report_dir: Optional directory where HTML reports are written.
+        connection_config: Validated database connection settings.
+        pipeline_config: Per-run pipeline settings (filters, rule files,
+            metric thresholds, etc.).
+        store_path: Path for the SQLite :class:`~dqt.common.storage.RunStore`
+            file.  Defaults to ``dqt_runs.db`` in the current working directory.
+        report_dir: Directory where HTML reports are written.
             Defaults to the current working directory.
 
-    Example:
-        pipeline = DQTPipeline(connection_config, pipeline_config)
+    Example::
+
+        from dqt.common.models import ConnectionConfig, DQPipelineConfig
+        from dqt.sql.pipeline import DQTPipeline
+
+        conn = ConnectionConfig(id="dev", dsn="sqlite:///dev.db")
+        cfg  = DQPipelineConfig(
+            connection_id="dev",
+            rule_files=["examples/rules/base_rules.yaml"],
+        )
+        pipeline = DQTPipeline(conn, cfg)
         result, report_path = pipeline.run()
+        print(result.status, report_path)
     """
 
     def __init__(
@@ -74,172 +97,260 @@ class DQTPipeline:
         self._store_path = Path(store_path) if store_path else Path.cwd() / "dqt_runs.db"
         self._report_dir = Path(report_dir) if report_dir else Path.cwd()
 
-    def run(self) -> tuple[PipelineResult, Path]:
-        """Execute the full DQT pipeline and return the result + report path.
+    # ------------------------------------------------------------------
+    # Primary entry point
+    # ------------------------------------------------------------------
 
-        Stages executed in order:
-        1. discover_schema
-        2. profile_data
-        3. run_diagnostics
-        4. apply_rules  (stub)
-        5. cleanse      (stub)
-        6. compute_metrics
-        7. monitor
-        8. persist via RunStore
-        9. generate HTML report
+    def run(self) -> tuple[PipelineResult, Path]:
+        """Execute the full DQT pipeline and return the result and report path.
+
+        Stages are executed in order:
+
+        1. :meth:`discover_schema`
+        2. :meth:`profile_data`
+        3. :meth:`run_diagnostics`
+        4. :meth:`apply_rules` — loads rule files from
+           :attr:`~dqt.common.models.DQPipelineConfig.rule_files` and runs SQL
+           evaluation; issues are merged into the global issue list.
+        5. :meth:`cleanse` (stub)
+        6. :meth:`compute_metrics`
+        7. :meth:`monitor` (stub)
+        8. Persist to :class:`~dqt.common.storage.RunStore`.
+        9. Write HTML report.
 
         Returns:
-            Tuple of (PipelineResult, Path) where Path points to the HTML report.
+            A ``(PipelineResult, Path)`` tuple.  ``Path`` points to the
+            generated HTML report file.
 
-        Example:
+        Example::
+
             result, report_path = pipeline.run()
+            print(f"{result.status}: {len(result.issues)} issue(s)")
         """
         run_id = f"run-{uuid4().hex[:8]}"
         started_at = datetime.now(timezone.utc)
 
-        # -- Stage 1: schema discovery
+        # Stage 1: schema discovery
         discovered_tables = self.discover_schema()
 
-        # -- Stage 2: profiling
+        # Stage 2: profiling
         profiled_tables = self.profile_data(discovered_tables)
 
-        # -- Stage 3: diagnostics
-        issues = self.run_diagnostics(profiled_tables, run_id=run_id)
+        # Stage 3: diagnostics
+        diagnostic_issues = self.run_diagnostics(profiled_tables, run_id=run_id)
 
-        # -- Stage 4: rules (stub)
-        rule_runs = self.apply_rules(run_id=run_id)
+        # Stage 4: rule evaluation
+        rule_issues, rule_runs = self.apply_rules(
+            run_id=run_id,
+            discovered_tables=discovered_tables,
+        )
 
-        # -- Assemble intermediate result
+        # Merge all issues
+        all_issues = diagnostic_issues + rule_issues
+
+        # Assemble intermediate result
         result = self._build_result(
             run_id=run_id,
             started_at=started_at,
             profiled_tables=profiled_tables,
-            issues=issues,
+            issues=all_issues,
             rule_runs=rule_runs,
         )
 
-        # -- Stage 5: cleansing (stub)
+        # Stage 5: cleansing (stub)
         result = self.cleanse(result)
 
-        # -- Stage 6: compute run-level metrics
+        # Stage 6: compute run-level metrics
         run_metrics = self.compute_metrics(profiled_tables, run_id=run_id)
 
-        # -- Stage 7: monitoring
-        monitored_metrics = self.monitor(result.metrics + run_metrics)
-        result.metrics = monitored_metrics
+        # Stage 7: monitoring
+        result.metrics = self.monitor(result.metrics + run_metrics)
 
         result.ended_at = datetime.now(timezone.utc)
         result.status = "success"
 
-        # -- Stage 8: persist to RunStore
+        # Stage 8: persist
         self._persist(result)
 
-        # -- Stage 9: generate HTML report
+        # Stage 9: HTML report
         report_path = self._report_dir / f"dqt_report_{result.run_id}.html"
         generate_html_report(result, output_path=report_path)
 
         return result, report_path
 
     # ------------------------------------------------------------------
-    # Individual stage methods (also callable independently)
+    # Individual stages (callable independently)
     # ------------------------------------------------------------------
 
     def discover_schema(self) -> list[DiscoveredTable]:
-        """Discover database tables and columns.
+        """Discover and filter database tables and columns.
+
+        Applies schema/table include/exclude filters from
+        :attr:`~dqt.common.models.DQPipelineConfig`.
 
         Returns:
-            Filtered list of discovered tables.
+            Filtered list of :class:`~dqt.sql.schema_discovery.DiscoveredTable`
+            objects.
 
-        Example:
+        Example::
+
             tables = pipeline.discover_schema()
+            print([t.table_name for t in tables])
         """
         tables = discover_schema(self._connection_config)
         return self._filter_tables(tables)
 
     def profile_data(self, tables: list[DiscoveredTable]) -> list[TableProfile]:
-        """Profile discovered tables.
+        """Profile a list of discovered tables.
 
         Args:
-            tables: Tables returned by discover_schema.
+            tables: Tables returned by :meth:`discover_schema`.
 
         Returns:
-            List of table profiles.
+            List of :class:`~dqt.sql.profiling.TableProfile` objects.
 
-        Example:
+        Example::
+
+            tables   = pipeline.discover_schema()
             profiles = pipeline.profile_data(tables)
         """
         profiler = SqlProfiler(self._connection_config)
         return profiler.profile_tables(tables)
 
-    def run_diagnostics(self, profiles: list[TableProfile], run_id: str) -> list[DQIssue]:
-        """Run completeness diagnostics over profiled tables.
+    def run_diagnostics(
+        self,
+        profiles: list[TableProfile],
+        run_id: str,
+    ) -> list[DQIssue]:
+        """Run completeness and validity diagnostics over profiled tables.
 
         Args:
-            profiles: Table profiles from profile_data.
-            run_id: Current run identifier.
+            profiles: Table profiles from :meth:`profile_data`.
+            run_id: Unique identifier for the current pipeline run.
 
         Returns:
-            List of DQIssue objects.
+            List of :class:`~dqt.common.models.DQIssue` objects.
 
-        Example:
-            issues = pipeline.run_diagnostics(profiles, run_id)
+        Example::
+
+            issues = pipeline.run_diagnostics(profiles, run_id="run-001")
         """
         return DQDiagnostics().run(profiles, run_id)
 
-    def apply_rules(self, run_id: str) -> list:
-        """Apply configured rules (stub).
+    def apply_rules(
+        self,
+        run_id: str,
+        discovered_tables: list[DiscoveredTable] | None = None,
+    ) -> tuple[list[DQIssue], list[RuleRunResult]]:
+        """Load rule files and evaluate all rules against discovered tables.
+
+        Rule files are read from
+        :attr:`~dqt.common.models.DQPipelineConfig.rule_files`.  Each file is
+        loaded via :func:`~dqt.common.config_loader.load_rules` and the
+        combined rule set is evaluated by
+        :func:`~dqt.sql.rules.apply_rules`.
+
+        If no rule files are configured, or *discovered_tables* is empty,
+        returns two empty lists immediately.
 
         Args:
-            run_id: Current run identifier.
+            run_id: Unique identifier for the current pipeline run.
+            discovered_tables: Tables returned by :meth:`discover_schema`.
+                Defaults to ``None`` (treated as empty).
 
         Returns:
-            Empty list in the current implementation.
+            A ``(issues, summaries)`` tuple:
 
-        Example:
-            rule_runs = pipeline.apply_rules(run_id)
+            * *issues* — flat list of :class:`~dqt.common.models.DQIssue`
+              produced by failing rules.
+            * *summaries* — one :class:`~dqt.common.models.RuleRunResult`
+              per rule, recording how many targets were checked / failed / errored.
+
+        Example::
+
+            tables = pipeline.discover_schema()
+            issues, summaries = pipeline.apply_rules(run_id="run-001",
+                                                     discovered_tables=tables)
         """
-        return apply_rules(run_id)
+        rule_files = self._pipeline_config.rule_files or []
+        if not rule_files or not discovered_tables:
+            return [], []
+
+        # Load and merge rules from all configured files
+        all_rules = []
+        for rule_file in rule_files:
+            try:
+                all_rules.extend(load_rules(rule_file))
+            except FileNotFoundError:
+                # Missing rule file is a warning, not a fatal error;
+                # the DBA may be running from a different working directory.
+                # A proper logging call would go here once logging is wired.
+                pass
+
+        if not all_rules:
+            return [], []
+
+        return _apply_rules_engine(
+            run_id=run_id,
+            connection_config=self._connection_config,
+            rules=all_rules,
+            discovered_tables=discovered_tables,
+        )
 
     def cleanse(self, result: PipelineResult) -> PipelineResult:
-        """Run the cleansing stage (stub).
+        """Apply reversible cleansing primitives (stub).
+
+        The cleansing stage is currently a pass-through.  Full implementation
+        is tracked in :mod:`dqt.sql.cleansing`.
 
         Args:
-            result: PipelineResult from earlier stages.
+            result: :class:`~dqt.common.models.PipelineResult` assembled from
+                earlier stages.
 
         Returns:
-            Unchanged PipelineResult.
+            Unchanged :class:`~dqt.common.models.PipelineResult`.
 
-        Example:
+        Example::
+
             result = pipeline.cleanse(result)
         """
         return cleanse(result)
 
-    def compute_metrics(self, profiles: list[TableProfile], run_id: str) -> list[DQMetric]:
+    def compute_metrics(
+        self,
+        profiles: list[TableProfile],
+        run_id: str,
+    ) -> list[DQMetric]:
         """Compute run-level summary metrics.
 
         Args:
-            profiles: Table profiles.
-            run_id: Current run identifier.
+            profiles: Table profiles from :meth:`profile_data`.
+            run_id: Unique identifier for the current pipeline run.
 
         Returns:
-            List of run-level DQMetric objects.
+            List of run-level :class:`~dqt.common.models.DQMetric` objects.
 
-        Example:
-            metrics = pipeline.compute_metrics(profiles, run_id)
+        Example::
+
+            metrics = pipeline.compute_metrics(profiles, run_id="run-001")
         """
         return compute_run_metrics(profiles, run_id)
 
     def monitor(self, metrics: list[DQMetric]) -> list[DQMetric]:
         """Pass metrics through the monitoring stage (stub).
 
+        The monitoring stage currently returns metrics unchanged.  Drift
+        detection and threshold alerting will be added in a future milestone.
+
         Args:
-            metrics: Combined column and run-level metrics.
+            metrics: Combined column-level and run-level metrics.
 
         Returns:
-            Same metrics list.
+            Same metrics list (pass-through).
 
-        Example:
-            metrics = pipeline.monitor(metrics)
+        Example::
+
+            metrics = pipeline.monitor(all_metrics)
         """
         return monitor(metrics)
 
@@ -248,16 +359,32 @@ class DQTPipeline:
     # ------------------------------------------------------------------
 
     def _persist(self, result: PipelineResult) -> None:
-        """Write run, metrics, and issues to the RunStore."""
+        """Write the run, its metrics, and its issues to the RunStore.
+
+        Args:
+            result: Completed :class:`~dqt.common.models.PipelineResult`.
+        """
         store = RunStore(db_path=str(self._store_path))
         store.init_schema()
         store.save_run(result)
 
     def _filter_tables(self, tables: list[DiscoveredTable]) -> list[DiscoveredTable]:
+        """Apply include/exclude schema and table filters from pipeline config.
+
+        Args:
+            tables: Full list of discovered tables.
+
+        Returns:
+            Filtered list based on
+            :attr:`~dqt.common.models.DQPipelineConfig.include_schemas`,
+            :attr:`~dqt.common.models.DQPipelineConfig.exclude_schemas`,
+            :attr:`~dqt.common.models.DQPipelineConfig.include_tables`,
+            and :attr:`~dqt.common.models.DQPipelineConfig.exclude_tables`.
+        """
         include_schemas = set(self._pipeline_config.include_schemas or [])
         exclude_schemas = set(self._pipeline_config.exclude_schemas or [])
-        include_tables = set(self._pipeline_config.include_tables or [])
-        exclude_tables = set(self._pipeline_config.exclude_tables or [])
+        include_tables  = set(self._pipeline_config.include_tables or [])
+        exclude_tables  = set(self._pipeline_config.exclude_tables or [])
 
         filtered: list[DiscoveredTable] = []
         for table in tables:
@@ -278,8 +405,26 @@ class DQTPipeline:
         started_at: datetime,
         profiled_tables: list[TableProfile],
         issues: list[DQIssue],
-        rule_runs: list,
+        rule_runs: list[RuleRunResult],
     ) -> PipelineResult:
+        """Assemble a :class:`~dqt.common.models.PipelineResult` from stage outputs.
+
+        Builds :class:`~dqt.common.models.ColumnResult` and
+        :class:`~dqt.common.models.TableResult` trees, groups tables by schema,
+        and attaches per-scope metrics and issues.
+
+        Args:
+            run_id: Pipeline run identifier.
+            started_at: Run start timestamp.
+            profiled_tables: Table profiles from :meth:`profile_data`.
+            issues: Merged issues from diagnostics + rules.
+            rule_runs: Rule summaries from :meth:`apply_rules`.
+
+        Returns:
+            Partially-complete :class:`~dqt.common.models.PipelineResult`
+            (``status`` set to ``"partial"``; caller updates to ``"success"``
+            after remaining stages).
+        """
         profiler = SqlProfiler(self._connection_config)
         profile_metrics = profiler.build_metrics(profiled_tables, run_id=run_id)
 
@@ -297,13 +442,13 @@ class DQTPipeline:
                 column_metrics = [
                     m for m in profile_metrics
                     if m.schema_name == column_profile.schema_name
-                    and m.table_name == column_profile.table_name
+                    and m.table_name  == column_profile.table_name
                     and m.column_name == column_profile.column_name
                 ]
                 column_issues = [
                     i for i in issues
                     if i.schema_name == column_profile.schema_name
-                    and i.table_name == column_profile.table_name
+                    and i.table_name  == column_profile.table_name
                     and i.column_name == column_profile.column_name
                 ]
                 column_results.append(
@@ -321,13 +466,13 @@ class DQTPipeline:
             table_metrics = [
                 m for m in profile_metrics
                 if m.schema_name == table_profile.schema_name
-                and m.table_name == table_profile.table_name
+                and m.table_name  == table_profile.table_name
                 and m.column_name is None
             ]
             table_issues = [
                 i for i in issues
                 if i.schema_name == table_profile.schema_name
-                and i.table_name == table_profile.table_name
+                and i.table_name  == table_profile.table_name
                 and i.column_name is None
             ]
 
