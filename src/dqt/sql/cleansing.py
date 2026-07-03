@@ -1,26 +1,596 @@
 """
-Cleansing stage for DQT SQL pipelines.
+dqt.sql.cleansing
+=================
 
-This module is intentionally stubbed in the current phase. DQT will later
-provide reversible and auditable cleansing primitives, but that work does not
-belong in the initial pipeline shell.
+Reversible, auditable SQL cleansing primitives for DQT.
+
+All operations in this module are **data-quality cleansing only**:
+
+* **Standardization** — trim whitespace, normalize internal spaces,
+  apply case transformations (upper / lower / title).
+* **Deduplication** — remove duplicate rows by key columns, retaining
+  the first or last occurrence.
+* **Lookup-based correction** — replace column values using a mapping
+  stored in a domain / knowledge table.
+
+Design invariants
+-----------------
+
+1. Every change is recorded in a :class:`CleansingLog` entry
+   (before value, after value, row identifier, column, operation).
+2. Operations are **reversible** in the sense that the log contains
+   enough information to undo each change manually.
+3. No schema changes, no DDL, no masking, no compliance features.
+4. All SQL is executed through DBAPI2 connections obtained from
+   :func:`~dqt.sql.rules._get_connection` (shared helper).
+
+Public API
+----------
+
+* :class:`CleansingConfig` — declarative config for one cleansing rule.
+* :class:`CleansingLog` — single audit entry.
+* :class:`CleansingResult` — summary of a full cleansing run.
+* :func:`apply_cleansing` — execute a list of configs against a live DB.
+* :func:`cleanse` — pipeline adapter called by :class:`~dqt.sql.pipeline.DQTPipeline`.
+
+Example::
+
+    from dqt.common.models import ConnectionConfig
+    from dqt.sql.cleansing import CleansingConfig, apply_cleansing
+
+    conn_cfg = ConnectionConfig(id="dev", dsn="sqlite:///dev.db")
+    configs = [
+        CleansingConfig(
+            table_name="customers",
+            column_name="email",
+            operation="standardize",
+            params={"case": "lower", "trim": True},
+        ),
+        CleansingConfig(
+            table_name="customers",
+            column_name=None,
+            operation="deduplicate",
+            params={"key_columns": ["email"], "keep": "first"},
+        ),
+    ]
+    result = apply_cleansing(run_id="run-001", connection_config=conn_cfg, configs=configs)
+    print(f"{result.total_changes} change(s) across {result.tables_affected} table(s)")
 """
 
 from __future__ import annotations
 
-from dqt.common.models import PipelineResult
+from dataclasses import dataclass, field
+from typing import Any, Literal
+
+from dqt.common.models import ConnectionConfig, PipelineResult
+from dqt.sql.rules import _get_connection, _qualified_table
+
+
+# ---------------------------------------------------------------------------
+# Public data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CleansingConfig:
+    """Declarative configuration for one cleansing operation.
+
+    A :class:`CleansingConfig` describes a single cleansing step to apply to
+    a specific table (and optionally column).  Multiple configs are combined
+    into a list and passed to :func:`apply_cleansing`.
+
+    Attributes:
+        table_name: Target table name.
+        column_name: Target column name, or ``None`` for table-level operations
+            (e.g. deduplication).
+        operation: One of ``"standardize"``, ``"deduplicate"``,
+            ``"lookup_correct"``.
+        params: Operation-specific parameters (see each operation's docstring).
+        schema_name: Optional schema qualifier.  Defaults to ``None``.
+        enabled: Set to ``False`` to skip this config without removing it.
+
+    Example::
+
+        cfg = CleansingConfig(
+            table_name="users",
+            column_name="email",
+            operation="standardize",
+            params={"case": "lower", "trim": True},
+        )
+    """
+
+    table_name: str
+    column_name: str | None
+    operation: Literal["standardize", "deduplicate", "lookup_correct"]
+    params: dict[str, Any] = field(default_factory=dict)
+    schema_name: str | None = None
+    enabled: bool = True
+
+
+@dataclass
+class CleansingLog:
+    """Audit record for a single value change produced by a cleansing operation.
+
+    A :class:`CleansingLog` entry is created for every row affected by a
+    cleansing step.  The log contains enough information to reproduce or undo
+    the change manually.
+
+    Attributes:
+        run_id: Pipeline run identifier.
+        operation: Cleansing operation that produced this entry.
+        schema_name: Schema of the affected table (may be ``None``).
+        table_name: Table where the change occurred.
+        column_name: Column where the change occurred (``None`` for
+            row-level operations such as deduplication).
+        row_key: Dict representing the identifying column(s) and their values
+            for the affected row (e.g. ``{"id": 42}``).
+        before_value: Value before the change (``None`` for deleted rows).
+        after_value: Value after the change (``None`` for deleted rows).
+
+    Example::
+
+        entry = CleansingLog(
+            run_id="run-001",
+            operation="standardize",
+            table_name="users",
+            column_name="email",
+            row_key={"id": 7},
+            before_value="  Alice@Example.COM  ",
+            after_value="alice@example.com",
+        )
+    """
+
+    run_id: str
+    operation: str
+    table_name: str
+    schema_name: str | None = None
+    column_name: str | None = None
+    row_key: dict[str, Any] = field(default_factory=dict)
+    before_value: Any = None
+    after_value: Any = None
+
+
+@dataclass
+class CleansingResult:
+    """Summary of all changes applied during one cleansing run.
+
+    Attributes:
+        run_id: Pipeline run identifier.
+        log: Ordered list of all :class:`CleansingLog` entries produced
+            during this run.
+        total_changes: Total number of value-level changes (UPDATE + DELETE).
+        tables_affected: Number of distinct tables that were modified.
+        errors: List of error messages for operations that could not be
+            applied (non-fatal; the run continues).
+
+    Example::
+
+        result = apply_cleansing(run_id="run-001", ...)
+        print(result.total_changes, result.tables_affected)
+    """
+
+    run_id: str
+    log: list[CleansingLog] = field(default_factory=list)
+    total_changes: int = 0
+    tables_affected: int = 0
+    errors: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _fetch_all_dicts(cursor: Any, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
+    """Execute *sql* and return all rows as plain dicts.
+
+    Args:
+        cursor: Open DBAPI cursor.
+        sql: SQL query string.
+        params: Positional parameters for the query.
+
+    Returns:
+        List of row dicts (column name → value).
+
+    Example::
+
+        rows = _fetch_all_dicts(cursor, "SELECT id, email FROM users")
+    """
+    cursor.execute(sql, params)
+    cols = [d[0] for d in cursor.description]
+    return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Cleansing operations
+# ---------------------------------------------------------------------------
+
+def _standardize(
+    cursor: Any,
+    run_id: str,
+    schema_name: str | None,
+    table_name: str,
+    column_name: str,
+    params: dict[str, Any],
+) -> list[CleansingLog]:
+    """Standardize string values in *column_name*.
+
+    Supported params
+    ----------------
+    trim : bool
+        Strip leading and trailing whitespace.  Default ``True``.
+    normalize_spaces : bool
+        Collapse multiple consecutive spaces into a single space.
+        Default ``False``.
+    case : str or None
+        ``"upper"``, ``"lower"``, or ``"title"``.  ``None`` = no case change.
+        Default ``None``.
+
+    Only rows whose value would actually change are updated and logged.
+    NULL values are skipped.
+
+    Args:
+        cursor: Open DBAPI cursor.
+        run_id: Pipeline run identifier.
+        schema_name: Schema name or ``None``.
+        table_name: Target table name.
+        column_name: Target column name.
+        params: Standardization parameters (see above).
+
+    Returns:
+        List of :class:`CleansingLog` entries, one per changed row.
+
+    Example::
+
+        logs = _standardize(cursor, "run-1", None, "users", "email",
+                            {"case": "lower", "trim": True})
+    """
+    trim             = params.get("trim", True)
+    normalize_spaces = params.get("normalize_spaces", False)
+    case             = params.get("case")  # "upper" | "lower" | "title" | None
+    tbl              = _qualified_table(schema_name, table_name)
+
+    rows = _fetch_all_dicts(
+        cursor,
+        f'SELECT rowid, "{column_name}" FROM {tbl} WHERE "{column_name}" IS NOT NULL',
+    )
+
+    logs: list[CleansingLog] = []
+    for row in rows:
+        original: str = str(row[column_name])
+        value = original
+
+        if trim:
+            value = value.strip()
+        if normalize_spaces:
+            import re
+            value = re.sub(r" +", " ", value)
+        if case == "upper":
+            value = value.upper()
+        elif case == "lower":
+            value = value.lower()
+        elif case == "title":
+            value = value.title()
+
+        if value != original:
+            cursor.execute(
+                f'UPDATE {tbl} SET "{column_name}" = ? WHERE rowid = ?',
+                (value, row["rowid"]),
+            )
+            logs.append(CleansingLog(
+                run_id=run_id,
+                operation="standardize",
+                schema_name=schema_name,
+                table_name=table_name,
+                column_name=column_name,
+                row_key={"rowid": row["rowid"]},
+                before_value=original,
+                after_value=value,
+            ))
+    return logs
+
+
+def _deduplicate(
+    cursor: Any,
+    run_id: str,
+    schema_name: str | None,
+    table_name: str,
+    params: dict[str, Any],
+) -> list[CleansingLog]:
+    """Remove duplicate rows based on key columns.
+
+    Supported params
+    ----------------
+    key_columns : list[str]
+        Column(s) that define a duplicate.  **Required.**
+    keep : str
+        ``"first"`` (keep the lowest rowid) or ``"last"`` (keep the highest).
+        Default ``"first"``.
+
+    For every set of duplicates, all rows except the one to keep are deleted
+    and a :class:`CleansingLog` entry is written for each deleted row.
+
+    Args:
+        cursor: Open DBAPI cursor.
+        run_id: Pipeline run identifier.
+        schema_name: Schema name or ``None``.
+        table_name: Target table name.
+        params: Deduplication parameters (see above).
+
+    Returns:
+        List of :class:`CleansingLog` entries, one per deleted row.
+
+    Raises:
+        ValueError: If *key_columns* is missing or empty.
+
+    Example::
+
+        logs = _deduplicate(cursor, "run-1", None, "users",
+                            {"key_columns": ["email"], "keep": "first"})
+    """
+    key_columns: list[str] = params.get("key_columns", [])
+    if not key_columns:
+        raise ValueError("deduplicate operation requires params.key_columns (non-empty list).")
+    keep: str = params.get("keep", "first")
+    tbl = _qualified_table(schema_name, table_name)
+
+    key_expr = ", ".join(f'"{c}"' for c in key_columns)
+    keep_func = "MIN" if keep == "first" else "MAX"
+
+    # Find rowids to delete: those that are NOT the keep-rowid for their key group
+    dup_sql = f"""
+        SELECT rowid
+        FROM {tbl}
+        WHERE rowid NOT IN (
+            SELECT {keep_func}(rowid)
+            FROM {tbl}
+            GROUP BY {key_expr}
+        )
+    """
+    rows_to_delete = _fetch_all_dicts(cursor, dup_sql)
+
+    logs: list[CleansingLog] = []
+    for row in rows_to_delete:
+        # Fetch all column values before deletion for audit
+        full_row = _fetch_all_dicts(
+            cursor,
+            f"SELECT * FROM {tbl} WHERE rowid = ?",
+            (row["rowid"],),
+        )
+        before = full_row[0] if full_row else {}
+        cursor.execute(f"DELETE FROM {tbl} WHERE rowid = ?", (row["rowid"],))
+        logs.append(CleansingLog(
+            run_id=run_id,
+            operation="deduplicate",
+            schema_name=schema_name,
+            table_name=table_name,
+            column_name=None,
+            row_key={"rowid": row["rowid"]},
+            before_value=before,
+            after_value=None,
+        ))
+    return logs
+
+
+def _lookup_correct(
+    cursor: Any,
+    run_id: str,
+    schema_name: str | None,
+    table_name: str,
+    column_name: str,
+    params: dict[str, Any],
+) -> list[CleansingLog]:
+    """Replace column values using a domain lookup table.
+
+    The lookup table must have exactly two relevant columns:
+    a ``from_column`` (raw / incorrect value) and a ``to_column``
+    (correct / canonical value).  Any row in *table_name* whose
+    *column_name* value matches a ``from_column`` entry is updated to
+    the corresponding ``to_column`` value.
+
+    Supported params
+    ----------------
+    lookup_table : str
+        Name of the lookup / domain table.  **Required.**
+    from_column : str
+        Column in the lookup table containing raw values.  Default ``"from_value"``.
+    to_column : str
+        Column in the lookup table containing canonical values.  Default ``"to_value"``.
+    lookup_schema : str or None
+        Schema of the lookup table.  Defaults to the same schema as *table_name*.
+
+    Args:
+        cursor: Open DBAPI cursor.
+        run_id: Pipeline run identifier.
+        schema_name: Schema name of the target table, or ``None``.
+        table_name: Target table name.
+        column_name: Target column name.
+        params: Lookup correction parameters (see above).
+
+    Returns:
+        List of :class:`CleansingLog` entries, one per corrected row.
+
+    Raises:
+        ValueError: If *lookup_table* param is missing.
+
+    Example::
+
+        logs = _lookup_correct(
+            cursor, "run-1", None, "orders", "status",
+            {"lookup_table": "status_map",
+             "from_column": "raw_status",
+             "to_column": "canonical_status"},
+        )
+    """
+    lookup_table: str = params.get("lookup_table", "")
+    if not lookup_table:
+        raise ValueError("lookup_correct operation requires params.lookup_table.")
+    from_col: str = params.get("from_column", "from_value")
+    to_col:   str = params.get("to_column",   "to_value")
+    lookup_schema: str | None = params.get("lookup_schema", schema_name)
+
+    tbl        = _qualified_table(schema_name, table_name)
+    lookup_tbl = _qualified_table(lookup_schema, lookup_table)
+
+    # Fetch the mapping
+    mapping_rows = _fetch_all_dicts(
+        cursor,
+        f'SELECT "{from_col}", "{to_col}" FROM {lookup_tbl}',
+    )
+    mapping: dict[Any, Any] = {r[from_col]: r[to_col] for r in mapping_rows}
+    if not mapping:
+        return []
+
+    logs: list[CleansingLog] = []
+    rows = _fetch_all_dicts(
+        cursor,
+        f'SELECT rowid, "{column_name}" FROM {tbl} WHERE "{column_name}" IS NOT NULL',
+    )
+    for row in rows:
+        old_val = row[column_name]
+        if old_val in mapping:
+            new_val = mapping[old_val]
+            cursor.execute(
+                f'UPDATE {tbl} SET "{column_name}" = ? WHERE rowid = ?',
+                (new_val, row["rowid"]),
+            )
+            logs.append(CleansingLog(
+                run_id=run_id,
+                operation="lookup_correct",
+                schema_name=schema_name,
+                table_name=table_name,
+                column_name=column_name,
+                row_key={"rowid": row["rowid"]},
+                before_value=old_val,
+                after_value=new_val,
+            ))
+    return logs
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def apply_cleansing(
+    run_id: str,
+    connection_config: ConnectionConfig,
+    configs: list[CleansingConfig],
+) -> CleansingResult:
+    """Execute a list of cleansing configs against a live database.
+
+    Applies each :class:`CleansingConfig` in order.  Each operation is
+    wrapped in a try/except so a single failing config does not abort the
+    entire run; errors are collected in :attr:`CleansingResult.errors`.
+
+    All changes are committed together at the end.  If an unrecoverable
+    error occurs before commit, the connection is rolled back.
+
+    Args:
+        run_id: Unique identifier for the current pipeline run.
+        connection_config: Database connection configuration.
+        configs: Ordered list of :class:`CleansingConfig` objects to apply.
+
+    Returns:
+        :class:`CleansingResult` summarising all changes and any errors.
+
+    Example::
+
+        from dqt.common.models import ConnectionConfig
+        from dqt.sql.cleansing import CleansingConfig, apply_cleansing
+
+        conn_cfg = ConnectionConfig(id="dev", dsn="sqlite:///dev.db")
+        result = apply_cleansing(
+            run_id="run-001",
+            connection_config=conn_cfg,
+            configs=[
+                CleansingConfig(
+                    table_name="users",
+                    column_name="email",
+                    operation="standardize",
+                    params={"case": "lower", "trim": True},
+                )
+            ],
+        )
+        print(result.total_changes)
+    """
+    cleansing_result = CleansingResult(run_id=run_id)
+    tables_modified: set[str] = set()
+
+    db_conn = _get_connection(connection_config)
+    try:
+        cursor = db_conn.cursor()
+
+        for cfg in configs:
+            if not cfg.enabled:
+                continue
+            try:
+                if cfg.operation == "standardize":
+                    if not cfg.column_name:
+                        raise ValueError("standardize requires column_name.")
+                    logs = _standardize(
+                        cursor, run_id,
+                        cfg.schema_name, cfg.table_name, cfg.column_name,
+                        cfg.params,
+                    )
+                elif cfg.operation == "deduplicate":
+                    logs = _deduplicate(
+                        cursor, run_id,
+                        cfg.schema_name, cfg.table_name,
+                        cfg.params,
+                    )
+                elif cfg.operation == "lookup_correct":
+                    if not cfg.column_name:
+                        raise ValueError("lookup_correct requires column_name.")
+                    logs = _lookup_correct(
+                        cursor, run_id,
+                        cfg.schema_name, cfg.table_name, cfg.column_name,
+                        cfg.params,
+                    )
+                else:
+                    cleansing_result.errors.append(
+                        f"Unknown cleansing operation '{cfg.operation}' "
+                        f"on {cfg.table_name}.{cfg.column_name}; skipped."
+                    )
+                    continue
+
+                cleansing_result.log.extend(logs)
+                cleansing_result.total_changes += len(logs)
+                if logs:
+                    tables_modified.add(cfg.table_name)
+
+            except Exception as exc:  # noqa: BLE001
+                cleansing_result.errors.append(
+                    f"Error in '{cfg.operation}' on "
+                    f"{cfg.table_name}.{cfg.column_name}: {exc}"
+                )
+
+        db_conn.commit()
+
+    except Exception:
+        db_conn.rollback()
+        raise
+    finally:
+        db_conn.close()
+
+    cleansing_result.tables_affected = len(tables_modified)
+    return cleansing_result
 
 
 def cleanse(result: PipelineResult) -> PipelineResult:
-    """Return the input result unchanged.
+    """Pipeline adapter for the cleansing stage.
+
+    Called by :class:`~dqt.sql.pipeline.DQTPipeline` as stage 5.  When no
+    :class:`CleansingConfig` objects are attached to the pipeline config,
+    this is a pass-through.  Full wiring of
+    :attr:`~dqt.common.models.DQPipelineConfig` → cleansing configs is a
+    follow-up task.
 
     Args:
-        result: Pipeline result produced by earlier stages.
+        result: :class:`~dqt.common.models.PipelineResult` from earlier stages.
 
     Returns:
-        The same pipeline result instance.
+        Unchanged :class:`~dqt.common.models.PipelineResult`.
 
-    Example:
+    Example::
+
         result = cleanse(result)
     """
     return result
