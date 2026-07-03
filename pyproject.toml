@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dqt"
 version = "0.1.0"
-description = "DQT — SQL Data Quality Toolkit for DBAs"
+description = "DQT \u2014 SQL Data Quality Toolkit for DBAs"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -29,6 +29,7 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.4",
     "pydantic>=2.0",
+    "pyyaml>=6.0",
 ]
 bridges = [
     # optional: pip install dqt[bridges] to enable missingly bridge
