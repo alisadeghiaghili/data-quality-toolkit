@@ -8,16 +8,17 @@ slice:
 - discover tables and columns,
 - compute simple profiling,
 - produce completeness diagnostics,
-- assemble a PipelineResult from DQT domain models.
+- assemble a PipelineResult from DQT domain models,
+- persist run + metrics + issues via RunStore,
+- generate a self-contained HTML report.
 
-It intentionally does not implement full rules, cleansing, monitoring
-persistence, knowledge tables, semantic classification, or report rendering
-yet.
+Stubbed stages: rules, cleansing, monitoring trend analysis, rich reports.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from dqt.common.models import (
@@ -30,64 +31,85 @@ from dqt.common.models import (
     SchemaResult,
     TableResult,
 )
+from dqt.common.storage import RunStore
 from dqt.sql.cleansing import cleanse
 from dqt.sql.diagnostics import DQDiagnostics
 from dqt.sql.metrics import compute_run_metrics
 from dqt.sql.monitoring import monitor
 from dqt.sql.profiling import SqlProfiler, TableProfile
-from dqt.sql.reports import generate_report
+from dqt.sql.reports import generate_html_report, generate_report
 from dqt.sql.rules import apply_rules
 from dqt.sql.schema_discovery import DiscoveredTable, discover_schema
 
 
 class DQTPipeline:
-    """Minimal SQL-first DQT pipeline orchestrator.
+    """SQL-first DQT pipeline orchestrator.
+
+    Orchestrates schema discovery, profiling, diagnostics, rules (stub),
+    cleansing (stub), metric aggregation, monitoring store write, and HTML
+    report generation in a single ``run()`` call.
 
     Args:
         connection_config: Database connection configuration.
         pipeline_config: Per-run pipeline settings.
+        store_path: Optional SQLite path for RunStore persistence.
+            Defaults to ``dqt_runs.db`` in the current working directory.
+        report_dir: Optional directory where HTML reports are written.
+            Defaults to the current working directory.
 
     Example:
         pipeline = DQTPipeline(connection_config, pipeline_config)
-        result = pipeline.run()
+        result, report_path = pipeline.run()
     """
 
     def __init__(
         self,
         connection_config: ConnectionConfig,
         pipeline_config: DQPipelineConfig,
+        store_path: Path | str | None = None,
+        report_dir: Path | str | None = None,
     ) -> None:
         self._connection_config = connection_config
         self._pipeline_config = pipeline_config
+        self._store_path = Path(store_path) if store_path else Path.cwd() / "dqt_runs.db"
+        self._report_dir = Path(report_dir) if report_dir else Path.cwd()
 
-    def run(self) -> PipelineResult:
-        """Execute the current DQT pipeline stages.
+    def run(self) -> tuple[PipelineResult, Path]:
+        """Execute the full DQT pipeline and return the result + report path.
 
-        Stages:
+        Stages executed in order:
         1. discover_schema
         2. profile_data
         3. run_diagnostics
-        4. apply_rules
-        5. cleanse
+        4. apply_rules  (stub)
+        5. cleanse      (stub)
         6. compute_metrics
         7. monitor
-        8. generate_report
+        8. persist via RunStore
+        9. generate HTML report
 
         Returns:
-            A PipelineResult populated with discovered schema, table/column
-            results, metrics, and basic completeness issues.
+            Tuple of (PipelineResult, Path) where Path points to the HTML report.
 
         Example:
-            result = pipeline.run()
+            result, report_path = pipeline.run()
         """
         run_id = f"run-{uuid4().hex[:8]}"
         started_at = datetime.now(timezone.utc)
 
+        # -- Stage 1: schema discovery
         discovered_tables = self.discover_schema()
+
+        # -- Stage 2: profiling
         profiled_tables = self.profile_data(discovered_tables)
+
+        # -- Stage 3: diagnostics
         issues = self.run_diagnostics(profiled_tables, run_id=run_id)
+
+        # -- Stage 4: rules (stub)
         rule_runs = self.apply_rules(run_id=run_id)
 
+        # -- Assemble intermediate result
         result = self._build_result(
             run_id=run_id,
             started_at=started_at,
@@ -96,21 +118,37 @@ class DQTPipeline:
             rule_runs=rule_runs,
         )
 
+        # -- Stage 5: cleansing (stub)
         result = self.cleanse(result)
+
+        # -- Stage 6: compute run-level metrics
         run_metrics = self.compute_metrics(profiled_tables, run_id=run_id)
+
+        # -- Stage 7: monitoring
         monitored_metrics = self.monitor(result.metrics + run_metrics)
         result.metrics = monitored_metrics
-        _ = self.generate_report(result)
 
         result.ended_at = datetime.now(timezone.utc)
         result.status = "success"
-        return result
+
+        # -- Stage 8: persist to RunStore
+        self._persist(result)
+
+        # -- Stage 9: generate HTML report
+        report_path = self._report_dir / f"dqt_report_{result.run_id}.html"
+        generate_html_report(result, output_path=report_path)
+
+        return result, report_path
+
+    # ------------------------------------------------------------------
+    # Individual stage methods (also callable independently)
+    # ------------------------------------------------------------------
 
     def discover_schema(self) -> list[DiscoveredTable]:
         """Discover database tables and columns.
 
         Returns:
-            Discovered table metadata.
+            Filtered list of discovered tables.
 
         Example:
             tables = pipeline.discover_schema()
@@ -122,10 +160,10 @@ class DQTPipeline:
         """Profile discovered tables.
 
         Args:
-            tables: Discovered tables.
+            tables: Tables returned by discover_schema.
 
         Returns:
-            Profiled tables.
+            List of table profiles.
 
         Example:
             profiles = pipeline.profile_data(tables)
@@ -134,43 +172,42 @@ class DQTPipeline:
         return profiler.profile_tables(tables)
 
     def run_diagnostics(self, profiles: list[TableProfile], run_id: str) -> list[DQIssue]:
-        """Run basic DQ diagnostics.
+        """Run completeness diagnostics over profiled tables.
 
         Args:
-            profiles: Profiled tables.
-            run_id: Pipeline run identifier.
+            profiles: Table profiles from profile_data.
+            run_id: Current run identifier.
 
         Returns:
-            Detected issues.
+            List of DQIssue objects.
 
         Example:
-            issues = pipeline.run_diagnostics(profiles, run_id="run-001")
+            issues = pipeline.run_diagnostics(profiles, run_id)
         """
-        diagnostics = DQDiagnostics()
-        return diagnostics.run(profiles, run_id)
+        return DQDiagnostics().run(profiles, run_id)
 
     def apply_rules(self, run_id: str) -> list:
-        """Run the rules stage.
+        """Apply configured rules (stub).
 
         Args:
-            run_id: Pipeline run identifier.
+            run_id: Current run identifier.
 
         Returns:
-            Rule execution summaries.
+            Empty list in the current implementation.
 
         Example:
-            rules = pipeline.apply_rules(run_id="run-001")
+            rule_runs = pipeline.apply_rules(run_id)
         """
         return apply_rules(run_id)
 
     def cleanse(self, result: PipelineResult) -> PipelineResult:
-        """Run the cleansing stage.
+        """Run the cleansing stage (stub).
 
         Args:
-            result: Pipeline result built from earlier stages.
+            result: PipelineResult from earlier stages.
 
         Returns:
-            PipelineResult after the cleansing stage.
+            Unchanged PipelineResult.
 
         Example:
             result = pipeline.cleanse(result)
@@ -181,44 +218,40 @@ class DQTPipeline:
         """Compute run-level summary metrics.
 
         Args:
-            profiles: Profiled tables.
-            run_id: Pipeline run identifier.
+            profiles: Table profiles.
+            run_id: Current run identifier.
 
         Returns:
-            Run-level metrics.
+            List of run-level DQMetric objects.
 
         Example:
-            metrics = pipeline.compute_metrics(profiles, run_id="run-001")
+            metrics = pipeline.compute_metrics(profiles, run_id)
         """
         return compute_run_metrics(profiles, run_id)
 
     def monitor(self, metrics: list[DQMetric]) -> list[DQMetric]:
-        """Run the monitoring stage.
+        """Pass metrics through the monitoring stage (stub).
 
         Args:
-            metrics: Data-quality metrics.
+            metrics: Combined column and run-level metrics.
 
         Returns:
-            Metrics prepared for monitoring/history use.
+            Same metrics list.
 
         Example:
             metrics = pipeline.monitor(metrics)
         """
         return monitor(metrics)
 
-    def generate_report(self, result: PipelineResult) -> dict[str, str]:
-        """Run the report generation stage.
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
 
-        Args:
-            result: Final pipeline result.
-
-        Returns:
-            Minimal report descriptor.
-
-        Example:
-            report = pipeline.generate_report(result)
-        """
-        return generate_report(result)
+    def _persist(self, result: PipelineResult) -> None:
+        """Write run, metrics, and issues to the RunStore."""
+        store = RunStore(db_path=str(self._store_path))
+        store.init_schema()
+        store.save_run(result)
 
     def _filter_tables(self, tables: list[DiscoveredTable]) -> list[DiscoveredTable]:
         include_schemas = set(self._pipeline_config.include_schemas or [])
@@ -262,18 +295,16 @@ class DQTPipeline:
             column_results: list[ColumnResult] = []
             for column_profile in table_profile.columns:
                 column_metrics = [
-                    metric
-                    for metric in profile_metrics
-                    if metric.schema_name == column_profile.schema_name
-                    and metric.table_name == column_profile.table_name
-                    and metric.column_name == column_profile.column_name
+                    m for m in profile_metrics
+                    if m.schema_name == column_profile.schema_name
+                    and m.table_name == column_profile.table_name
+                    and m.column_name == column_profile.column_name
                 ]
                 column_issues = [
-                    issue
-                    for issue in issues
-                    if issue.schema_name == column_profile.schema_name
-                    and issue.table_name == column_profile.table_name
-                    and issue.column_name == column_profile.column_name
+                    i for i in issues
+                    if i.schema_name == column_profile.schema_name
+                    and i.table_name == column_profile.table_name
+                    and i.column_name == column_profile.column_name
                 ]
                 column_results.append(
                     ColumnResult(
@@ -288,18 +319,16 @@ class DQTPipeline:
                 )
 
             table_metrics = [
-                metric
-                for metric in profile_metrics
-                if metric.schema_name == table_profile.schema_name
-                and metric.table_name == table_profile.table_name
-                and metric.column_name is None
+                m for m in profile_metrics
+                if m.schema_name == table_profile.schema_name
+                and m.table_name == table_profile.table_name
+                and m.column_name is None
             ]
             table_issues = [
-                issue
-                for issue in issues
-                if issue.schema_name == table_profile.schema_name
-                and issue.table_name == table_profile.table_name
-                and issue.column_name is None
+                i for i in issues
+                if i.schema_name == table_profile.schema_name
+                and i.table_name == table_profile.table_name
+                and i.column_name is None
             ]
 
             table_results[key] = TableResult(

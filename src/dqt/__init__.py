@@ -36,6 +36,7 @@ from dqt.common.models import (
     RuleScope,
     SamplingConfig,
 )
+from dqt.sql.pipeline import DQTPipeline
 
 __all__ = [
     "RunStatus",
@@ -55,4 +56,5 @@ __all__ = [
     "ConnectionConfig",
     "DQPipelineConfig",
     "RuleConfig",
+    "DQTPipeline",
 ]
