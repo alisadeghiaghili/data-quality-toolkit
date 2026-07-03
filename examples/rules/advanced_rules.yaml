@@ -1,0 +1,91 @@
+# DQT Advanced Rules
+# ==================
+# Domain-specific rules for common column patterns.
+# Extend or override base_rules.yaml for project-specific checks.
+# Load with: dqt.common.config_loader.load_rules("examples/rules/advanced_rules.yaml")
+
+rules:
+
+  # --------------------------------------------------------------------------
+  # Email validity
+  # --------------------------------------------------------------------------
+
+  - name: valid_email_format
+    dimension: validity
+    severity: error
+    scope:
+      column_pattern: "*email*"
+    expression: regex
+    params:
+      pattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+
+  # --------------------------------------------------------------------------
+  # Non-negative financial amounts
+  # --------------------------------------------------------------------------
+
+  - name: non_negative_amount
+    dimension: validity
+    severity: error
+    scope:
+      column_pattern: "*amount*"
+    expression: range
+    params:
+      min: 0
+
+  - name: non_negative_price
+    dimension: validity
+    severity: error
+    scope:
+      column_pattern: "*price*"
+    expression: range
+    params:
+      min: 0
+
+  - name: non_negative_balance
+    dimension: validity
+    severity: warning
+    scope:
+      column_pattern: "*balance*"
+    expression: range
+    params:
+      min: 0
+
+  # --------------------------------------------------------------------------
+  # Completeness rules for common FK columns
+  # --------------------------------------------------------------------------
+
+  - name: not_null_customer_id
+    dimension: completeness
+    severity: critical
+    scope:
+      column_pattern: "customer_id"
+    expression: NOT NULL
+    params: {}
+
+  - name: not_null_user_id
+    dimension: completeness
+    severity: critical
+    scope:
+      column_pattern: "user_id"
+    expression: NOT NULL
+    params: {}
+
+  # --------------------------------------------------------------------------
+  # Uniqueness for natural-key columns
+  # --------------------------------------------------------------------------
+
+  - name: unique_email
+    dimension: uniqueness
+    severity: error
+    scope:
+      column_pattern: "*email*"
+    expression: UNIQUE
+    params: {}
+
+  - name: unique_external_id
+    dimension: uniqueness
+    severity: warning
+    scope:
+      column_pattern: "*external_id*"
+    expression: UNIQUE
+    params: {}

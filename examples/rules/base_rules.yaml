@@ -1,0 +1,59 @@
+# DQT Base Rules
+# ==============
+# Standard completeness and validity rules suitable for most SQL databases.
+# Load with: dqt.common.config_loader.load_rules("examples/rules/base_rules.yaml")
+
+rules:
+
+  # --------------------------------------------------------------------------
+  # Completeness rules
+  # --------------------------------------------------------------------------
+
+  - name: not_null_id
+    dimension: completeness
+    severity: critical
+    scope:
+      column_pattern: "id"
+    expression: NOT NULL
+    params: {}
+
+  - name: not_null_created_at
+    dimension: completeness
+    severity: error
+    scope:
+      column_pattern: "created_at"
+    expression: NOT NULL
+    params: {}
+
+  - name: not_null_updated_at
+    dimension: completeness
+    severity: warning
+    scope:
+      column_pattern: "updated_at"
+    expression: NOT NULL
+    params: {}
+
+  # --------------------------------------------------------------------------
+  # Uniqueness rules
+  # --------------------------------------------------------------------------
+
+  - name: unique_id
+    dimension: uniqueness
+    severity: critical
+    scope:
+      column_pattern: "id"
+    expression: UNIQUE
+    params: {}
+
+  # --------------------------------------------------------------------------
+  # Validity rules: positive numeric IDs
+  # --------------------------------------------------------------------------
+
+  - name: positive_id
+    dimension: validity
+    severity: error
+    scope:
+      column_pattern: "id"
+    expression: range
+    params:
+      min: 1
