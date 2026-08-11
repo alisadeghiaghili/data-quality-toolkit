@@ -30,10 +30,10 @@ from dqt.sql.pipeline import DQTPipeline
 from dqt.sql.rules import apply_rules
 from dqt.sql.schema_discovery import discover_schema
 
-
 # ---------------------------------------------------------------------------
 # Shared DB fixture
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def integration_db(tmp_path_factory) -> str:
@@ -66,11 +66,15 @@ def integration_db(tmp_path_factory) -> str:
             salary REAL,
             department_id INTEGER
         );
-        INSERT INTO employees VALUES (1, 'EMP001', 'Alice',  'alice@corp.com',  90000.0,  1);
-        INSERT INTO employees VALUES (2, 'EMP002', 'Bob',    'bob@corp.com',    75000.0,  2);
-        INSERT INTO employees VALUES (3, 'EMP001', 'Carol',  'carol@corp.com',  80000.0,  1); -- duplicate code
-        INSERT INTO employees VALUES (4, 'EMP004', 'Dave',   'not_an_email',    -5000.0,  3); -- bad email, negative salary
-        INSERT INTO employees VALUES (5, 'EMP005', 'Eve',    NULL,              60000.0,  NULL); -- NULL email, NULL dept
+        -- Alice, Bob: clean rows
+        INSERT INTO employees VALUES (1, 'EMP001', 'Alice', 'alice@corp.com', 90000.0, 1);
+        INSERT INTO employees VALUES (2, 'EMP002', 'Bob',   'bob@corp.com',   75000.0, 2);
+        -- Carol: duplicate employee_code
+        INSERT INTO employees VALUES (3, 'EMP001', 'Carol', 'carol@corp.com', 80000.0, 1);
+        -- Dave: bad email, negative salary
+        INSERT INTO employees VALUES (4, 'EMP004', 'Dave', 'not_an_email', -5000.0, 3);
+        -- Eve: NULL email, NULL department
+        INSERT INTO employees VALUES (5, 'EMP005', 'Eve', NULL, 60000.0, NULL);
     """)
     conn.commit()
     conn.close()
@@ -94,6 +98,7 @@ def integration_pipeline(integration_db, tmp_path_factory) -> DQTPipeline:
 # Full pipeline end-to-end
 # ---------------------------------------------------------------------------
 
+
 class TestFullPipelineIntegration:
     def test_pipeline_completes_successfully(self, integration_pipeline):
         result, report = integration_pipeline.run()
@@ -113,9 +118,7 @@ class TestFullPipelineIntegration:
         assert len(c_issues) > 0
         issue_columns = {i.column_name for i in c_issues}
         # At least email should be flagged
-        assert "email" in issue_columns or any(
-            i.table_name == "employees" for i in c_issues
-        )
+        assert "email" in issue_columns or any(i.table_name == "employees" for i in c_issues)
 
     def test_metrics_cover_all_tables(self, integration_pipeline):
         result, _ = integration_pipeline.run()
@@ -141,6 +144,7 @@ class TestFullPipelineIntegration:
 # Rule engine integration
 # ---------------------------------------------------------------------------
 
+
 class TestRuleEngineIntegration:
     def test_not_null_rule_finds_null_email(self, integration_db):
         conn_cfg = ConnectionConfig(id="int", dsn=integration_db)
@@ -149,6 +153,7 @@ class TestRuleEngineIntegration:
         assert emp_tables, "employees table not found"
 
         from dqt.common.models import RuleConfig, RuleScope
+
         rule = RuleConfig(
             name="not_null_email",
             dimension="completeness",
@@ -172,6 +177,7 @@ class TestRuleEngineIntegration:
         emp_tables = [t for t in tables if t.table_name == "employees"]
 
         from dqt.common.models import RuleConfig, RuleScope
+
         rule = RuleConfig(
             name="unique_employee_code",
             dimension="uniqueness",
@@ -195,6 +201,7 @@ class TestRuleEngineIntegration:
         emp_tables = [t for t in tables if t.table_name == "employees"]
 
         from dqt.common.models import RuleConfig, RuleScope
+
         rule = RuleConfig(
             name="positive_salary",
             dimension="validity",

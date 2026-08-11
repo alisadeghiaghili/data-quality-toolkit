@@ -72,10 +72,10 @@ from dqt.common.models import (
 )
 from dqt.sql.schema_discovery import DiscoveredTable
 
-
 # ---------------------------------------------------------------------------
 # Internal: DB connection helper
 # ---------------------------------------------------------------------------
+
 
 def _get_connection(config: ConnectionConfig) -> Any:
     """Return a DBAPI connection for *config*.
@@ -102,13 +102,16 @@ def _get_connection(config: ConnectionConfig) -> Any:
     dsn = config.dsn
     if dsn.startswith("sqlite://"):
         import sqlite3
-        db_path = dsn[len("sqlite:///"):] if dsn.startswith("sqlite:///") else dsn[len("sqlite://"):]
+
+        db_path = (
+            dsn[len("sqlite:///") :] if dsn.startswith("sqlite:///") else dsn[len("sqlite://") :]
+        )
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         return conn
     if dsn.startswith("postgresql://") or dsn.startswith("postgres://"):
         try:
-            import psycopg2  # type: ignore
+            import psycopg2
         except ImportError as exc:
             raise ImportError(
                 "psycopg2 is required for PostgreSQL connections. "
@@ -116,14 +119,14 @@ def _get_connection(config: ConnectionConfig) -> Any:
             ) from exc
         return psycopg2.connect(dsn)
     raise ValueError(
-        f"Unsupported DSN scheme in '{dsn}'. "
-        "Supported: sqlite://, postgresql://, postgres://"
+        f"Unsupported DSN scheme in '{dsn}'. Supported: sqlite://, postgresql://, postgres://"
     )
 
 
 # ---------------------------------------------------------------------------
 # Internal: scope matching
 # ---------------------------------------------------------------------------
+
 
 def _matches_scope(
     table: DiscoveredTable,
@@ -161,16 +164,17 @@ def _matches_scope(
         table.table_name.lower(), scope.table_pattern.lower()
     ):
         return False
-    if column_name is not None and scope.column_pattern and not fnmatch.fnmatch(
-        column_name.lower(), scope.column_pattern.lower()
-    ):
-        return False
-    return True
+    return not (
+        column_name is not None
+        and scope.column_pattern
+        and not fnmatch.fnmatch(column_name.lower(), scope.column_pattern.lower())
+    )
 
 
 # ---------------------------------------------------------------------------
 # Internal: SQL evaluators
 # ---------------------------------------------------------------------------
+
 
 def _qualified_table(schema_name: str | None, table_name: str) -> str:
     """Return a schema-qualified table identifier.
@@ -214,9 +218,7 @@ def _eval_not_null(
         total, nulls = _eval_not_null(cursor, "public", "orders", "customer_id")
     """
     tbl = _qualified_table(schema_name, table_name)
-    cursor.execute(
-        f'SELECT COUNT(*), COUNT(*) - COUNT("{column_name}") FROM {tbl}'
-    )
+    cursor.execute(f'SELECT COUNT(*), COUNT(*) - COUNT("{column_name}") FROM {tbl}')
     row = cursor.fetchone()
     return int(row[0]), int(row[1])
 
@@ -293,7 +295,7 @@ def _eval_range(
     if min_val is None and max_val is None:
         raise ValueError("range rule requires at least one of params.min or params.max.")
     tbl = _qualified_table(schema_name, table_name)
-    cursor.execute(f'SELECT COUNT(*) FROM {tbl}')
+    cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
     total = int(cursor.fetchone()[0])
 
     conditions: list[str] = [f'"{column_name}" IS NOT NULL']
@@ -303,13 +305,16 @@ def _eval_range(
         conditions.append(f'"{column_name}" > {max_val}')
     # Only first condition is always present; wrap min/max in OR if both given
     if min_val is not None and max_val is not None:
-        where = f'"{column_name}" IS NOT NULL AND ("{column_name}" < {min_val} OR "{column_name}" > {max_val})'
+        where = (
+            f'"{column_name}" IS NOT NULL AND '
+            f'("{column_name}" < {min_val} OR "{column_name}" > {max_val})'
+        )
     elif min_val is not None:
         where = f'"{column_name}" IS NOT NULL AND "{column_name}" < {min_val}'
     else:
         where = f'"{column_name}" IS NOT NULL AND "{column_name}" > {max_val}'
 
-    cursor.execute(f'SELECT COUNT(*) FROM {tbl} WHERE {where}')
+    cursor.execute(f"SELECT COUNT(*) FROM {tbl} WHERE {where}")
     out_of_range = int(cursor.fetchone()[0])
     return total, out_of_range
 
@@ -347,19 +352,19 @@ def _eval_regex(
                                   r"^[^@]+@[^@]+$", "sqlite")
     """
     tbl = _qualified_table(schema_name, table_name)
-    cursor.execute(f'SELECT COUNT(*) FROM {tbl}')
+    cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
     total = int(cursor.fetchone()[0])
 
     if dialect == "sqlite":
         not_match_sql = (
-            f'SELECT COUNT(*) FROM {tbl} '
+            f"SELECT COUNT(*) FROM {tbl} "
             f'WHERE "{column_name}" IS NOT NULL '
             f'AND "{column_name}" NOT REGEXP ?'
         )
         cursor.execute(not_match_sql, (pattern,))
     elif dialect in ("postgresql", "postgres"):
         not_match_sql = (
-            f'SELECT COUNT(*) FROM {tbl} '
+            f"SELECT COUNT(*) FROM {tbl} "
             f'WHERE "{column_name}" IS NOT NULL '
             f'AND NOT ("{column_name}" ~ %s)'
         )
@@ -374,6 +379,7 @@ def _eval_regex(
 # ---------------------------------------------------------------------------
 # Internal: dialect detection
 # ---------------------------------------------------------------------------
+
 
 def _detect_dialect(dsn: str) -> str:
     """Derive a dialect string from a DSN.
@@ -399,6 +405,7 @@ def _detect_dialect(dsn: str) -> str:
 # ---------------------------------------------------------------------------
 # Internal: single-rule evaluator
 # ---------------------------------------------------------------------------
+
 
 def _evaluate_rule(
     run_id: str,
@@ -434,130 +441,138 @@ def _evaluate_rule(
         if expr == "NOT NULL":
             total, null_count = _eval_not_null(cursor, schema, tname, column_name)
             if null_count > 0:
-                issues.append(DQIssue(
-                    issue_id=str(uuid.uuid4()),
-                    run_id=run_id,
-                    dimension=rule.dimension,
-                    severity=rule.severity,
-                    message=(
-                        f"Column '{column_name}' in '{tname}' has {null_count} "
-                        f"NULL value(s) out of {total} total rows."
-                    ),
-                    evidence={"null_count": null_count, "total_rows": total},
-                    schema_name=schema,
-                    table_name=tname,
-                    column_name=column_name,
-                    rule_name=rule.name,
-                ))
+                issues.append(
+                    DQIssue(
+                        issue_id=str(uuid.uuid4()),
+                        run_id=run_id,
+                        dimension=rule.dimension,
+                        severity=rule.severity,
+                        message=(
+                            f"Column '{column_name}' in '{tname}' has {null_count} "
+                            f"NULL value(s) out of {total} total rows."
+                        ),
+                        evidence={"null_count": null_count, "total_rows": total},
+                        schema_name=schema,
+                        table_name=tname,
+                        column_name=column_name,
+                        rule_name=rule.name,
+                    )
+                )
 
         elif expr == "UNIQUE":
             total, duplicate_extra = _eval_unique(cursor, schema, tname, column_name)
             if duplicate_extra > 0:
-                issues.append(DQIssue(
-                    issue_id=str(uuid.uuid4()),
-                    run_id=run_id,
-                    dimension=rule.dimension,
-                    severity=rule.severity,
-                    message=(
-                        f"Column '{column_name}' in '{tname}' has {duplicate_extra} "
-                        f"extra duplicate value(s) (violates uniqueness)."
-                    ),
-                    evidence={"duplicate_extra_rows": duplicate_extra, "total_rows": total},
-                    schema_name=schema,
-                    table_name=tname,
-                    column_name=column_name,
-                    rule_name=rule.name,
-                ))
+                issues.append(
+                    DQIssue(
+                        issue_id=str(uuid.uuid4()),
+                        run_id=run_id,
+                        dimension=rule.dimension,
+                        severity=rule.severity,
+                        message=(
+                            f"Column '{column_name}' in '{tname}' has {duplicate_extra} "
+                            f"extra duplicate value(s) (violates uniqueness)."
+                        ),
+                        evidence={"duplicate_extra_rows": duplicate_extra, "total_rows": total},
+                        schema_name=schema,
+                        table_name=tname,
+                        column_name=column_name,
+                        rule_name=rule.name,
+                    )
+                )
 
         elif expr == "RANGE":
             min_val = rule.params.get("min")
             max_val = rule.params.get("max")
-            total, out_of_range = _eval_range(
-                cursor, schema, tname, column_name, min_val, max_val
-            )
+            total, out_of_range = _eval_range(cursor, schema, tname, column_name, min_val, max_val)
             if out_of_range > 0:
-                issues.append(DQIssue(
-                    issue_id=str(uuid.uuid4()),
-                    run_id=run_id,
-                    dimension=rule.dimension,
-                    severity=rule.severity,
-                    message=(
-                        f"Column '{column_name}' in '{tname}' has {out_of_range} "
-                        f"value(s) outside the range "
-                        f"[{min_val if min_val is not None else '-inf'}, "
-                        f"{max_val if max_val is not None else '+inf'}]."
-                    ),
-                    evidence={
-                        "out_of_range_count": out_of_range,
-                        "total_rows": total,
-                        "min": min_val,
-                        "max": max_val,
-                    },
-                    schema_name=schema,
-                    table_name=tname,
-                    column_name=column_name,
-                    rule_name=rule.name,
-                ))
+                issues.append(
+                    DQIssue(
+                        issue_id=str(uuid.uuid4()),
+                        run_id=run_id,
+                        dimension=rule.dimension,
+                        severity=rule.severity,
+                        message=(
+                            f"Column '{column_name}' in '{tname}' has {out_of_range} "
+                            f"value(s) outside the range "
+                            f"[{min_val if min_val is not None else '-inf'}, "
+                            f"{max_val if max_val is not None else '+inf'}]."
+                        ),
+                        evidence={
+                            "out_of_range_count": out_of_range,
+                            "total_rows": total,
+                            "min": min_val,
+                            "max": max_val,
+                        },
+                        schema_name=schema,
+                        table_name=tname,
+                        column_name=column_name,
+                        rule_name=rule.name,
+                    )
+                )
 
         elif expr == "REGEX":
             pattern = rule.params.get("pattern", "")
             if not pattern:
                 raise ValueError(f"Rule '{rule.name}' uses 'regex' but params.pattern is missing.")
-            total, non_matching = _eval_regex(
-                cursor, schema, tname, column_name, pattern, dialect
-            )
+            total, non_matching = _eval_regex(cursor, schema, tname, column_name, pattern, dialect)
             if non_matching > 0:
-                issues.append(DQIssue(
-                    issue_id=str(uuid.uuid4()),
-                    run_id=run_id,
-                    dimension=rule.dimension,
-                    severity=rule.severity,
-                    message=(
-                        f"Column '{column_name}' in '{tname}' has {non_matching} "
-                        f"value(s) not matching pattern '{pattern}'."
-                    ),
-                    evidence={
-                        "non_matching_count": non_matching,
-                        "total_rows": total,
-                        "pattern": pattern,
-                    },
-                    schema_name=schema,
-                    table_name=tname,
-                    column_name=column_name,
-                    rule_name=rule.name,
-                ))
+                issues.append(
+                    DQIssue(
+                        issue_id=str(uuid.uuid4()),
+                        run_id=run_id,
+                        dimension=rule.dimension,
+                        severity=rule.severity,
+                        message=(
+                            f"Column '{column_name}' in '{tname}' has {non_matching} "
+                            f"value(s) not matching pattern '{pattern}'."
+                        ),
+                        evidence={
+                            "non_matching_count": non_matching,
+                            "total_rows": total,
+                            "pattern": pattern,
+                        },
+                        schema_name=schema,
+                        table_name=tname,
+                        column_name=column_name,
+                        rule_name=rule.name,
+                    )
+                )
 
         else:
             # Unknown expression: produce an error-severity issue so the DBA
             # knows a rule was skipped, rather than silently passing.
-            issues.append(DQIssue(
+            issues.append(
+                DQIssue(
+                    issue_id=str(uuid.uuid4()),
+                    run_id=run_id,
+                    dimension=rule.dimension,
+                    severity="error",
+                    message=(
+                        f"Rule '{rule.name}' uses unknown expression '{rule.expression}'. "
+                        "No evaluation was performed."
+                    ),
+                    evidence={"expression": rule.expression},
+                    schema_name=schema,
+                    table_name=tname,
+                    column_name=column_name,
+                    rule_name=rule.name,
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        issues.append(
+            DQIssue(
                 issue_id=str(uuid.uuid4()),
                 run_id=run_id,
                 dimension=rule.dimension,
                 severity="error",
-                message=(
-                    f"Rule '{rule.name}' uses unknown expression '{rule.expression}'. "
-                    "No evaluation was performed."
-                ),
-                evidence={"expression": rule.expression},
+                message=f"Rule '{rule.name}' evaluation error on '{tname}.{column_name}': {exc}",
+                evidence={"error": str(exc)},
                 schema_name=schema,
                 table_name=tname,
                 column_name=column_name,
                 rule_name=rule.name,
-            ))
-    except Exception as exc:  # noqa: BLE001
-        issues.append(DQIssue(
-            issue_id=str(uuid.uuid4()),
-            run_id=run_id,
-            dimension=rule.dimension,
-            severity="error",
-            message=f"Rule '{rule.name}' evaluation error on '{tname}.{column_name}': {exc}",
-            evidence={"error": str(exc)},
-            schema_name=schema,
-            table_name=tname,
-            column_name=column_name,
-            rule_name=rule.name,
-        ))
+            )
+        )
 
     return issues
 
@@ -565,6 +580,7 @@ def _evaluate_rule(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def apply_rules(
     run_id: str,
@@ -642,20 +658,26 @@ def apply_rules(
                     )
                     rule_issues.extend(col_issues)
                     if col_issues:
-                        error_issues = [i for i in col_issues if i.severity == "error" and "evaluation error" in i.message]
+                        error_issues = [
+                            i
+                            for i in col_issues
+                            if i.severity == "error" and "evaluation error" in i.message
+                        ]
                         if error_issues:
                             targets_error += 1
                         else:
                             targets_failed += 1
 
             all_issues.extend(rule_issues)
-            summaries.append(RuleRunResult(
-                run_id=run_id,
-                rule_name=rule.name,
-                targets_checked=targets_checked,
-                targets_failed=targets_failed,
-                targets_error=targets_error,
-            ))
+            summaries.append(
+                RuleRunResult(
+                    run_id=run_id,
+                    rule_name=rule.name,
+                    targets_checked=targets_checked,
+                    targets_failed=targets_failed,
+                    targets_error=targets_error,
+                )
+            )
     finally:
         db_conn.close()
 

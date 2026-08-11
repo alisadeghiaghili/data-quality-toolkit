@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -78,10 +78,10 @@ class DQMetric:
     run_id: str
     dimension: str
     score: float
-    schema_name: Optional[str] = None
-    table_name: Optional[str] = None
-    column_name: Optional[str] = None
-    value: Optional[float] = None
+    schema_name: str | None = None
+    table_name: str | None = None
+    column_name: str | None = None
+    value: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -129,10 +129,10 @@ class DQIssue:
     severity: IssueSeverity
     message: str
     evidence: dict[str, Any] = field(default_factory=dict)
-    schema_name: Optional[str] = None
-    table_name: Optional[str] = None
-    column_name: Optional[str] = None
-    rule_name: Optional[str] = None
+    schema_name: str | None = None
+    table_name: str | None = None
+    column_name: str | None = None
+    rule_name: str | None = None
 
 
 @dataclass
@@ -179,7 +179,7 @@ class ColumnResult:
     table_name: str
     column_name: str
     db_type: str
-    semantic_type: Optional[str] = None
+    semantic_type: str | None = None
     metrics: list[DQMetric] = field(default_factory=list)
     issues: list[DQIssue] = field(default_factory=list)
 
@@ -282,10 +282,10 @@ class RuleResult:
     run_id: str
     rule_name: str
     status: RuleStatus
-    schema_name: Optional[str] = None
-    table_name: Optional[str] = None
-    column_name: Optional[str] = None
-    details: Optional[str] = None
+    schema_name: str | None = None
+    table_name: str | None = None
+    column_name: str | None = None
+    details: str | None = None
 
 
 @dataclass
@@ -377,7 +377,7 @@ class PipelineResult:
 
 @dataclass
 class Rule:
-    """A declarative data-quality rule.
+    r"""A declarative data-quality rule.
 
     A ``Rule`` defines a check to be evaluated against one or more
     table/column targets.  Rules are loaded from YAML/JSON via
@@ -445,7 +445,7 @@ class SamplingConfig(BaseModel):
 
     strategy: Literal["random", "first_n"] = "random"
     limit: int = Field(default=10_000, gt=0, description="Maximum rows to sample.")
-    seed: Optional[int] = Field(default=None, description="Random seed for reproducibility.")
+    seed: int | None = Field(default=None, description="Random seed for reproducibility.")
 
 
 class RuleScope(BaseModel):
@@ -468,9 +468,9 @@ class RuleScope(BaseModel):
         scope = RuleScope(table_pattern="customers", column_pattern="email")
     """
 
-    schema_pattern: Optional[str] = None
-    table_pattern: Optional[str] = None
-    column_pattern: Optional[str] = None
+    schema_pattern: str | None = None
+    table_pattern: str | None = None
+    column_pattern: str | None = None
 
 
 class ConnectionConfig(BaseModel):
@@ -504,16 +504,14 @@ class ConnectionConfig(BaseModel):
     id: str = Field(..., min_length=1, description="Unique connection identifier.")
     dsn: str = Field(..., min_length=1, description="Database DSN; may use ${ENV_VAR} expansion.")
     read_only: bool = Field(default=True, description="Enforce read-only session.")
-    ssl: Optional[dict[str, Any]] = Field(default=None, description="SSL/TLS driver options.")
+    ssl: dict[str, Any] | None = Field(default=None, description="SSL/TLS driver options.")
 
     @field_validator("dsn")
     @classmethod
     def dsn_must_not_be_empty(cls, v: str) -> str:
         """Reject blank or whitespace-only DSNs."""
         if not v.strip():
-            raise ValueError(
-                "dsn must not be blank; use a valid connection string or ${ENV_VAR}."
-            )
+            raise ValueError("dsn must not be blank; use a valid connection string or ${ENV_VAR}.")
         return v
 
 
@@ -549,16 +547,16 @@ class DQPipelineConfig(BaseModel):
     """
 
     connection_id: str = Field(..., min_length=1)
-    include_schemas: Optional[list[str]] = None
-    exclude_schemas: Optional[list[str]] = None
-    include_tables: Optional[list[str]] = None
-    exclude_tables: Optional[list[str]] = None
-    sampling: Optional[SamplingConfig] = None
-    metric_thresholds: Optional[dict[str, float]] = None
+    include_schemas: list[str] | None = None
+    exclude_schemas: list[str] | None = None
+    include_tables: list[str] | None = None
+    exclude_tables: list[str] | None = None
+    sampling: SamplingConfig | None = None
+    metric_thresholds: dict[str, float] | None = None
     rule_files: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def check_no_overlap_in_include_exclude(self) -> "DQPipelineConfig":
+    def check_no_overlap_in_include_exclude(self) -> DQPipelineConfig:
         """Raise if the same name appears in both include and exclude lists."""
         for attr in ("schemas", "tables"):
             inc: list[str] | None = getattr(self, f"include_{attr}")
@@ -574,9 +572,7 @@ class DQPipelineConfig(BaseModel):
 
     @field_validator("metric_thresholds")
     @classmethod
-    def thresholds_must_be_in_range(
-        cls, v: dict[str, float] | None
-    ) -> dict[str, float] | None:
+    def thresholds_must_be_in_range(cls, v: dict[str, float] | None) -> dict[str, float] | None:
         """Ensure all threshold values are in [0.0, 1.0]."""
         if v is None:
             return v
@@ -629,8 +625,7 @@ class RuleConfig(BaseModel):
         """Reject names with spaces; they must be slug-style identifiers."""
         if " " in v:
             raise ValueError(
-                f"Rule name '{v}' must not contain spaces. "
-                "Use underscores or hyphens instead."
+                f"Rule name '{v}' must not contain spaces. Use underscores or hyphens instead."
             )
         return v
 

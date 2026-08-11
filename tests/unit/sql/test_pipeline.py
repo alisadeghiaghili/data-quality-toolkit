@@ -8,7 +8,6 @@ stage isolation, and RunStore persistence.
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -17,17 +16,17 @@ from dqt.common.models import ConnectionConfig, DQPipelineConfig
 from dqt.common.storage import RunStore
 from dqt.sql.pipeline import DQTPipeline
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
-def small_db(tmp_path: Path) -> str:
+def small_db(make_sqlite_db) -> str:
     """Create a small SQLite DB with two tables and return its file DSN."""
-    db_file = tmp_path / "test_pipeline.db"
-    conn = sqlite3.connect(str(db_file))
-    conn.executescript("""
+    db_file = make_sqlite_db(
+        "test_pipeline.db",
+        """
         CREATE TABLE customers (
             id INTEGER PRIMARY KEY,
             email TEXT,
@@ -45,9 +44,8 @@ def small_db(tmp_path: Path) -> str:
         INSERT INTO orders VALUES (1, 1, 99.9);
         INSERT INTO orders VALUES (2, 2, -5.0);
         INSERT INTO orders VALUES (3, 3, 200.0);
-    """)
-    conn.commit()
-    conn.close()
+        """,
+    )
     return f"sqlite:///{db_file}"
 
 
@@ -67,6 +65,7 @@ def pipeline(small_db: str, tmp_path: Path) -> DQTPipeline:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestDQTPipelineRun:
     def test_run_returns_result_and_report(self, pipeline, tmp_path):
@@ -96,9 +95,7 @@ class TestDQTPipelineRun:
         """Completeness diagnostics should flag the NULL email in customers."""
         result, _ = pipeline.run()
         # NULL email in customers should produce at least one completeness issue
-        completeness_issues = [
-            i for i in result.issues if i.dimension == "completeness"
-        ]
+        completeness_issues = [i for i in result.issues if i.dimension == "completeness"]
         assert len(completeness_issues) > 0
 
     def test_run_persisted_to_store(self, pipeline, tmp_path):

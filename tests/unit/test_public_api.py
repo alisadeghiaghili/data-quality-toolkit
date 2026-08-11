@@ -6,8 +6,7 @@ from the top-level package and that the helper constructors work correctly.
 
 from __future__ import annotations
 
-import pytest
-
+import dqt
 from dqt import (
     ColumnResult,
     ConnectionConfig,
@@ -34,7 +33,6 @@ from dqt import (
     load_rules,
     load_rules_from_files,
 )
-import dqt
 
 
 def test_version_is_set() -> None:

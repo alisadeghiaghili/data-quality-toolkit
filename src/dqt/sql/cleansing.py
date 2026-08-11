@@ -65,10 +65,10 @@ from typing import Any, Literal
 from dqt.common.models import ConnectionConfig, PipelineResult
 from dqt.sql.rules import _get_connection, _qualified_table
 
-
 # ---------------------------------------------------------------------------
 # Public data classes
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class CleansingConfig:
@@ -179,7 +179,8 @@ class CleansingResult:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_all_dicts(cursor: Any, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
+
+def _fetch_all_dicts(cursor: Any, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     """Execute *sql* and return all rows as plain dicts.
 
     Args:
@@ -196,12 +197,13 @@ def _fetch_all_dicts(cursor: Any, sql: str, params: tuple = ()) -> list[dict[str
     """
     cursor.execute(sql, params)
     cols = [d[0] for d in cursor.description]
-    return [dict(zip(cols, row)) for row in cursor.fetchall()]
+    return [dict(zip(cols, row, strict=True)) for row in cursor.fetchall()]
 
 
 # ---------------------------------------------------------------------------
 # Cleansing operations
 # ---------------------------------------------------------------------------
+
 
 def _standardize(
     cursor: Any,
@@ -243,14 +245,14 @@ def _standardize(
         logs = _standardize(cursor, "run-1", None, "users", "email",
                             {"case": "lower", "trim": True})
     """
-    trim             = params.get("trim", True)
+    trim = params.get("trim", True)
     normalize_spaces = params.get("normalize_spaces", False)
-    case             = params.get("case")  # "upper" | "lower" | "title" | None
-    tbl              = _qualified_table(schema_name, table_name)
+    case = params.get("case")  # "upper" | "lower" | "title" | None
+    tbl = _qualified_table(schema_name, table_name)
 
     rows = _fetch_all_dicts(
         cursor,
-        f'SELECT rowid, "{column_name}" FROM {tbl} WHERE "{column_name}" IS NOT NULL',
+        f'SELECT rowid AS dqt_row_id, "{column_name}" FROM {tbl} WHERE "{column_name}" IS NOT NULL',
     )
 
     logs: list[CleansingLog] = []
@@ -262,6 +264,7 @@ def _standardize(
             value = value.strip()
         if normalize_spaces:
             import re
+
             value = re.sub(r" +", " ", value)
         if case == "upper":
             value = value.upper()
@@ -273,18 +276,20 @@ def _standardize(
         if value != original:
             cursor.execute(
                 f'UPDATE {tbl} SET "{column_name}" = ? WHERE rowid = ?',
-                (value, row["rowid"]),
+                (value, row["dqt_row_id"]),
             )
-            logs.append(CleansingLog(
-                run_id=run_id,
-                operation="standardize",
-                schema_name=schema_name,
-                table_name=table_name,
-                column_name=column_name,
-                row_key={"rowid": row["rowid"]},
-                before_value=original,
-                after_value=value,
-            ))
+            logs.append(
+                CleansingLog(
+                    run_id=run_id,
+                    operation="standardize",
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    column_name=column_name,
+                    row_key={"rowid": row["dqt_row_id"]},
+                    before_value=original,
+                    after_value=value,
+                )
+            )
     return logs
 
 
@@ -334,14 +339,20 @@ def _deduplicate(
 
     key_expr = ", ".join(f'"{c}"' for c in key_columns)
     keep_func = "MIN" if keep == "first" else "MAX"
+    # A NULL-valued key column is not equal to another NULL for duplicate purposes —
+    # GROUP BY would otherwise collapse all NULL-keyed rows into one "duplicate" group
+    # and delete genuinely distinct rows. Exclude any row with a NULL key column.
+    not_null_guard = " AND ".join(f'"{c}" IS NOT NULL' for c in key_columns)
 
     # Find rowids to delete: those that are NOT the keep-rowid for their key group
     dup_sql = f"""
-        SELECT rowid
+        SELECT rowid AS dqt_row_id
         FROM {tbl}
-        WHERE rowid NOT IN (
+        WHERE {not_null_guard}
+          AND rowid NOT IN (
             SELECT {keep_func}(rowid)
             FROM {tbl}
+            WHERE {not_null_guard}
             GROUP BY {key_expr}
         )
     """
@@ -353,20 +364,22 @@ def _deduplicate(
         full_row = _fetch_all_dicts(
             cursor,
             f"SELECT * FROM {tbl} WHERE rowid = ?",
-            (row["rowid"],),
+            (row["dqt_row_id"],),
         )
         before = full_row[0] if full_row else {}
-        cursor.execute(f"DELETE FROM {tbl} WHERE rowid = ?", (row["rowid"],))
-        logs.append(CleansingLog(
-            run_id=run_id,
-            operation="deduplicate",
-            schema_name=schema_name,
-            table_name=table_name,
-            column_name=None,
-            row_key={"rowid": row["rowid"]},
-            before_value=before,
-            after_value=None,
-        ))
+        cursor.execute(f"DELETE FROM {tbl} WHERE rowid = ?", (row["dqt_row_id"],))
+        logs.append(
+            CleansingLog(
+                run_id=run_id,
+                operation="deduplicate",
+                schema_name=schema_name,
+                table_name=table_name,
+                column_name=None,
+                row_key={"rowid": row["dqt_row_id"]},
+                before_value=before,
+                after_value=None,
+            )
+        )
     return logs
 
 
@@ -424,10 +437,10 @@ def _lookup_correct(
     if not lookup_table:
         raise ValueError("lookup_correct operation requires params.lookup_table.")
     from_col: str = params.get("from_column", "from_value")
-    to_col:   str = params.get("to_column",   "to_value")
+    to_col: str = params.get("to_column", "to_value")
     lookup_schema: str | None = params.get("lookup_schema", schema_name)
 
-    tbl        = _qualified_table(schema_name, table_name)
+    tbl = _qualified_table(schema_name, table_name)
     lookup_tbl = _qualified_table(lookup_schema, lookup_table)
 
     # Fetch the mapping
@@ -442,7 +455,7 @@ def _lookup_correct(
     logs: list[CleansingLog] = []
     rows = _fetch_all_dicts(
         cursor,
-        f'SELECT rowid, "{column_name}" FROM {tbl} WHERE "{column_name}" IS NOT NULL',
+        f'SELECT rowid AS dqt_row_id, "{column_name}" FROM {tbl} WHERE "{column_name}" IS NOT NULL',
     )
     for row in rows:
         old_val = row[column_name]
@@ -450,24 +463,27 @@ def _lookup_correct(
             new_val = mapping[old_val]
             cursor.execute(
                 f'UPDATE {tbl} SET "{column_name}" = ? WHERE rowid = ?',
-                (new_val, row["rowid"]),
+                (new_val, row["dqt_row_id"]),
             )
-            logs.append(CleansingLog(
-                run_id=run_id,
-                operation="lookup_correct",
-                schema_name=schema_name,
-                table_name=table_name,
-                column_name=column_name,
-                row_key={"rowid": row["rowid"]},
-                before_value=old_val,
-                after_value=new_val,
-            ))
+            logs.append(
+                CleansingLog(
+                    run_id=run_id,
+                    operation="lookup_correct",
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    column_name=column_name,
+                    row_key={"rowid": row["dqt_row_id"]},
+                    before_value=old_val,
+                    after_value=new_val,
+                )
+            )
     return logs
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def apply_cleansing(
     run_id: str,
@@ -526,22 +542,30 @@ def apply_cleansing(
                     if not cfg.column_name:
                         raise ValueError("standardize requires column_name.")
                     logs = _standardize(
-                        cursor, run_id,
-                        cfg.schema_name, cfg.table_name, cfg.column_name,
+                        cursor,
+                        run_id,
+                        cfg.schema_name,
+                        cfg.table_name,
+                        cfg.column_name,
                         cfg.params,
                     )
                 elif cfg.operation == "deduplicate":
                     logs = _deduplicate(
-                        cursor, run_id,
-                        cfg.schema_name, cfg.table_name,
+                        cursor,
+                        run_id,
+                        cfg.schema_name,
+                        cfg.table_name,
                         cfg.params,
                     )
                 elif cfg.operation == "lookup_correct":
                     if not cfg.column_name:
                         raise ValueError("lookup_correct requires column_name.")
                     logs = _lookup_correct(
-                        cursor, run_id,
-                        cfg.schema_name, cfg.table_name, cfg.column_name,
+                        cursor,
+                        run_id,
+                        cfg.schema_name,
+                        cfg.table_name,
+                        cfg.column_name,
                         cfg.params,
                     )
                 else:
@@ -558,8 +582,7 @@ def apply_cleansing(
 
             except Exception as exc:  # noqa: BLE001
                 cleansing_result.errors.append(
-                    f"Error in '{cfg.operation}' on "
-                    f"{cfg.table_name}.{cfg.column_name}: {exc}"
+                    f"Error in '{cfg.operation}' on {cfg.table_name}.{cfg.column_name}: {exc}"
                 )
 
         db_conn.commit()

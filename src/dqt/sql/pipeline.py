@@ -11,7 +11,8 @@ together all DQT stages into a single ``run()`` call:
 2. **profile_data** — compute per-column statistics (min/max, nulls, distinct counts).
 3. **run_diagnostics** — derive :class:`~dqt.common.models.DQIssue` objects from profiles.
 4. **apply_rules** — evaluate declarative YAML/JSON rules via SQL and collect additional issues.
-5. **cleanse** — apply reversible cleansing primitives (stub; implemented in :mod:`dqt.sql.cleansing`).
+5. **cleanse** — apply reversible cleansing primitives (implemented in
+   :mod:`dqt.sql.cleansing`).
 6. **compute_metrics** — aggregate run-level :class:`~dqt.common.models.DQMetric` objects.
 7. **monitor** — pass metrics through the monitoring stage (stub; drift detection in future).
 8. **persist** — write run, metrics, and issues to :class:`~dqt.common.storage.RunStore`.
@@ -23,7 +24,8 @@ in isolation for testing, scripting, or incremental pipelines.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import contextlib
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -128,7 +130,7 @@ class DQTPipeline:
             print(f"{result.status}: {len(result.issues)} issue(s)")
         """
         run_id = f"run-{uuid4().hex[:8]}"
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
 
         # Stage 1: schema discovery
         discovered_tables = self.discover_schema()
@@ -166,13 +168,14 @@ class DQTPipeline:
         # Stage 7: monitoring
         result.metrics = self.monitor(result.metrics + run_metrics)
 
-        result.ended_at = datetime.now(timezone.utc)
+        result.ended_at = datetime.now(UTC)
         result.status = "success"
 
         # Stage 8: persist
         self._persist(result)
 
         # Stage 9: HTML report
+        self._report_dir.mkdir(parents=True, exist_ok=True)
         report_path = self._report_dir / f"dqt_report_{result.run_id}.html"
         generate_html_report(result, output_path=report_path)
 
@@ -279,13 +282,11 @@ class DQTPipeline:
         # Load and merge rules from all configured files
         all_rules = []
         for rule_file in rule_files:
-            try:
+            # Missing rule file is a warning, not a fatal error; the DBA may be
+            # running from a different working directory. A proper logging call
+            # would go here once logging is wired.
+            with contextlib.suppress(FileNotFoundError):
                 all_rules.extend(load_rules(rule_file))
-            except FileNotFoundError:
-                # Missing rule file is a warning, not a fatal error;
-                # the DBA may be running from a different working directory.
-                # A proper logging call would go here once logging is wired.
-                pass
 
         if not all_rules:
             return [], []
@@ -383,8 +384,8 @@ class DQTPipeline:
         """
         include_schemas = set(self._pipeline_config.include_schemas or [])
         exclude_schemas = set(self._pipeline_config.exclude_schemas or [])
-        include_tables  = set(self._pipeline_config.include_tables or [])
-        exclude_tables  = set(self._pipeline_config.exclude_tables or [])
+        include_tables = set(self._pipeline_config.include_tables or [])
+        exclude_tables = set(self._pipeline_config.exclude_tables or [])
 
         filtered: list[DiscoveredTable] = []
         for table in tables:
@@ -433,22 +434,22 @@ class DQTPipeline:
 
         for table_profile in profiled_tables:
             key = f"{table_profile.schema_name}.{table_profile.table_name}"
-            schema_tables.setdefault(table_profile.schema_name, []).append(
-                table_profile.table_name
-            )
+            schema_tables.setdefault(table_profile.schema_name, []).append(table_profile.table_name)
 
             column_results: list[ColumnResult] = []
             for column_profile in table_profile.columns:
                 column_metrics = [
-                    m for m in profile_metrics
+                    m
+                    for m in profile_metrics
                     if m.schema_name == column_profile.schema_name
-                    and m.table_name  == column_profile.table_name
+                    and m.table_name == column_profile.table_name
                     and m.column_name == column_profile.column_name
                 ]
                 column_issues = [
-                    i for i in issues
+                    i
+                    for i in issues
                     if i.schema_name == column_profile.schema_name
-                    and i.table_name  == column_profile.table_name
+                    and i.table_name == column_profile.table_name
                     and i.column_name == column_profile.column_name
                 ]
                 column_results.append(
@@ -464,15 +465,17 @@ class DQTPipeline:
                 )
 
             table_metrics = [
-                m for m in profile_metrics
+                m
+                for m in profile_metrics
                 if m.schema_name == table_profile.schema_name
-                and m.table_name  == table_profile.table_name
+                and m.table_name == table_profile.table_name
                 and m.column_name is None
             ]
             table_issues = [
-                i for i in issues
+                i
+                for i in issues
                 if i.schema_name == table_profile.schema_name
-                and i.table_name  == table_profile.table_name
+                and i.table_name == table_profile.table_name
                 and i.column_name is None
             ]
 

@@ -101,9 +101,7 @@ def connect_sql(connection_config: ConnectionConfig) -> Any:
             ) from exc
         return psycopg.connect(dsn)
 
-    raise ValueError(
-        "Unsupported DSN. Expected sqlite:///..., postgresql://..., or postgres://..."
-    )
+    raise ValueError("Unsupported DSN. Expected sqlite:///..., postgresql://..., or postgres://...")
 
 
 def discover_schema(connection_config: ConnectionConfig) -> list[DiscoveredTable]:
@@ -129,9 +127,7 @@ def discover_schema(connection_config: ConnectionConfig) -> list[DiscoveredTable
     if dsn.startswith("postgresql://") or dsn.startswith("postgres://"):
         return _discover_postgres(connection_config)
 
-    raise ValueError(
-        "Unsupported DSN. Expected sqlite:///..., postgresql://..., or postgres://..."
-    )
+    raise ValueError("Unsupported DSN. Expected sqlite:///..., postgresql://..., or postgres://...")
 
 
 def _discover_sqlite(connection_config: ConnectionConfig) -> list[DiscoveredTable]:

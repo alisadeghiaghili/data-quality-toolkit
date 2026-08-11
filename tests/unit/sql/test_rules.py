@@ -23,10 +23,10 @@ from dqt.sql.rules import (
 )
 from dqt.sql.schema_discovery import DiscoveredColumn, DiscoveredTable
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def sqlite_conn():
@@ -55,19 +55,37 @@ def discovered_users_table():
         schema_name=None,
         table_name="users",
         columns=[
-            DiscoveredColumn(schema_name=None, table_name="users", column_name="id", data_type="INTEGER", is_nullable=True, ordinal_position=1),
-            DiscoveredColumn(schema_name=None, table_name="users", column_name="email", data_type="TEXT", is_nullable=True, ordinal_position=2),
-            DiscoveredColumn(schema_name=None, table_name="users", column_name="age", data_type="INTEGER", is_nullable=True, ordinal_position=3),
+            DiscoveredColumn(
+                schema_name=None,
+                table_name="users",
+                column_name="id",
+                data_type="INTEGER",
+                nullable=True,
+            ),
+            DiscoveredColumn(
+                schema_name=None,
+                table_name="users",
+                column_name="email",
+                data_type="TEXT",
+                nullable=True,
+            ),
+            DiscoveredColumn(
+                schema_name=None,
+                table_name="users",
+                column_name="age",
+                data_type="INTEGER",
+                nullable=True,
+            ),
         ],
     )
 
 
 @pytest.fixture
-def sqlite_dsn_file(tmp_path):
+def sqlite_dsn_file(make_sqlite_db):
     """SQLite file-based DSN with a populated test DB."""
-    db_file = tmp_path / "test_rules.db"
-    conn = sqlite3.connect(str(db_file))
-    conn.executescript("""
+    db_file = make_sqlite_db(
+        "test_rules.db",
+        """
         CREATE TABLE orders (
             id INTEGER,
             amount REAL,
@@ -77,15 +95,15 @@ def sqlite_dsn_file(tmp_path):
         INSERT INTO orders VALUES (2, -5.0, 20);    -- negative amount
         INSERT INTO orders VALUES (3, 200.0, NULL); -- NULL customer_id
         INSERT INTO orders VALUES (1, 50.0, 30);    -- duplicate id
-    """)
-    conn.commit()
-    conn.close()
+        """,
+    )
     return f"sqlite:///{db_file}"
 
 
 # ---------------------------------------------------------------------------
 # _detect_dialect
 # ---------------------------------------------------------------------------
+
 
 class TestDetectDialect:
     def test_sqlite(self):
@@ -105,6 +123,7 @@ class TestDetectDialect:
 # ---------------------------------------------------------------------------
 # Low-level SQL evaluators
 # ---------------------------------------------------------------------------
+
 
 class TestEvalNotNull:
     def test_detects_nulls(self, sqlite_conn):
@@ -163,13 +182,16 @@ class TestEvalRange:
 # _matches_scope
 # ---------------------------------------------------------------------------
 
+
 class TestMatchesScope:
     def _table(self, schema=None, name="users"):
         return DiscoveredTable(schema_name=schema, table_name=name, columns=[])
 
     def _rule(self, table_pattern=None, column_pattern=None, schema_pattern=None):
         return RuleConfig(
-            name="r", dimension="completeness", severity="error",
+            name="r",
+            dimension="completeness",
+            severity="error",
             scope=RuleScope(
                 table_pattern=table_pattern,
                 column_pattern=column_pattern,
@@ -211,11 +233,14 @@ class TestMatchesScope:
 # apply_rules() public API
 # ---------------------------------------------------------------------------
 
+
 class TestApplyRules:
     def _conn_cfg(self, dsn):
         return ConnectionConfig(id="test", dsn=dsn)
 
-    def _rule(self, name, expr, col_pattern, dimension="completeness", severity="error", params=None):
+    def _rule(
+        self, name, expr, col_pattern, dimension="completeness", severity="error", params=None
+    ):
         return RuleConfig(
             name=name,
             dimension=dimension,
@@ -253,12 +278,24 @@ class TestApplyRules:
                 schema_name=None,
                 table_name="orders",
                 columns=[
-                    DiscoveredColumn(schema_name=None, table_name="orders", column_name="customer_id", data_type="INTEGER", is_nullable=True, ordinal_position=3),
+                    DiscoveredColumn(
+                        schema_name=None,
+                        table_name="orders",
+                        column_name="customer_id",
+                        data_type="INTEGER",
+                        nullable=True,
+                    ),
                 ],
             )
         ]
         conn.close()
-        rule = self._rule("not_null_customer", "NOT NULL", "customer_id", dimension="completeness", severity="critical")
+        rule = self._rule(
+            "not_null_customer",
+            "NOT NULL",
+            "customer_id",
+            dimension="completeness",
+            severity="critical",
+        )
         issues, summaries = apply_rules(
             run_id="run-001",
             connection_config=self._conn_cfg(sqlite_dsn_file),
@@ -276,11 +313,19 @@ class TestApplyRules:
                 schema_name=None,
                 table_name="orders",
                 columns=[
-                    DiscoveredColumn(schema_name=None, table_name="orders", column_name="id", data_type="INTEGER", is_nullable=True, ordinal_position=1),
+                    DiscoveredColumn(
+                        schema_name=None,
+                        table_name="orders",
+                        column_name="id",
+                        data_type="INTEGER",
+                        nullable=True,
+                    ),
                 ],
             )
         ]
-        rule = self._rule("unique_order_id", "UNIQUE", "id", dimension="uniqueness", severity="error")
+        rule = self._rule(
+            "unique_order_id", "UNIQUE", "id", dimension="uniqueness", severity="error"
+        )
         issues, summaries = apply_rules(
             run_id="run-002",
             connection_config=self._conn_cfg(sqlite_dsn_file),
@@ -296,11 +341,24 @@ class TestApplyRules:
                 schema_name=None,
                 table_name="orders",
                 columns=[
-                    DiscoveredColumn(schema_name=None, table_name="orders", column_name="amount", data_type="REAL", is_nullable=True, ordinal_position=2),
+                    DiscoveredColumn(
+                        schema_name=None,
+                        table_name="orders",
+                        column_name="amount",
+                        data_type="REAL",
+                        nullable=True,
+                    ),
                 ],
             )
         ]
-        rule = self._rule("positive_amount", "range", "amount", dimension="validity", severity="error", params={"min": 0})
+        rule = self._rule(
+            "positive_amount",
+            "range",
+            "amount",
+            dimension="validity",
+            severity="error",
+            params={"min": 0},
+        )
         issues, summaries = apply_rules(
             run_id="run-003",
             connection_config=self._conn_cfg(sqlite_dsn_file),
@@ -316,7 +374,13 @@ class TestApplyRules:
                 schema_name=None,
                 table_name="orders",
                 columns=[
-                    DiscoveredColumn(schema_name=None, table_name="orders", column_name="id", data_type="INTEGER", is_nullable=True, ordinal_position=1),
+                    DiscoveredColumn(
+                        schema_name=None,
+                        table_name="orders",
+                        column_name="id",
+                        data_type="INTEGER",
+                        nullable=True,
+                    ),
                 ],
             )
         ]
@@ -336,12 +400,20 @@ class TestApplyRules:
                 schema_name=None,
                 table_name="orders",
                 columns=[
-                    DiscoveredColumn(schema_name=None, table_name="orders", column_name="id", data_type="INTEGER", is_nullable=True, ordinal_position=1),
+                    DiscoveredColumn(
+                        schema_name=None,
+                        table_name="orders",
+                        column_name="id",
+                        data_type="INTEGER",
+                        nullable=True,
+                    ),
                 ],
             )
         ]
         # All orders have non-null ids in the fixture (though duplicated)
-        rule = self._rule("not_null_order_id", "NOT NULL", "id", dimension="completeness", severity="error")
+        rule = self._rule(
+            "not_null_order_id", "NOT NULL", "id", dimension="completeness", severity="error"
+        )
         issues, summaries = apply_rules(
             run_id="run-005",
             connection_config=self._conn_cfg(sqlite_dsn_file),
@@ -357,14 +429,34 @@ class TestApplyRules:
                 schema_name=None,
                 table_name="orders",
                 columns=[
-                    DiscoveredColumn(schema_name=None, table_name="orders", column_name="id", data_type="INTEGER", is_nullable=True, ordinal_position=1),
-                    DiscoveredColumn(schema_name=None, table_name="orders", column_name="amount", data_type="REAL", is_nullable=True, ordinal_position=2),
-                    DiscoveredColumn(schema_name=None, table_name="orders", column_name="customer_id", data_type="INTEGER", is_nullable=True, ordinal_position=3),
+                    DiscoveredColumn(
+                        schema_name=None,
+                        table_name="orders",
+                        column_name="id",
+                        data_type="INTEGER",
+                        nullable=True,
+                    ),
+                    DiscoveredColumn(
+                        schema_name=None,
+                        table_name="orders",
+                        column_name="amount",
+                        data_type="REAL",
+                        nullable=True,
+                    ),
+                    DiscoveredColumn(
+                        schema_name=None,
+                        table_name="orders",
+                        column_name="customer_id",
+                        data_type="INTEGER",
+                        nullable=True,
+                    ),
                 ],
             )
         ]
         # Only check customer_id, which has 1 NULL
-        rule = self._rule("check_fk", "NOT NULL", "customer_id", dimension="completeness", severity="warning")
+        rule = self._rule(
+            "check_fk", "NOT NULL", "customer_id", dimension="completeness", severity="warning"
+        )
         issues, summaries = apply_rules(
             run_id="run-006",
             connection_config=self._conn_cfg(sqlite_dsn_file),

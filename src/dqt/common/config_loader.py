@@ -48,7 +48,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -56,6 +56,7 @@ from dqt.common.models import ConnectionConfig, DQPipelineConfig, RuleConfig
 
 try:
     import yaml as _yaml
+
     _YAML_AVAILABLE = True
 except ImportError:
     _YAML_AVAILABLE = False
@@ -68,6 +69,7 @@ _ENV_PATTERN = re.compile(r"\$\{([^}]+)\}")
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _expand_env(value: Any) -> Any:
     """Recursively expand ``${VAR}`` placeholders in strings within a nested
@@ -93,9 +95,7 @@ def _expand_env(value: Any) -> Any:
     if isinstance(value, list):
         return [_expand_env(item) for item in value]
     if isinstance(value, str):
-        return _ENV_PATTERN.sub(
-            lambda m: os.environ.get(m.group(1), m.group(0)), value
-        )
+        return _ENV_PATTERN.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
     return value
 
 
@@ -126,8 +126,7 @@ def _read_file(path: Path) -> dict[str, Any]:
     if path.suffix in (".yaml", ".yml"):
         if not _YAML_AVAILABLE:
             raise ImportError(
-                "PyYAML is required to load YAML config files. "
-                "Install it with: pip install pyyaml"
+                "PyYAML is required to load YAML config files. Install it with: pip install pyyaml"
             )
         data = _yaml.safe_load(raw)
     else:
@@ -143,7 +142,7 @@ def _read_file(path: Path) -> dict[str, Any]:
     return data
 
 
-def _validate(model: Type[T], data: dict[str, Any], source: Path) -> T:
+def _validate(model: type[T], data: dict[str, Any], source: Path) -> T:
     """Validate *data* against *model*, raising a clear error on failure.
 
     Args:
@@ -173,7 +172,8 @@ def _validate(model: Type[T], data: dict[str, Any], source: Path) -> T:
 # Public API
 # ---------------------------------------------------------------------------
 
-def load_connection(path: Union[str, Path]) -> ConnectionConfig:
+
+def load_connection(path: str | Path) -> ConnectionConfig:
     """Load and validate a :class:`~dqt.common.models.ConnectionConfig` from file.
 
     Supports YAML (``.yaml``/``.yml``) and JSON (``.json``) files.
@@ -199,7 +199,7 @@ def load_connection(path: Union[str, Path]) -> ConnectionConfig:
     return _validate(ConnectionConfig, data, p)
 
 
-def load_pipeline(path: Union[str, Path]) -> DQPipelineConfig:
+def load_pipeline(path: str | Path) -> DQPipelineConfig:
     """Load and validate a :class:`~dqt.common.models.DQPipelineConfig` from file.
 
     Supports YAML and JSON.  ``${ENV_VAR}`` placeholders are expanded.
@@ -224,7 +224,7 @@ def load_pipeline(path: Union[str, Path]) -> DQPipelineConfig:
     return _validate(DQPipelineConfig, data, p)
 
 
-def load_rules(path: Union[str, Path]) -> list[RuleConfig]:
+def load_rules(path: str | Path) -> list[RuleConfig]:
     """Load a list of :class:`~dqt.common.models.RuleConfig` objects from file.
 
     The file must contain a top-level ``rules`` key whose value is a list of
@@ -257,14 +257,12 @@ def load_rules(path: Union[str, Path]) -> list[RuleConfig]:
     results: list[RuleConfig] = []
     for i, raw in enumerate(raw_rules):
         if not isinstance(raw, dict):
-            raise ValueError(
-                f"Rule #{i} in {p} must be a mapping, got {type(raw).__name__}."
-            )
+            raise ValueError(f"Rule #{i} in {p} must be a mapping, got {type(raw).__name__}.")
         results.append(_validate(RuleConfig, raw, p))
     return results
 
 
-def load_rules_from_files(paths: list[Union[str, Path]]) -> list[RuleConfig]:
+def load_rules_from_files(paths: list[str | Path]) -> list[RuleConfig]:
     """Load and merge rules from multiple files, later files overriding earlier ones.
 
     Rules with the same ``name`` in later files replace those from earlier files.

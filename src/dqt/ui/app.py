@@ -34,11 +34,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 try:
     from fastapi import FastAPI, HTTPException, Query
-    from fastapi.responses import JSONResponse
+
     _FASTAPI_AVAILABLE = True
 except ImportError:
     _FASTAPI_AVAILABLE = False
@@ -55,8 +55,7 @@ _DEFAULT_STORE = Path(os.environ.get("DQT_STORE_PATH", "dqt_runs.db"))
 
 if not _FASTAPI_AVAILABLE:
     raise ImportError(
-        "FastAPI is required to run the DQT web UI. "
-        "Install it with: pip install fastapi uvicorn"
+        "FastAPI is required to run the DQT web UI. Install it with: pip install fastapi uvicorn"
     )
 
 app = FastAPI(
@@ -78,8 +77,9 @@ def _store_path() -> Path:
 # Health
 # ---------------------------------------------------------------------------
 
+
 @app.get("/health", tags=["infra"])
-def health() -> dict:
+def health() -> dict[str, Any]:
     """Liveness probe. Returns ``{\"status\": \"ok\"}``.
 
     Example::
@@ -94,12 +94,13 @@ def health() -> dict:
 # Runs
 # ---------------------------------------------------------------------------
 
+
 @app.get("/runs", tags=["runs"])
 def get_runs(
-    connection_id: Optional[str] = Query(None, description="Filter by connection ID"),
-    status: Optional[str] = Query(None, description="Filter by status: success|failed|partial"),
+    connection_id: str | None = Query(None, description="Filter by connection ID"),
+    status: str | None = Query(None, description="Filter by status: success|failed|partial"),
     limit: int = Query(50, ge=1, le=500, description="Max rows returned"),
-) -> list:
+) -> list[dict[str, Any]]:
     """List recent pipeline runs, newest first.
 
     Example::
@@ -117,7 +118,7 @@ def get_runs(
 @app.get("/runs/{run_id}", tags=["runs"])
 def get_run(
     run_id: str,
-) -> dict:
+) -> dict[str, Any]:
     """Get summary for a single run.
 
     Returns run metadata plus aggregated ``metric_count``, ``issue_count``,
@@ -137,10 +138,11 @@ def get_run(
 # Tables
 # ---------------------------------------------------------------------------
 
+
 @app.get("/runs/{run_id}/tables", tags=["schema"])
 def get_tables(
     run_id: str,
-) -> list:
+) -> list[str]:
     """List tables that were profiled in a run.
 
     Example::
@@ -155,12 +157,13 @@ def get_tables(
 # Metrics
 # ---------------------------------------------------------------------------
 
+
 @app.get("/runs/{run_id}/metrics", tags=["metrics"])
 def get_metrics(
     run_id: str,
-    table_name: Optional[str] = Query(None, description="Filter by table name"),
-    dimension: Optional[str] = Query(None, description="Filter by DQ dimension, e.g. completeness"),
-) -> list:
+    table_name: str | None = Query(None, description="Filter by table name"),
+    dimension: str | None = Query(None, description="Filter by DQ dimension, e.g. completeness"),
+) -> list[dict[str, Any]]:
     """Get data-quality metrics for a run.
 
     Example::
@@ -179,12 +182,15 @@ def get_metrics(
 # Issues
 # ---------------------------------------------------------------------------
 
+
 @app.get("/runs/{run_id}/issues", tags=["issues"])
 def get_issues(
     run_id: str,
-    severity: Optional[str] = Query(None, description="Filter by severity: info|warning|error|critical"),
-    table_name: Optional[str] = Query(None, description="Filter by table name"),
-) -> list:
+    severity: str | None = Query(
+        None, description="Filter by severity: info|warning|error|critical"
+    ),
+    table_name: str | None = Query(None, description="Filter by table name"),
+) -> list[dict[str, Any]]:
     """Get data-quality issues detected in a run.
 
     Example::

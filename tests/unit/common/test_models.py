@@ -4,8 +4,9 @@ Covers all domain objects (dataclasses) and config models (Pydantic).
 No DB connections or I/O; pure in-memory construction and validation.
 """
 
-import pytest
 from datetime import datetime
+
+import pytest
 from pydantic import ValidationError
 
 from dqt.common.models import (
@@ -24,7 +25,6 @@ from dqt.common.models import (
     SchemaResult,
     TableResult,
 )
-
 
 # ===========================================================================
 # Helpers

@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from dqt.common.models import DQIssue, DQMetric, PipelineResult
 
@@ -144,6 +144,16 @@ class RunStore:
                 ON run_metrics(run_id);
             """,
             """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_run_metrics_natural_key
+                ON run_metrics(
+                    run_id,
+                    COALESCE(schema_name, ''),
+                    COALESCE(table_name, ''),
+                    COALESCE(column_name, ''),
+                    dimension
+                );
+            """,
+            """
             CREATE TABLE IF NOT EXISTS run_issues (
                 issue_id    TEXT PRIMARY KEY,
                 run_id      TEXT NOT NULL REFERENCES runs(run_id),
@@ -228,8 +238,8 @@ class RunStore:
 
     def load_runs(
         self,
-        connection_id: Optional[str] = None,
-        status: Optional[str] = None,
+        connection_id: str | None = None,
+        status: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         """Load run metadata rows, optionally filtered.
@@ -273,8 +283,8 @@ class RunStore:
     def load_metrics(
         self,
         run_id: str,
-        table_name: Optional[str] = None,
-        dimension: Optional[str] = None,
+        table_name: str | None = None,
+        dimension: str | None = None,
     ) -> list[dict[str, Any]]:
         """Load metric rows for a specific run, optionally filtered.
 
@@ -321,8 +331,8 @@ class RunStore:
     def load_issues(
         self,
         run_id: str,
-        severity: Optional[str] = None,
-        table_name: Optional[str] = None,
+        severity: str | None = None,
+        table_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Load issue rows for a specific run, optionally filtered.
 

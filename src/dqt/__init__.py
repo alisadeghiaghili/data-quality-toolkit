@@ -26,26 +26,26 @@ from dqt.common.config_loader import (
     load_rules_from_files,
 )
 from dqt.common.models import (
-    # Literal types
-    IssueSeverity,
-    RuleStatus,
-    RunStatus,
     # Domain objects
     ColumnResult,
-    DQIssue,
-    DQMetric,
-    PipelineResult,
-    Rule,
-    RuleResult,
-    RuleRunResult,
-    SchemaResult,
-    TableResult,
     # Config models
     ConnectionConfig,
+    DQIssue,
+    DQMetric,
     DQPipelineConfig,
+    # Literal types
+    IssueSeverity,
+    PipelineResult,
+    Rule,
     RuleConfig,
+    RuleResult,
+    RuleRunResult,
     RuleScope,
+    RuleStatus,
+    RunStatus,
     SamplingConfig,
+    SchemaResult,
+    TableResult,
 )
 from dqt.sql.pipeline import DQTPipeline
 

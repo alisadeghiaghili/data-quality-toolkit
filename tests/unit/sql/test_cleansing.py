@@ -22,14 +22,13 @@ from dqt.common.models import ConnectionConfig
 from dqt.sql.cleansing import (
     CleansingConfig,
     CleansingLog,
-    CleansingResult,
     apply_cleansing,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _dsn(db_file: Path) -> str:
     return f"sqlite:///{db_file}"
@@ -58,12 +57,13 @@ def _count_rows(db_file: Path, table: str) -> int:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
-def users_db(tmp_path: Path) -> Path:
+def users_db(make_sqlite_db) -> Path:
     """SQLite DB with a 'users' table containing whitespace/case issues."""
-    db_file = tmp_path / "users.db"
-    conn = sqlite3.connect(str(db_file))
-    conn.executescript("""
+    return make_sqlite_db(
+        "users.db",
+        """
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             email TEXT,
@@ -73,18 +73,16 @@ def users_db(tmp_path: Path) -> Path:
         INSERT INTO users VALUES (2, 'BOB@EXAMPLE.COM',       'BOB');
         INSERT INTO users VALUES (3, NULL,                    'carol');
         INSERT INTO users VALUES (4, 'dave@example.com',      'Dave');
-    """)
-    conn.commit()
-    conn.close()
-    return db_file
+        """,
+    )
 
 
 @pytest.fixture
-def dup_db(tmp_path: Path) -> Path:
+def dup_db(make_sqlite_db) -> Path:
     """SQLite DB with duplicate rows on 'email'."""
-    db_file = tmp_path / "dup.db"
-    conn = sqlite3.connect(str(db_file))
-    conn.executescript("""
+    return make_sqlite_db(
+        "dup.db",
+        """
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             email TEXT,
@@ -95,18 +93,41 @@ def dup_db(tmp_path: Path) -> Path:
         INSERT INTO users VALUES (3, 'alice@example.com', 'Alice 2'); -- duplicate
         INSERT INTO users VALUES (4, 'carol@example.com', 'Carol');
         INSERT INTO users VALUES (5, 'alice@example.com', 'Alice 3'); -- duplicate
-    """)
-    conn.commit()
-    conn.close()
-    return db_file
+        """,
+    )
 
 
 @pytest.fixture
-def lookup_db(tmp_path: Path) -> Path:
+def dup_db_with_nulls(make_sqlite_db) -> Path:
+    """SQLite DB with one real duplicate pair plus several distinct NULL-email rows.
+
+    Regression fixture for the confirmed data-loss bug: GROUP BY collapses all
+    NULL-keyed rows into a single group, so a naive dedup would delete every
+    NULL-email customer except one, even though they are genuinely distinct.
+    """
+    return make_sqlite_db(
+        "dup_nulls.db",
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            email TEXT,
+            name  TEXT
+        );
+        INSERT INTO users VALUES (1, 'alice@example.com', 'Alice 1');
+        INSERT INTO users VALUES (2, 'alice@example.com', 'Alice 2'); -- real duplicate
+        INSERT INTO users VALUES (3, NULL, 'NoEmail 1');
+        INSERT INTO users VALUES (4, NULL, 'NoEmail 2');
+        INSERT INTO users VALUES (5, NULL, 'NoEmail 3');
+        """,
+    )
+
+
+@pytest.fixture
+def lookup_db(make_sqlite_db) -> Path:
     """SQLite DB with a 'orders' table and a 'status_map' lookup table."""
-    db_file = tmp_path / "lookup.db"
-    conn = sqlite3.connect(str(db_file))
-    conn.executescript("""
+    return make_sqlite_db(
+        "lookup.db",
+        """
         CREATE TABLE orders (
             id     INTEGER PRIMARY KEY,
             status TEXT
@@ -123,20 +144,20 @@ def lookup_db(tmp_path: Path) -> Path:
         INSERT INTO status_map VALUES ('pend',    'pending');
         INSERT INTO status_map VALUES ('cncl',    'cancelled');
         INSERT INTO status_map VALUES ('SHIPPED', 'shipped');
-    """)
-    conn.commit()
-    conn.close()
-    return db_file
+        """,
+    )
 
 
 # ---------------------------------------------------------------------------
 # standardize
 # ---------------------------------------------------------------------------
 
+
 class TestStandardize:
     def test_trim_and_lower(self, users_db):
         cfg = CleansingConfig(
-            table_name="users", column_name="email",
+            table_name="users",
+            column_name="email",
             operation="standardize",
             params={"trim": True, "case": "lower"},
         )
@@ -152,30 +173,31 @@ class TestStandardize:
 
     def test_upper_case(self, users_db):
         cfg = CleansingConfig(
-            table_name="users", column_name="name",
+            table_name="users",
+            column_name="name",
             operation="standardize",
             params={"trim": True, "case": "upper"},
         )
-        result = apply_cleansing("run-2", _conn_cfg(users_db), [cfg])
+        apply_cleansing("run-2", _conn_cfg(users_db), [cfg])
         names = _read_col(users_db, "users", "name")
         assert "ALICE" in names
         assert "BOB" in names
         assert "CAROL" in names
         assert "DAVE" in names
 
-    def test_normalize_spaces(self, tmp_path):
-        db_file = tmp_path / "spaces.db"
-        conn = sqlite3.connect(str(db_file))
-        conn.executescript("""
+    def test_normalize_spaces(self, make_sqlite_db):
+        db_file = make_sqlite_db(
+            "spaces.db",
+            """
             CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);
             INSERT INTO t VALUES (1, 'hello   world');
             INSERT INTO t VALUES (2, 'no  extra');
             INSERT INTO t VALUES (3, 'clean');
-        """)
-        conn.commit()
-        conn.close()
+            """,
+        )
         cfg = CleansingConfig(
-            table_name="t", column_name="v",
+            table_name="t",
+            column_name="v",
             operation="standardize",
             params={"normalize_spaces": True, "trim": False},
         )
@@ -188,7 +210,8 @@ class TestStandardize:
 
     def test_no_change_when_already_clean(self, users_db):
         cfg = CleansingConfig(
-            table_name="users", column_name="email",
+            table_name="users",
+            column_name="email",
             operation="standardize",
             params={"trim": False},  # no-op
         )
@@ -197,7 +220,8 @@ class TestStandardize:
 
     def test_log_records_before_after(self, users_db):
         cfg = CleansingConfig(
-            table_name="users", column_name="email",
+            table_name="users",
+            column_name="email",
             operation="standardize",
             params={"trim": True, "case": "lower"},
         )
@@ -214,10 +238,12 @@ class TestStandardize:
 # deduplicate
 # ---------------------------------------------------------------------------
 
+
 class TestDeduplicate:
     def test_keep_first_removes_duplicates(self, dup_db):
         cfg = CleansingConfig(
-            table_name="users", column_name=None,
+            table_name="users",
+            column_name=None,
             operation="deduplicate",
             params={"key_columns": ["email"], "keep": "first"},
         )
@@ -227,7 +253,8 @@ class TestDeduplicate:
 
     def test_keep_last(self, dup_db):
         cfg = CleansingConfig(
-            table_name="users", column_name=None,
+            table_name="users",
+            column_name=None,
             operation="deduplicate",
             params={"key_columns": ["email"], "keep": "last"},
         )
@@ -238,9 +265,25 @@ class TestDeduplicate:
         assert "Alice 3" in names
         assert result.total_changes == 2
 
+    def test_null_key_rows_not_treated_as_duplicates(self, dup_db_with_nulls):
+        cfg = CleansingConfig(
+            table_name="users",
+            column_name=None,
+            operation="deduplicate",
+            params={"key_columns": ["email"], "keep": "first"},
+        )
+        result = apply_cleansing("run-null-key", _conn_cfg(dup_db_with_nulls), [cfg])
+        # Only the one real 'alice@example.com' duplicate should be removed;
+        # all three distinct NULL-email rows must survive.
+        assert result.total_changes == 1
+        assert _count_rows(dup_db_with_nulls, "users") == 4
+        names = _read_col(dup_db_with_nulls, "users", "name")
+        assert {"NoEmail 1", "NoEmail 2", "NoEmail 3"} <= set(names)
+
     def test_no_duplicates_no_change(self, users_db):
         cfg = CleansingConfig(
-            table_name="users", column_name=None,
+            table_name="users",
+            column_name=None,
             operation="deduplicate",
             params={"key_columns": ["id"]},
         )
@@ -249,7 +292,8 @@ class TestDeduplicate:
 
     def test_missing_key_columns_raises(self, users_db):
         cfg = CleansingConfig(
-            table_name="users", column_name=None,
+            table_name="users",
+            column_name=None,
             operation="deduplicate",
             params={},  # no key_columns
         )
@@ -259,7 +303,8 @@ class TestDeduplicate:
 
     def test_log_contains_deleted_row_data(self, dup_db):
         cfg = CleansingConfig(
-            table_name="users", column_name=None,
+            table_name="users",
+            column_name=None,
             operation="deduplicate",
             params={"key_columns": ["email"], "keep": "first"},
         )
@@ -275,10 +320,12 @@ class TestDeduplicate:
 # lookup_correct
 # ---------------------------------------------------------------------------
 
+
 class TestLookupCorrect:
     def test_applies_mapping(self, lookup_db):
         cfg = CleansingConfig(
-            table_name="orders", column_name="status",
+            table_name="orders",
+            column_name="status",
             operation="lookup_correct",
             params={
                 "lookup_table": "status_map",
@@ -291,12 +338,13 @@ class TestLookupCorrect:
         assert "pending" in statuses
         assert "cancelled" in statuses
         assert "shipped" in statuses
-        assert "delivered" in statuses   # unchanged
+        assert "delivered" in statuses  # unchanged
         assert result.total_changes == 3
 
     def test_unknown_values_unchanged(self, lookup_db):
         cfg = CleansingConfig(
-            table_name="orders", column_name="status",
+            table_name="orders",
+            column_name="status",
             operation="lookup_correct",
             params={
                 "lookup_table": "status_map",
@@ -310,7 +358,8 @@ class TestLookupCorrect:
 
     def test_missing_lookup_table_param_raises(self, lookup_db):
         cfg = CleansingConfig(
-            table_name="orders", column_name="status",
+            table_name="orders",
+            column_name="status",
             operation="lookup_correct",
             params={},
         )
@@ -323,10 +372,12 @@ class TestLookupCorrect:
 # apply_cleansing: meta-behaviour
 # ---------------------------------------------------------------------------
 
+
 class TestApplyCleansing:
     def test_disabled_config_skipped(self, users_db):
         cfg = CleansingConfig(
-            table_name="users", column_name="email",
+            table_name="users",
+            column_name="email",
             operation="standardize",
             params={"case": "lower", "trim": True},
             enabled=False,
@@ -336,7 +387,8 @@ class TestApplyCleansing:
 
     def test_unknown_operation_recorded_as_error(self, users_db):
         cfg = CleansingConfig(
-            table_name="users", column_name="email",
+            table_name="users",
+            column_name="email",
             operation="standardize",  # valid type; we'll monkeypatch below
             params={},
         )
@@ -349,12 +401,14 @@ class TestApplyCleansing:
     def test_multiple_operations_applied_in_order(self, users_db):
         cfgs = [
             CleansingConfig(
-                table_name="users", column_name="email",
+                table_name="users",
+                column_name="email",
                 operation="standardize",
                 params={"trim": True, "case": "lower"},
             ),
             CleansingConfig(
-                table_name="users", column_name="name",
+                table_name="users",
+                column_name="name",
                 operation="standardize",
                 params={"trim": True, "case": "title"},
             ),
@@ -363,22 +417,23 @@ class TestApplyCleansing:
         assert result.total_changes >= 2
         assert result.tables_affected == 1  # both ops on same table
 
-    def test_tables_affected_counts_distinct_tables(self, tmp_path):
-        db_file = tmp_path / "multi.db"
-        conn = sqlite3.connect(str(db_file))
-        conn.executescript("""
+    def test_tables_affected_counts_distinct_tables(self, make_sqlite_db):
+        db_file = make_sqlite_db(
+            "multi.db",
+            """
             CREATE TABLE t1 (id INTEGER PRIMARY KEY, v TEXT);
             CREATE TABLE t2 (id INTEGER PRIMARY KEY, v TEXT);
             INSERT INTO t1 VALUES (1, '  hello  ');
             INSERT INTO t2 VALUES (1, '  world  ');
-        """)
-        conn.commit()
-        conn.close()
+            """,
+        )
         cfgs = [
-            CleansingConfig(table_name="t1", column_name="v",
-                            operation="standardize", params={"trim": True}),
-            CleansingConfig(table_name="t2", column_name="v",
-                            operation="standardize", params={"trim": True}),
+            CleansingConfig(
+                table_name="t1", column_name="v", operation="standardize", params={"trim": True}
+            ),
+            CleansingConfig(
+                table_name="t2", column_name="v", operation="standardize", params={"trim": True}
+            ),
         ]
         result = apply_cleansing("run-17", _conn_cfg(db_file), cfgs)
         assert result.tables_affected == 2
@@ -386,8 +441,10 @@ class TestApplyCleansing:
 
     def test_result_has_correct_run_id(self, users_db):
         cfg = CleansingConfig(
-            table_name="users", column_name="email",
-            operation="standardize", params={"trim": True},
+            table_name="users",
+            column_name="email",
+            operation="standardize",
+            params={"trim": True},
         )
         result = apply_cleansing("my-run-id", _conn_cfg(users_db), [cfg])
         assert result.run_id == "my-run-id"
