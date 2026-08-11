@@ -27,19 +27,19 @@ from pathlib import Path
 from typing import Any
 
 try:
-    import yaml  # type: ignore
+    import yaml
+
     _YAML_AVAILABLE = True
 except ImportError:
     _YAML_AVAILABLE = False
 
+from rich import box
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
-from rich import box
 
-from dqt.common.models import ConnectionConfig, DQPipelineConfig
+from dqt.common.models import ConnectionConfig, DQPipelineConfig, PipelineResult
 from dqt.sql.pipeline import DQTPipeline
-from dqt.common.models import PipelineResult
 
 _err = Console(stderr=True)
 _out = Console()
@@ -48,6 +48,7 @@ _out = Console()
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
+
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the CLI argument parser."""
@@ -66,8 +67,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dsn",
         required=True,
         metavar="DSN",
-        help="SQLAlchemy-style DSN, e.g. sqlite:///mydb.db or "
-             "postgresql://user:pass@host/db",
+        help="SQLAlchemy-style DSN, e.g. sqlite:///mydb.db or postgresql://user:pass@host/db",
     )
     profile.add_argument(
         "--schema",
@@ -111,6 +111,7 @@ def _build_parser() -> argparse.ArgumentParser:
 # Config loading
 # ---------------------------------------------------------------------------
 
+
 def _load_config_file(path: str) -> dict[str, Any]:
     """Load a YAML or JSON config file and return it as a dict.
 
@@ -134,14 +135,13 @@ def _load_config_file(path: str) -> dict[str, Any]:
     raw = p.read_text(encoding="utf-8")
     if p.suffix in (".yaml", ".yml"):
         if not _YAML_AVAILABLE:
-            _err.print(
-                "[red]PyYAML is not installed.[/red] "
-                "Run: pip install pyyaml"
-            )
+            _err.print("[red]PyYAML is not installed.[/red] Run: pip install pyyaml")
             sys.exit(1)
-        return yaml.safe_load(raw) or {}
+        yaml_cfg: dict[str, Any] = yaml.safe_load(raw) or {}
+        return yaml_cfg
     try:
-        return json.loads(raw)
+        json_cfg: dict[str, Any] = json.loads(raw)
+        return json_cfg
     except json.JSONDecodeError as exc:
         _err.print(f"[red]Failed to parse config JSON:[/red] {exc}")
         sys.exit(1)
@@ -173,6 +173,7 @@ def _build_pipeline_config(
         include_schemas = file_cfg["include_schemas"]
 
     return DQPipelineConfig(
+        connection_id=args.connection_id,
         include_schemas=include_schemas,
         exclude_schemas=file_cfg.get("exclude_schemas"),
         include_tables=file_cfg.get("include_tables"),
@@ -284,6 +285,7 @@ def _print_issues_table(result: PipelineResult) -> None:
 # Command handlers
 # ---------------------------------------------------------------------------
 
+
 def _cmd_profile(args: argparse.Namespace) -> int:
     """Execute the profile command.
 
@@ -359,10 +361,12 @@ def _cmd_profile(args: argparse.Namespace) -> int:
         _err.print("[red]Pipeline did not complete.[/red]")
         return 1
 
+    status_style = "green" if result.status == "success" else "red"
+    status_text = f"[{status_style}]{result.status}[/{status_style}]"
     _err.rule("[bold]Results[/bold]")
     _err.print(
         f"[bold]Run ID:[/bold] {result.run_id}  "
-        f"[bold]Status:[/bold] {'[green]' + result.status + '[/green]' if result.status == 'success' else '[red]' + result.status + '[/red]'}  "
+        f"[bold]Status:[/bold] {status_text}  "
         f"[bold]Tables:[/bold] {len(result.tables)}  "
         f"[bold]Metrics:[/bold] {len(result.metrics)}  "
         f"[bold]Issues:[/bold] {len(result.issues)}"
@@ -382,6 +386,7 @@ def _cmd_profile(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     """CLI entry point — parse args and dispatch to the appropriate command.

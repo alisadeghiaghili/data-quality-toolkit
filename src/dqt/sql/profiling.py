@@ -14,6 +14,7 @@ Current implementation:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from dqt.common.models import ConnectionConfig, DQMetric
 from dqt.sql.schema_discovery import DiscoveredColumn, DiscoveredTable, connect_sql
@@ -156,7 +157,7 @@ class SqlProfiler:
                 )
         return metrics
 
-    def _profile_table(self, conn: object, table: DiscoveredTable) -> TableProfile:
+    def _profile_table(self, conn: Any, table: DiscoveredTable) -> TableProfile:
         row_count = self._fetch_row_count(conn, table)
         column_profiles = [
             self._profile_column(conn, table, column, row_count) for column in table.columns
@@ -168,23 +169,21 @@ class SqlProfiler:
             columns=column_profiles,
         )
 
-    def _fetch_row_count(self, conn: object, table: DiscoveredTable) -> int:
+    def _fetch_row_count(self, conn: Any, table: DiscoveredTable) -> int:
         table_ref = _table_ref(table.schema_name, table.table_name)
         cursor = conn.execute(f"SELECT COUNT(*) FROM {table_ref}")
         return int(cursor.fetchone()[0])
 
     def _profile_column(
         self,
-        conn: object,
+        conn: Any,
         table: DiscoveredTable,
         column: DiscoveredColumn,
         row_count: int,
     ) -> ColumnProfile:
         table_ref = _table_ref(table.schema_name, table.table_name)
         col_ref = _ident(column.column_name)
-        cursor = conn.execute(
-            f"SELECT COUNT(*) FROM {table_ref} WHERE {col_ref} IS NULL"
-        )
+        cursor = conn.execute(f"SELECT COUNT(*) FROM {table_ref} WHERE {col_ref} IS NULL")
         null_count = int(cursor.fetchone()[0])
         return ColumnProfile(
             schema_name=column.schema_name,
@@ -202,4 +201,4 @@ def _ident(name: str) -> str:
 def _table_ref(schema_name: str, table_name: str) -> str:
     if schema_name in {"main", ""}:
         return _ident(table_name)
-    return f'{_ident(schema_name)}.{_ident(table_name)}'
+    return f"{_ident(schema_name)}.{_ident(table_name)}"

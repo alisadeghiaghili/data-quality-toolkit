@@ -49,6 +49,53 @@ Scope: **Data Quality Only** — no service/performance monitoring, no masking/c
   performance benchmarks, CLI, Rich CLI, and UI.
 - Draft minimal CLI + report templates (EN/FA) for v0.1.0.
 
+### [2026-08-11] Phase 0 Remediation — repository honesty pass
+
+A full code-reading review (`DQT-critical-review.md`) found that the
+[2026-07-04] sprint below marked 11 items `[x] DONE` that were not true as
+written: the CLI crashed on every invocation, every CI gate (lint, format,
+mypy, tests, coverage) was red, and several modules (rules regex, cleansing
+row identity, storage idempotency) had confirmed correctness bugs. This entry
+records what was actually fixed and verified, and the status table below was
+rewritten to match.
+
+**Fixed and verified (all gates green locally: `ruff check`, `ruff format
+--check`, `mypy src/dqt/ --strict`, `pytest --cov` ≥ 80%):**
+- Packaging: entry point pointed at a non-existent module (`dqt.cli.plain:main`);
+  fixed to `dqt.cli:main`. Runtime dependencies (`rich`, `pyyaml`) were
+  undeclared; added, plus `postgres`/`ui` extras and a `py.typed` marker.
+- CLI: `_build_pipeline_config()` never set the required `connection_id` field,
+  so every `dqt profile` invocation crashed with a `pydantic` validation error.
+  Fixed; `dqt profile --dsn ...` now runs end-to-end and is covered by
+  `tests/unit/test_cli.py`. Report directory is now created if missing.
+- Cleansing (`sql/cleansing.py`): on tables with `INTEGER PRIMARY KEY`, SQLite
+  aliases `rowid` to the PK column name in `cursor.description`, so
+  `row["rowid"]` raised `KeyError` — swallowed by a broad `except Exception`,
+  producing a silent `total_changes=0` false-clean result on the most common
+  table shape. Fixed by explicitly aliasing (`SELECT rowid AS dqt_row_id`).
+  Fixing that bug alone would have exposed a second, more serious one:
+  `deduplicate`'s `GROUP BY` collapsed all NULL-keyed rows into one group and
+  deleted all but one, even though they are genuinely distinct records. Both
+  are fixed together and covered by a regression test.
+- Storage (`common/storage.py`): `run_metrics` had no unique constraint on its
+  natural key, so `INSERT OR IGNORE` never had a conflict target and re-saving
+  a run duplicated every metric row, contradicting the method's own
+  idempotency docstring. Fixed with a `UNIQUE` index.
+- Test suite: 9 of ~20 test modules failed to collect (`DiscoveredColumn`
+  constructed with kwargs — `is_nullable`, `ordinal_position` — that don't
+  exist on the dataclass). Fixed to match the real model.
+- Deleted the orphaned pandas-based `data_quality_toolkit` legacy package
+  (never imported by `dqt`, buggy, dragged in undeclared dependencies) and the
+  duplicate/broken `.github/workflows/ci.yml`.
+- Added `.gitignore`, `LICENSE`, `.pre-commit-config.yaml`, `tests/conftest.py`,
+  `AGENTS.md`.
+
+**Explicitly not fixed in this pass (tracked as open gaps below, Phase 1):**
+SQL injection in rule parameter interpolation, missing SQLite `REGEXP`
+registration, `read_only` not enforced on any connection, cleansing still not
+reversible/persistently logged, rules unreachable from the CLI, no exit-code
+semantics or `dqt check`, missing-rule-file silently swallowed as success.
+
 ### [2026-07-04] Implementation Sprint — v0.1.0 core complete
 
 **What was implemented:**
@@ -87,30 +134,50 @@ Scope: **Data Quality Only** — no service/performance monitoring, no masking/c
 
 ## P0 — Critical (core data-quality semantics)
 
-### [x] C1. SQL profiling & DQ diagnostics
+### [~] C1. SQL profiling & DQ diagnostics
 
-- `SqlProfiler` implemented in `sql/profiling.py`:
-  - column stats: min/max, mean, distinct counts, null counts/ratios, pattern/length profiles.
-  - table stats: row counts, orphan FK rows, referential integrity checks.
-- `DQDiagnostics` implemented in `sql/diagnostics.py`:
-  - `DQIssue`, dimensions (completeness, consistency, validity, uniqueness, timeliness),
-  - severity + evidence, aggregated per table/column.
+- `SqlProfiler` implemented in `sql/profiling.py`, but only **null counts and
+  row counts** — min/max, mean, distinct counts, pattern/length profiles are
+  not implemented despite being claimed below in prior revisions of this doc.
+- `DQDiagnostics` implemented in `sql/diagnostics.py`, but only **one check**:
+  `null_count > 0` with a hardcoded `ratio >= 0.5` severity threshold
+  (`DQPipelineConfig.metric_thresholds` is validated but never consulted).
+  Consistency, validity, uniqueness, timeliness, and referential-integrity
+  diagnostics are not implemented; no FK/orphan-row discovery exists.
 
-### [x] C2. Rules engine (DB-level data quality)
+### [~] C2. Rules engine (DB-level data quality)
 
-- Rule engine implemented in `sql/rules.py`:
-  - column rules: NOT NULL, uniqueness, range, regex — all evaluated via SQL.
-  - YAML/JSON + Python API (`examples/rules/base_rules.yaml`, `advanced_rules.yaml`).
-- **Gap remaining:** table-level rules (FK integrity, conditional constraints) — column-level only so far.
+- Rule engine implemented in `sql/rules.py`; NOT NULL, UNIQUE, and range
+  column rules are evaluated via SQL and unit-tested.
+- **regex rules are non-functional**: SQLite has no built-in `REGEXP`, and
+  DQT never registers one via `conn.create_function`, so every regex rule
+  either errors or silently never matches. Not fixed in this pass.
+- **No table-level rules** (FK integrity, conditional constraints) —
+  column-level only.
+- **Rules cannot be invoked from the CLI**: `dqt profile` has no `--rules`
+  flag and never sets `DQPipelineConfig.rule_files`. Not fixed in this pass.
+- Range/regex rule parameter values are string-interpolated into SQL rather
+  than bound; this is a known injection risk against untrusted rule files,
+  tracked for the Phase 1 dialect-layer work. Not fixed in this pass.
 
-### [x] C3. Cleansing & repair primitives
+### [~] C3. Cleansing & repair primitives
 
-- Implemented in `sql/cleansing.py`:
-  - `standardize`: trim, normalize_spaces, case (upper/lower/title).
-  - `deduplicate`: key-based, keep first/last.
-  - `lookup_correct`: domain-table-based value replacement.
-- All operations produce `CleansingLog` (before/after per row) and `CleansingResult`.
-- Reversible, auditable, no silent changes.
+- Implemented in `sql/cleansing.py`: `standardize`, `deduplicate`,
+  `lookup_correct`, all unit-tested including a NULL-key regression test.
+- Row identity is resolved via an explicit `rowid AS dqt_row_id` alias, so
+  cleansing now works correctly on tables with `INTEGER PRIMARY KEY` (SQLite's
+  most common table shape) — previously this silently no-opped on such tables.
+  `deduplicate` excludes rows with a NULL key column from duplicate detection,
+  preventing the data-loss failure mode where `GROUP BY` would otherwise treat
+  all NULL-keyed rows as one group.
+- **Not reversible or persistently audited**: `CleansingLog` entries are
+  returned in memory only — `RunStore` has no `cleansing_log` table and there
+  is no `revert()`/`undo()`. The module docstring's claim of "reversible" is
+  aspirational, not yet true. `read_only` on `ConnectionConfig` is not
+  enforced anywhere. The `cleanse` pipeline stage is still a pass-through
+  stub (see A1) — cleansing only runs via a direct `apply_cleansing()` call.
+  None of this was in scope for this pass; tracked as Phase 1 (plan/apply/
+  revert restructure).
 
 ### [~] C4. Basic missingness stats (DQT internal)
 
@@ -127,7 +194,10 @@ Scope: **Data Quality Only** — no service/performance monitoring, no masking/c
   `discover_schema → profile_data → run_diagnostics → apply_rules →
   compute_metrics → monitor → generate_report`.
 - `apply_rules()` correctly wired: loads `rule_files` from `DQPipelineConfig`,
-  merges rule issues with diagnostic issues.
+  merges rule issues with diagnostic issues. **Caveat:** a missing rule file
+  is silently swallowed (`except FileNotFoundError: pass`) rather than failing
+  the run — a path typo currently reads as "all checks passed." Not fixed in
+  this pass.
 - Pure per-run behavior; no global mutable state.
 - `cleanse` stage not yet wired into the pipeline (exists as standalone module).
 
@@ -182,10 +252,14 @@ Scope: **Data Quality Only** — no service/performance monitoring, no masking/c
 
 ### [x] T1. Test layout and coverage
 
-- `tests/unit/` covers: models, config_loader, rules, pipeline, public API.
-- `tests/integration/` covers: end-to-end `DQTPipeline.run()` on SQLite with
-  known DQ issues (employees + departments schema).
-- CI enforces coverage ≥ 80%.
+- `tests/unit/` covers: models, config_loader, rules, pipeline, cleansing,
+  storage, CLI, public API. `tests/integration/` covers end-to-end
+  `DQTPipeline.run()` on SQLite with known DQ issues (employees + departments
+  schema).
+- Verified as of 2026-08-11: full suite passes (0 failures, 0 collection
+  errors) with 83%+ coverage, `--cov-fail-under=80` passes. Previously this
+  status was marked `[x]` while the suite had 9 collection errors and 17
+  failures — see the Phase 0 Remediation log entry above.
 
 ### [x] T2. Docstring and examples policy
 
@@ -201,6 +275,12 @@ Scope: **Data Quality Only** — no service/performance monitoring, no masking/c
   - `pytest tests/unit/` + coverage ≥ 80%
   - `pytest tests/integration/` (needs test-unit)
   - Python 3.11 and 3.12 matrix.
+- Verified as of 2026-08-11: every command above passes locally against a
+  clean editable install. Previously this status was marked `[x]` while every
+  one of these gates was red (146 lint errors, 21 unformatted files, 37 mypy
+  errors, 73% coverage) — see the Phase 0 Remediation log entry above. The
+  duplicate, broken `.github/workflows/ci.yml` (installed a nonexistent
+  `test` extra) has been removed.
 
 ---
 
@@ -224,20 +304,24 @@ Scope: **Data Quality Only** — no service/performance monitoring, no masking/c
 - **Gap:** no frontend (HTML/JS) served; no connection selector; no charts;
   no report export via UI. Skeleton only.
 
-### [x] Q1. Minimal CLI surface
+### [~] Q1. Minimal CLI surface
 
-- `cli.py` implements:
-  - `dqt profile --dsn ... --schema ...`
-  - `dqt check --rules rules.yaml`
-  - exit codes and clear error messages.
-- `dqt missing` (bridge call) not yet implemented.
+- `cli.py` implements `dqt profile --dsn ... --schema ...`, and it now
+  actually runs end-to-end (fixed 2026-08-11; previously crashed on every
+  invocation with a missing-`connection_id` validation error — see the Phase
+  0 Remediation log entry above).
+- **Not implemented:** `dqt check` subcommand does not exist; `profile` has
+  no `--rules` flag, so the rule engine is unreachable from the CLI (see C2).
+  No exit-code semantics (`--fail-on`), no `--json` output. `dqt missing`
+  (bridge call) not implemented. None of these were in scope for this pass.
 
-### [x] Q2. Rich CLI
+### [~] Q2. Rich CLI
 
-- `cli.py` uses Rich:
-  - progress bars for pipeline stages,
-  - colorized metrics table,
-  - colorized issues table with severity colors.
+- `cli.py` uses Rich for colorized metrics and issues tables.
+- **The progress bar is cosmetic, not accurate**: it iterates through stage
+  labels instantly and runs the entire pipeline inside the last one
+  ("Generating HTML report"), so the displayed per-stage timing does not
+  reflect where time is actually spent. Not fixed in this pass.
 
 ### [~] Q3. HTML report template
 

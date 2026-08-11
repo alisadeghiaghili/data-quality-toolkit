@@ -20,6 +20,8 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.0",
+    "rich>=13.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +32,15 @@ dev = [
     "ruff>=0.4",
     "pydantic>=2.0",
     "pyyaml>=6.0",
+    "types-PyYAML>=6.0",
+]
+postgres = [
+    "psycopg[binary]>=3.1",
+    "psycopg2-binary>=2.9",
+]
+ui = [
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
 ]
 bridges = [
     # optional: pip install dqt[bridges] to enable missingly bridge
@@ -37,10 +48,13 @@ bridges = [
 ]
 
 [project.scripts]
-dqt = "dqt.cli.plain:main"
+dqt = "dqt.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+dqt = ["py.typed"]
 
 # ---------------------------------------------------------------------------
 # Ruff
@@ -69,6 +83,18 @@ no_implicit_reexport = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+# psycopg/psycopg2/fastapi are optional extras (postgres, ui) not installed in
+# the base dev environment — treat them as untyped rather than failing import.
+[[tool.mypy.overrides]]
+module = ["psycopg", "psycopg2", "fastapi"]
+ignore_missing_imports = true
+
+# Route decorators resolve to Any because fastapi itself is untyped here;
+# that's a consequence of the override above, not a real typing gap.
+[[tool.mypy.overrides]]
+module = "dqt.ui.app"
+disallow_untyped_decorators = false
 
 # ---------------------------------------------------------------------------
 # Pytest

@@ -7,8 +7,7 @@ isolated, and leave no files on disk.
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -17,11 +16,8 @@ from dqt.common.models import (
     DQIssue,
     DQMetric,
     PipelineResult,
-    SchemaResult,
-    TableResult,
 )
 from dqt.common.storage import RunStore
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -62,8 +58,8 @@ def simple_result() -> PipelineResult:
     return PipelineResult(
         run_id="run-001",
         connection_id="pg-test",
-        started_at=datetime(2026, 7, 3, 10, 0, 0, tzinfo=timezone.utc),
-        ended_at=datetime(2026, 7, 3, 10, 5, 0, tzinfo=timezone.utc),
+        started_at=datetime(2026, 7, 3, 10, 0, 0, tzinfo=UTC),
+        ended_at=datetime(2026, 7, 3, 10, 5, 0, tzinfo=UTC),
         status="success",
         metrics=[metric],
         issues=[issue],
@@ -157,8 +153,8 @@ class TestLoadRuns:
         return PipelineResult(
             run_id=run_id,
             connection_id=conn_id,
-            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            ended_at=datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc),
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ended_at=datetime(2026, 1, 1, 0, 1, tzinfo=UTC),
             status=status,  # type: ignore[arg-type]
         )
 

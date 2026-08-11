@@ -8,7 +8,7 @@ completeness-related diagnostics only.
 
 from __future__ import annotations
 
-from dqt.common.models import DQIssue
+from dqt.common.models import DQIssue, IssueSeverity
 from dqt.sql.profiling import TableProfile
 
 
@@ -42,7 +42,7 @@ class DQDiagnostics:
         for table_profile in profiles:
             for column_profile in table_profile.columns:
                 if column_profile.null_count > 0:
-                    severity = "warning"
+                    severity: IssueSeverity = "warning"
                     if column_profile.row_count > 0:
                         ratio = column_profile.null_count / column_profile.row_count
                         if ratio >= 0.5:

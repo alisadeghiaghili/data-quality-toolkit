@@ -14,11 +14,10 @@ The output is a single HTML file with inline CSS; no external dependencies.
 from __future__ import annotations
 
 import html
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-from dqt.common.models import DQIssue, DQMetric, PipelineResult
-
+from dqt.common.models import DQMetric, PipelineResult
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -53,7 +52,9 @@ def generate_html_report(result: PipelineResult, output_path: Path | str | None 
     return output_path
 
 
-def generate_report(result: PipelineResult, output_path: Path | str | None = None) -> dict[str, str]:
+def generate_report(
+    result: PipelineResult, output_path: Path | str | None = None
+) -> dict[str, str]:
     """Compatibility wrapper used by the pipeline orchestrator.
 
     Writes the HTML report and returns a small descriptor dictionary so the
@@ -83,19 +84,31 @@ def generate_report(result: PipelineResult, output_path: Path | str | None = Non
 
 _CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6f9; color: #1a1a2e; padding: 24px; }
+body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #f4f6f9; color: #1a1a2e; padding: 24px;
+}
 h1 { font-size: 1.6rem; margin-bottom: 4px; color: #0f3460; }
-h2 { font-size: 1.1rem; margin: 24px 0 8px; color: #16213e; border-bottom: 2px solid #e0e0e0; padding-bottom: 4px; }
+h2 {
+    font-size: 1.1rem; margin: 24px 0 8px; color: #16213e;
+    border-bottom: 2px solid #e0e0e0; padding-bottom: 4px;
+}
 .meta { font-size: 0.85rem; color: #555; margin-bottom: 16px; }
 table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 0.88rem; }
 th { background: #0f3460; color: #fff; padding: 8px 12px; text-align: left; }
 td { padding: 7px 12px; border-bottom: 1px solid #e4e4e4; }
 tr:nth-child(even) td { background: #f9f9f9; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.78rem; font-weight: 600; }
+.badge {
+    display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 0.78rem; font-weight: 600;
+}
 .ok { background: #d4edda; color: #155724; }
 .warn { background: #fff3cd; color: #856404; }
 .err { background: #f8d7da; color: #721c24; }
-.score-bar-wrap { background: #e0e0e0; border-radius: 6px; height: 10px; width: 120px; display: inline-block; vertical-align: middle; }
+.score-bar-wrap {
+    background: #e0e0e0; border-radius: 6px; height: 10px; width: 120px;
+    display: inline-block; vertical-align: middle;
+}
 .score-bar { height: 10px; border-radius: 6px; }
 .score-good { background: #28a745; }
 .score-warn { background: #ffc107; }
@@ -135,9 +148,13 @@ def _duration(started: datetime | None, ended: datetime | None) -> str:
     return f"{int(secs // 60)}m {int(secs % 60)}s"
 
 
-def _metric_lookup(metrics: list[DQMetric], dimension: str,
-                   schema: str | None = None, table: str | None = None,
-                   column: str | None = None) -> DQMetric | None:
+def _metric_lookup(
+    metrics: list[DQMetric],
+    dimension: str,
+    schema: str | None = None,
+    table: str | None = None,
+    column: str | None = None,
+) -> DQMetric | None:
     for m in metrics:
         if m.dimension != dimension:
             continue
@@ -152,10 +169,14 @@ def _metric_lookup(metrics: list[DQMetric], dimension: str,
 
 
 def _render(result: PipelineResult) -> str:
-    started_str = result.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") if result.started_at else "n/a"
+    started_str = (
+        result.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") if result.started_at else "n/a"
+    )
     ended_str = result.ended_at.strftime("%Y-%m-%d %H:%M:%S UTC") if result.ended_at else "n/a"
     duration = _duration(result.started_at, result.ended_at)
-    status_badge = _severity_badge("info") if result.status == "success" else _severity_badge("warning")
+    status_badge = (
+        _severity_badge("info") if result.status == "success" else _severity_badge("warning")
+    )
 
     # ---- run summary -------------------------------------------------------
     summary_rows = [
@@ -168,17 +189,21 @@ def _render(result: PipelineResult) -> str:
         ("Total issues", str(len(result.issues))),
         ("Total metrics", str(len(result.metrics))),
     ]
-    summary_html = "<table><tr><th>Field</th><th>Value</th></tr>" + "".join(
-        f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in summary_rows
-    ) + "</table>"
+    summary_html = (
+        "<table><tr><th>Field</th><th>Value</th></tr>"
+        + "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in summary_rows)
+        + "</table>"
+    )
 
     # ---- table-level metrics -----------------------------------------------
     table_rows_html = ""
-    for key, table_result in sorted(result.tables.items()):
+    for _key, table_result in sorted(result.tables.items()):
         schema = table_result.schema_name
         table = table_result.table_name
         row_count_m = _metric_lookup(result.metrics, "row_count", schema=schema, table=table)
-        row_count = int(row_count_m.value) if row_count_m and row_count_m.value is not None else "n/a"
+        row_count = (
+            int(row_count_m.value) if row_count_m and row_count_m.value is not None else "n/a"
+        )
 
         col_completeness_scores = [
             m.score
@@ -191,11 +216,11 @@ def _render(result: PipelineResult) -> str:
         ]
         avg_completeness = (
             sum(col_completeness_scores) / len(col_completeness_scores)
-            if col_completeness_scores else 1.0
+            if col_completeness_scores
+            else 1.0
         )
         issue_count = sum(
-            1 for i in result.issues
-            if i.schema_name == schema and i.table_name == table
+            1 for i in result.issues if i.schema_name == schema and i.table_name == table
         )
         table_rows_html += (
             f"<tr>"
@@ -207,21 +232,22 @@ def _render(result: PipelineResult) -> str:
             f"</tr>"
         )
 
-    table_section = (
-        "<h2>Table Summary</h2>"
-        "<table>"
-        "<tr><th>Schema</th><th>Table</th><th>Rows</th><th>Avg Completeness</th><th>Issues</th></tr>"
-        + table_rows_html
-        + "</table>"
+    table_header = (
+        "<tr><th>Schema</th><th>Table</th><th>Rows</th>"
+        "<th>Avg Completeness</th><th>Issues</th></tr>"
     )
+    table_section = "<h2>Table Summary</h2><table>" + table_header + table_rows_html + "</table>"
 
     # ---- column-level metrics ----------------------------------------------
     col_rows_html = ""
-    for key, table_result in sorted(result.tables.items()):
+    for _key, table_result in sorted(result.tables.items()):
         for col in table_result.columns:
             null_m = _metric_lookup(
-                result.metrics, "completeness",
-                schema=col.schema_name, table=col.table_name, column=col.column_name,
+                result.metrics,
+                "completeness",
+                schema=col.schema_name,
+                table=col.table_name,
+                column=col.column_name,
             )
             null_count = int(null_m.value) if null_m and null_m.value is not None else "n/a"
             score = null_m.score if null_m and null_m.score is not None else 1.0
@@ -235,17 +261,21 @@ def _render(result: PipelineResult) -> str:
                 f"</tr>"
             )
 
+    col_header = (
+        "<tr><th>Schema</th><th>Table</th><th>Column</th>"
+        "<th>Null Count</th><th>Completeness</th></tr>"
+    )
     col_section = (
-        "<h2>Column Completeness</h2>"
-        "<table>"
-        "<tr><th>Schema</th><th>Table</th><th>Column</th><th>Null Count</th><th>Completeness</th></tr>"
-        + col_rows_html
-        + "</table>"
-    ) if col_rows_html else ""
+        ("<h2>Column Completeness</h2><table>" + col_header + col_rows_html + "</table>")
+        if col_rows_html
+        else ""
+    )
 
     # ---- issues ------------------------------------------------------------
     issue_rows_html = ""
-    for issue in sorted(result.issues, key=lambda i: (i.severity, i.table_name or "", i.column_name or "")):
+    for issue in sorted(
+        result.issues, key=lambda i: (i.severity, i.table_name or "", i.column_name or "")
+    ):
         issue_rows_html += (
             f"<tr>"
             f"<td>{_severity_badge(issue.severity)}</td>"
@@ -257,24 +287,31 @@ def _render(result: PipelineResult) -> str:
         )
 
     issue_section = (
-        "<h2>Issues</h2>"
-        "<table>"
-        "<tr><th>Severity</th><th>Schema</th><th>Table</th><th>Column</th><th>Message</th></tr>"
-        + issue_rows_html
-        + "</table>"
-    ) if issue_rows_html else "<h2>Issues</h2><p>No issues detected.</p>"
+        (
+            "<h2>Issues</h2>"
+            "<table>"
+            "<tr><th>Severity</th><th>Schema</th><th>Table</th>"
+            "<th>Column</th><th>Message</th></tr>" + issue_rows_html + "</table>"
+        )
+        if issue_rows_html
+        else "<h2>Issues</h2><p>No issues detected.</p>"
+    )
+
+    generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    run_id_escaped = html.escape(result.run_id)
+    meta_line = f"Generated {generated_at} &nbsp;|&nbsp; Run: {run_id_escaped}"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DQT Report — {html.escape(result.run_id)}</title>
+<title>DQT Report — {run_id_escaped}</title>
 <style>{_CSS}</style>
 </head>
 <body>
 <h1>DQT Data Quality Report</h1>
-<p class="meta">Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')} &nbsp;|&nbsp; Run: {html.escape(result.run_id)}</p>
+<p class="meta">{meta_line}</p>
 <h2>Run Summary</h2>
 {summary_html}
 {table_section}

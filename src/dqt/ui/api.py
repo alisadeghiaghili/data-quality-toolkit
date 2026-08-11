@@ -24,7 +24,7 @@ Example::
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from dqt.common.storage import RunStore
 
@@ -38,10 +38,11 @@ def _store(store_path: str | Path) -> RunStore:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def list_runs(
     store_path: str | Path,
-    connection_id: Optional[str] = None,
-    status: Optional[str] = None,
+    connection_id: str | None = None,
+    status: str | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Return recent pipeline runs from the store.
@@ -102,13 +103,9 @@ def get_run_summary(
     metrics = store.load_metrics(run_id)
     issues = store.load_issues(run_id)
 
-    completeness_scores = [
-        m["score"] for m in metrics if m["dimension"] == "completeness"
-    ]
-    overall_completeness: Optional[float] = (
-        sum(completeness_scores) / len(completeness_scores)
-        if completeness_scores
-        else None
+    completeness_scores = [m["score"] for m in metrics if m["dimension"] == "completeness"]
+    overall_completeness: float | None = (
+        sum(completeness_scores) / len(completeness_scores) if completeness_scores else None
     )
 
     return {
@@ -122,8 +119,8 @@ def get_run_summary(
 def get_run_metrics(
     store_path: str | Path,
     run_id: str,
-    table_name: Optional[str] = None,
-    dimension: Optional[str] = None,
+    table_name: str | None = None,
+    dimension: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return metric rows for a run, optionally filtered.
 
@@ -157,8 +154,8 @@ def get_run_metrics(
 def get_run_issues(
     store_path: str | Path,
     run_id: str,
-    severity: Optional[str] = None,
-    table_name: Optional[str] = None,
+    severity: str | None = None,
+    table_name: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return issue rows for a run, optionally filtered.
 
