@@ -1,53 +1,58 @@
 # DQT UI Ecosystem Matrix (UX & Flows)
 
-This document compares the planned **DQT UI** with selected data-quality tools
-from a **UX / dashboard / flows** perspective:
+Compares the planned **DQT UI** with other data-quality tools from a UX /
+dashboard / flows perspective.
 
-- Talend Data Quality (and Data Preparation)
-- DataLens (ML-oriented data-quality dashboard)
-- OpenRefine
-
-Goal: keep DQT's UI honest and simple, while learning from best patterns in
-existing tools.
+> **Correction notice.** The previous revision compared DQT against a tool called
+> "DataLens" whose description blended two unrelated products: the research
+> prototype in arXiv:2501.17074 (an ML-oriented tabular data-quality dashboard)
+> and **Yandex DataLens**, a commercial cloud BI product. The BI features
+> attributed to it — dashboards composed of widgets, cross-filtering, selectors,
+> dashboard parameters, multi-page dashboards — belong to the BI product, not the
+> research tool.
+>
+> This matters beyond pedantry: "Borrow from DataLens: dashboard organization
+> with widgets" was a design instruction pointing DQT toward being a
+> general-purpose BI tool, which is explicitly out of scope. The two are now
+> separated, and the BI patterns are recorded as **anti-patterns** for this
+> product.
+>
+> Maintenance status has also been added. Talend's open-source edition was
+> retired in January 2024.
 
 ---
 
 ## Legend
 
-Per feature:
-
-- `✓✓` — strong support / core to product
-- `✓`  — partial support / available but not central
-- `~`  — limited / niche
-- `-`  — none / out of scope
+`✓✓` strong / core to product · `✓` partial · `~` limited / niche · `-` none
 
 ---
 
-## Features and Flows
+## Columns
 
-Columns:
-
-- **DQ Dashboard** — overall data-quality overview page(s)
-- **Schema/Table Explorer** — navigation across DBs/schemas/tables
-- **Column Detail** — per-column stats, semantic type, rule status
-- **Issue Management** — list of issues, filters, triage flows
-- **Rule Management** — create/edit rules, see rule histories
-- **Interactive Cleaning** — human-in-the-loop edits and transforms
-- **Visualization Richness** — charts, scorecards, visual indicators
-- **Workflow Clarity** — end-to-end flow (overview → drill-down → fix → re-check)
-- **User-in-the-loop** — explicit mechanisms for rule validation, labeling, approval
-- **Complexity Level** — how heavy/complex the UI feels for non-experts (Low/Medium/High)
+**DQ Dashboard** · **Schema/Table Explorer** · **Column Detail** ·
+**Issue Management** · **Rule Management** · **Interactive Cleaning** ·
+**Visualization Richness** · **Workflow Clarity** · **User-in-the-loop** ·
+**Accessibility** (colour-independent severity encoding, keyboard path, contrast)
+· **Complexity Level**
 
 ---
 
 ## Matrix
 
-| Tool / UI             | DQ Dashboard | Schema/Table Explorer | Column Detail | Issue Management | Rule Management | Interactive Cleaning | Visualization Richness | Workflow Clarity | User-in-the-loop | Complexity Level |
-|-----------------------|-------------|-----------------------|--------------|------------------|-----------------|----------------------|------------------------|------------------|------------------|------------------|
-| **DQT UI (target)**   | ✓✓          | ✓✓                    | ✓✓           | ✓✓               | ✓               | ~                    | ✓✓                     | ✓✓               | ~                | **Low–Medium**   |
-| **Talend DQ UI**      | ✓✓          | ✓                     | ✓✓           | ✓✓               | ✓✓              | ✓                    | ✓✓                     | ✓                | ~                | Medium–High      |
-| **DataLens**          | ✓✓          | ~ (dataset-centric)   | ✓            | ✓✓               | ~               | ✓✓                   | ✓✓                     | ✓                | ✓✓               | Medium           |
-| **OpenRefine**        | ~ (project list + facets) | ~        | ✓            | ~                | -               | ✓✓                   | ✓                      | ✓                | ✓                | Medium           |
+| Tool / UI | Status | DQ Dashboard | Explorer | Column Detail | Issues | Rules | Interactive Cleaning | Viz Richness | Workflow Clarity | User-in-loop | Accessibility | Complexity |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **DQT UI (current)** | Pre-release | - | - | - | - | - | - | - | - | - | - | — (no frontend; a backend skeleton is likely but `UNVERIFIED`) |
+| **DQT UI (target v1.0)** | — | ✓✓ | ✓✓ | ✓✓ | ✓✓ | ✓ | ~ | ✓✓ | ✓✓ | ~ | ✓✓ | **Low–Medium** |
+| **Talend DQ UI** | Commercial (OSS retired 2024) | ✓✓ | ✓ | ✓✓ | ✓✓ | ✓✓ | ✓ | ✓✓ | ✓ | ~ | ~ | Medium–High |
+| **DataLens (research prototype)** | Research | ✓✓ | ~ (dataset-centric) | ✓ | ✓✓ | ~ | ✓✓ | ✓✓ | ✓ | ✓✓ | Unknown | Medium |
+| **OpenRefine** | Active | ~ (project list + facets) | ~ | ✓ | ~ | - | ✓✓ | ✓ | ✓ | ✓ | ~ | Medium |
+| **Great Expectations Data Docs** | Active | ✓ | ~ | ✓✓ | ✓✓ | ✓✓ | - | ✓ | ✓ | - | ✓ | Low–Medium |
+| *(reference only)* Yandex DataLens | Commercial BI | ✓✓ (generic BI) | - | - | - | - | - | ✓✓ | ✓ | ✓ | ✓ | High — **out of scope pattern** |
+
+**Note on the DQT rows:** the `current` row is empty on purpose. There is no
+frontend. Filling that row with the target values — as the previous single-row
+version effectively did — makes the matrix unusable as a progress measure.
 
 ---
 
@@ -55,127 +60,120 @@ Columns:
 
 ### DQT UI (target)
 
-**Intended design:**
+Screens, navigation, accessibility, and RTL requirements are specified by the
+`dqt-ui-designer` skill and constrained by `CONVENTIONS-DQT.md`. Summary of
+intent:
 
-- Dashboard: one or more overview screens showing:
-  - per-database / per-schema data-quality scores,
-  - counts of issues by severity and dimension,
-  - trend charts of data-quality scores over time.
-- Explorer:
-  - sidebar with schemas/tables,
-  - main panel with per-table metrics, last-check status, and quick links.
-- Column detail:
-  - stats (min/max, distinct, null ratio),
-  - semantic type (email, IBAN, etc.),
-  - associated rules and pass/fail status.
-- Issues:
-  - table listing issues with filters (dimension/severity/status),
-  - drill-down into evidence and affected rows.
-- Rules:
-  - simple view/edit of rule definitions and their latest results (no huge rule IDE).
-- Cleaning:
-  - minimal guided actions (e.g., mark as ignore, trigger standardization routines);
-    heavier, interactive transformations are not core.
-- Visualization:
-  - scorecards, bar/line charts, simple trend plots, traffic-light indicators.
-- Workflow:
-  - "Pick connection → run checks → overview → drill down → fix → re-run → export report".
-- User-in-the-loop:
-  - basic acknowledgment/override mechanisms; no full labeling/ML training UI.
+- Overview with per-dimension scorecards, issue counts by severity/dimension,
+  score trend over time, and a **prominent run-status badge** so a `partial` or
+  `failed` run never renders as a healthy one.
+- Explorer: schema/table sidebar; per-table metrics, issue counts, last-check
+  timestamp, and an explicit marker when values are sampled/approximate.
+- Column detail: stats, semantic type, rules and their pass/fail status.
+- Issues: filterable table (dimension / severity / rule), drill-down to evidence.
+- Rules: view definitions and **history over time**; surface rules matching zero
+  targets.
+- Cleaning: **read-only plan display at most in v0.1.** No apply action in the UI.
+- Visualization: scorecards, bar/line charts, trend plots, severity indicators
+  encoded by colour **and** icon or label.
 
-Target complexity: **Low–Medium** — DBAs should feel at home quickly.
+Target complexity: **Low–Medium**.
 
-### Talend Data Quality UI
+### Talend Data Quality UI — Commercial
 
-Talend's DQ/DP UI provides:
+Dataset overview with **quality bars** (valid / invalid / empty) and rule
+compliance bars; per-column mini quality bars in the column headers; colour-coded
+indicators tied to semantic type; graphical profiling tiles; UI-managed rules and
+semantic types with a composite trust score.
 
-- Dataset overview with **quality bars** (valid/invalid/empty) and rule compliance bars.
-- Column headers with mini quality bars indicating distribution of valid/invalid/empty values.
-- Color-coded indicators (green/gray/red) tied to semantic type and rules.
-- Graphical profiling: charts and tiles showing distributions and anomalies.
-- Rules and semantic types manageable via UI, with strong compliance indicators.
+**Strengths:** the best column-level quality visualization in this space. Quality
+at a glance, with no drill-down required to know where to look.
 
-Strengths:
+**Weaknesses for DQT:** a heavy product with mixed focus (compliance, masking,
+data preparation) well beyond DQT's scope. And the open-source edition no longer
+exists, so it is a design reference rather than an adoptable baseline.
 
-- Very strong visualization for column-level quality (quality bars, colors).
-- Clear indicators in dataset overview and header: user can see quality at a glance.
-- Integrated rule management and trust score.
+**Borrow:** the column-header quality bar, and the valid/invalid/empty tile in the
+overview. These map directly onto `DQMetric` and require no new concepts.
 
-Weaknesses for DQT context:
+### DataLens (research prototype) — Research
 
-- Heavier product, more complex than desired for a lean SQL toolkit.
-- Mixed focus on compliance/masking and data preparation, beyond DQT's scope.
+An interactive dashboard for tabular data quality combining statistical,
+rule-based and ML-based detection with repair, plus user-in-the-loop modules for
+rule validation, labeling, and custom rule definition, and iterative selection of
+cleaning strategies.
 
-### DataLens UI
+**Borrow:** the *user-in-the-loop pattern* — letting a domain expert confirm,
+override, or dismiss a machine-proposed finding. Scaled down for DQT, this is
+"acknowledge / ignore / mark false-positive" on an issue, which is a small,
+valuable feature.
 
-DataLens is an ML-oriented interactive dashboard for tabular data quality:
+**Do not borrow:** the ML machinery. DQT has no ML surface and does not need one
+to be useful.
 
-- Dashboards composed of widgets (charts, tables) with cross-filtering, selectors, parameters.
-- Integrated profiling, error detection and repair, using statistical, rule-based and ML-based methods.
-- User-in-the-loop modules for:
-  - interactive rule validation,
-  - labeling,
-  - custom rule definition.
-- Iterative cleaning: dashboard helps select and sequence cleaning strategies.
+### OpenRefine — Active
 
-Strengths:
+Data grid with a faceted filter panel, undo/redo history, and per-column
+transform menus.
 
-- Strong interactive visualization and dashboard model (widgets, filters, multiple pages).
-- Powerful user-in-the-loop flows for rule validation and repair.
-- Good foundation for future DQT evolution if ML-based detection becomes important.
+**Borrow:** faceted filtering for issue and column lists, and the treatment of
+**undo as a first-class product feature rather than a log**. OpenRefine's undo
+model is the correct mental model for DQT's `undo_statement` requirement.
 
-Weaknesses for DQT context:
+**Not applicable:** single-project focus, no multi-schema SQL overview, no notion
+of metrics over time.
 
-- More complex than what a DBA needs initially.
-- ML-heavy; DQT should borrow patterns, not complexity.
+### Great Expectations Data Docs — Active
 
-### OpenRefine UI
+Generated static HTML documenting expectations, validation results, and data
+assets.
 
-OpenRefine UI is project-centric with faceted exploration:
+**Borrow:** the idea that a **static, self-contained, shareable HTML artifact** is
+often more useful to a DBA than a server-backed dashboard — it can be emailed,
+attached to a ticket, and archived. DQT already generates self-contained HTML;
+this validates that direction and suggests investing there before investing in
+the frontend.
 
-- Main grid of data, with:
-  - facets/filter panel on the side,
-  - undo/redo history,
-  - per-column drop-down menus for transforms and facets.
-- Interactive cleaning:
-  - clustering functions,
-  - text transformations,
-  - faceted operations.
-- Strong for manual exploration and fixing messy data.
+### Yandex DataLens — reference only, out of scope
 
-Strengths:
+A commercial BI platform: dashboards assembled from widgets, cross-filtering,
+selectors, dashboard parameters, multi-page dashboards, ad-hoc chart building.
 
-- Very good for human-in-the-loop cleaning and exploration.
-- Clear layout: data grid + facets + history = powerful yet understandable.
+**Listed only to prevent re-confusion with the research prototype above.**
 
-Weaknesses for DQT context:
+**Explicit anti-patterns for DQT** — do not implement any of these:
 
-- Focused on one dataset/project, not on multi-schema SQL DB overview.
-- Little concept of rules/metrics over time; more of a cleaning workbench.
+- a widget builder or configurable dashboard layout,
+- cross-filtering engines and dashboard parameter systems,
+- ad-hoc chart construction by the user,
+- a general query/pivot surface.
+
+DQT's screens are fixed, opinionated, and answer specific data-quality questions.
+Every step toward configurability is a step toward becoming an unfinished BI
+tool.
 
 ---
 
 ## Design Implications for DQT UI
 
-Based on this comparison:
+**Borrow:**
 
-- **Borrow from Talend:**
-  - quality indicators at column and dataset level (bars and colors),
-  - clear tiles in overview showing valid/invalid/empty distribution.
-- **Borrow from DataLens:**
-  - dashboard organization with widgets (scorecards, charts, tables),
-  - simple user-in-the-loop mechanisms (approve/override rules, flag issues).
-- **Borrow from OpenRefine:**
-  - faceted/filtered views for issues and columns,
-  - clear history and context when applying cleansing actions.
+- from **Talend** — column-level and dataset-level quality bars; valid / invalid /
+  empty tiles;
+- from **OpenRefine** — faceted filtering; undo as a real feature with visible
+  history;
+- from **DataLens (research)** — lightweight user-in-the-loop: acknowledge,
+  override, flag as false positive;
+- from **GX Data Docs** — the shareable, self-contained static report artifact.
 
-But keep DQT UI:
+**Reject:**
 
-- **Lean and DBA-focused:**
-  - fewer screens,
-  - plain language, tight scope (data quality only),
-  - low friction to go from overview → diagnosis → fix → report.
+- BI-style configurable dashboards, widgets, and cross-filtering (Yandex DataLens);
+- masking / compliance / data-preparation surfaces (Talend);
+- ML training and labeling UI (DataLens research);
+- any screen that cannot be mapped to a facet in `CONVENTIONS-DQT.md` §2.
 
-Use this matrix as the **UI/UX north star**:
-- any new screen or component should be explicitly mapped here,
-- complexity must be kept at or below the "Low–Medium" band for DQT UI.
+**Keep DQT UI lean:** few screens, plain language, tight scope, and a short path
+from overview → diagnosis → fix → report. Complexity must stay at or below the
+**Low–Medium** band. Any new screen or component must be added to this matrix in
+the same change that proposes it.

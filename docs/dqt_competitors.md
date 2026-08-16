@@ -1,265 +1,187 @@
-# DQT Competitors and Best-of Features
+# DQT Competitors, Feature Floor, and Current Gap
 
-This document lists key competitors to **DQT (SQL Data Quality Toolkit)** and the
-best features they offer, so we can continuously benchmark DQT against them.
-It also defines a **baseline feature floor** for DQT and highlights aspirational
-targets inspired by each tool.
+This document does three things: defines the **minimum capability floor** DQT
+must reach before release, records **where DQT actually stands against that
+floor**, and tracks **best-of features** worth borrowing from other tools.
 
-Sources include surveys of data quality tools and dimensions, as well as
-individual tool documentation.
-
----
-
-## 1. Baseline Feature Floor for DQT
-
-DQT is a **DBA-focused, SQL-first data quality toolkit**. The baseline floor
-defines the minimum acceptable capabilities before DQT can be considered
-seriously usable.
-
-### 1.1 Core Data Quality Facets (Floor)
-
-DQT must **at least** support:
-
-- **Profiling**
-  - Column-level stats: min, max, mean, distinct count, null count/ratio.
-  - Table-level stats: row counts, orphan foreign-key rows, referential integrity issues.
-
-- **DQ Diagnostics**
-  - Issue types: completeness, consistency, validity, uniqueness, timeliness, referential integrity.
-  - Structured diagnostics objects (issue type, severity, evidence).
-
-- **Rules**
-  - Declarative rule engine for:
-    - Column rules: ranges, regex, type checks, uniqueness, NOT NULL.
-    - Table rules: foreign-key integrity, duplication, conditional constraints.
-  - Rules definable via YAML/JSON or Python API.
-
-- **Cleansing**
-  - Reversible operations:
-    - Standardization (trim, case normalization, canonical forms).
-    - Deduplication (key-based, simple fuzzy matching).
-    - Lookup-based corrections using domain tables.
-  - Logging and audit trail for before/after states.
-
-- **Metrics**
-  - Quantitative data-quality metrics per table/column and per dimension
-    (e.g. completeness score, validity score).
-
-- **Monitoring**
-  - Snapshotting metrics over time and basic trend analysis.
-  - Ability to detect drops or drift in data quality (not service metrics).
-
-- **Knowledge / Domain**
-  - Reference tables and domain lists to validate values (e.g. country codes,
-    known categories).
-
-- **Classification**
-  - Semantic typing for columns (email, phone, IBAN, national_id, date, amount)
-    to apply appropriate rules and visualizations.
-
-- **Missingness (internal)**
-  - Basic completeness/missingness statistics; null patterns and ratios.
-
-- **Reports & Visualization**
-  - HTML/PDF reports summarizing:
-    - per-table and per-column metrics,
-    - issues and rules results,
-    - trends over time.
-  - Scorecards and simple charts (bar/line) for DQ metrics and issue counts.
-
-- **Code Quality & UX**
-  - Clear English docstrings for all public APIs:
-    - behavior, arguments, returns, examples.
-  - Unit + integration tests for all public APIs, with CI running pytest, mypy,
-    ruff/black.
-  - CLI for profiling, checking rules, and generating reports.
+> **What changed and why.** The previous revision defined a floor and never
+> compared it to reality, so a list of unbuilt capabilities read like a
+> description of the product. Every floor item now carries a status column. It is
+> not flattering, and that is the point — a floor you never measure yourself
+> against is a wish list.
+>
+> Maintenance status has also been added to each competitor. Two of the eight
+> originally listed have since been retired.
 
 ---
 
-## 2. Competitors and Their Best Features
+## 1. Baseline Feature Floor — and DQT's Actual Position
 
-This section lists selected competitors and the **best-of features** we want to
-keep an eye on. For each tool we highlight:
-- standout capabilities,
-- why they matter,
-- whether they are **floor** or **stretch** for DQT.
+Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 
-### 2.1 Great Expectations (GX)
+| # | Floor requirement | Status | Where DQT actually is |
+|---|---|---|---|
+| F1 | **Profiling** — column stats (min, max, mean, distinct, null count/ratio) | PARTIAL | Null counts, row counts, completeness only. No min/max/mean/distinct/patterns. |
+| F2 | **Profiling** — table stats (row counts, orphan FK rows, referential integrity) | NOT MET | Row counts only. No orphan-FK detection. |
+| F3 | **Diagnostics** — all six canonical dimensions with structured issue objects | NOT MET | `completeness` only. Issue objects themselves are well-structured. |
+| F4 | **Rules** — column rules (range, regex, type, uniqueness, NOT NULL) | MET | Four expressions, YAML/JSON-driven, unit-tested. |
+| F5 | **Rules** — table rules (FK integrity, duplication, conditional constraints) | NOT MET | Column scope only. |
+| F6 | **Cleansing** — reversible standardization, dedup, lookup correction with audit trail | PARTIAL | Write-capable primitives exist (real `UPDATE`/`DELETE` + `commit()`), but they are not reachable from the pipeline, "reversible" currently means *manually* reconstructable, the audit log is not persisted, and there is no plan/apply split. Not safely usable as-is. |
+| F7 | **Metrics** — per table/column/dimension scores | PARTIAL | Three global metrics: table count, column count, average completeness. |
+| F8 | **Monitoring** — metric snapshots over time + drift detection | NOT MET | `monitor()` returns its input unchanged. Storage exists but no trend layer. |
+| F9 | **Knowledge/Domain** — reference tables for validation | NOT MET | No module. |
+| F10 | **Classification** — semantic column typing | NOT MET | No module. The `semantic_type` field exists and is never populated. |
+| F11 | **Missingness (internal)** — null stats and patterns | PARTIAL | Counts and ratios; no co-occurrence patterns. |
+| F12 | **Reports** — HTML/PDF, per-table/column metrics, issues, trends | PARTIAL | Self-contained HTML with score bars and severity badges. No PDF, no bilingual content, no trends. |
+| F13 | **Code quality** — English docstrings, unit + integration tests, CI (pytest/mypy/ruff) | PARTIAL | CI is real and enforces lint, strict typing, and an 80% coverage gate. Four core modules have no unit tests; docstring compliance unaudited; PostgreSQL — the primary target — is untested in CI. |
+| F14 | **CLI** — profile, check rules, generate reports | PARTIAL | `dqt profile` only. `check` and `missing` subcommands absent. |
 
-Core idea: expectation-based data testing, documentation, and profiling.
+**Score: 1 of 14 met.** Nothing here is a reason for discouragement — the
+architecture, data model, rule engine, and CI are real and sound. But DQT is not
+currently at its own stated floor, and any document, README, or matrix that
+implies otherwise should be corrected rather than defended.
 
-**Best-of features:**
-
-- Rich **expectation library**:
-  - Dozens of built-in expectations for schema, ranges, uniqueness, regex,
-    nulls, distributions, etc.
-- **Data Docs**:
-  - Automatically generated HTML documentation of expectations, validation
-    results, and data assets.
-- **Cross-platform support**:
-  - Pandas, Spark, SQL databases, cloud warehouses.
-- **CI/CD integration**:
-  - Validations as part of pipelines; fail builds on data-quality regressions.
-
-**Implications for DQT:**
-
-- DQT floor: a minimal expectation-like rule system for SQL (already in baseline).
-- Stretch: a curated, extensible rule catalog and auto-generated docs similar to
-  Data Docs.
+**Release rule:** a floor item may not be marked `MET` on the strength of a
+module existing. It requires read source and a passing test.
 
 ---
 
-### 2.2 Soda Core
+## 2. Competitors and Best-of Features
 
-SQL-centric data testing via extended SQL queries.
+Status key: **Active** · **Retired** · **Commercial** (OSS edition discontinued)
+· **Research** · **Unverified**
 
-**Best-of features:**
+### 2.1 Great Expectations — Active
 
-- **SQL-first checks**:
-  - Define data-quality checks as SQL queries or Soda's YAML syntax.
-- **Monitoring and alerts**:
-  - Integration with Soda Cloud for continuous monitoring, alerting, and
-    collaboration.
-- **Warehouse-native design**:
-  - Targets data warehouses and lakes (BigQuery, Snowflake, etc.).
+Expectation-based data testing, documentation, and profiling.
 
-**Implications for DQT:**
+**Best-of:** large built-in expectation library; auto-generated HTML "Data Docs";
+cross-platform (pandas, Spark, SQL, warehouses); CI/CD integration that fails
+builds on data-quality regressions.
 
-- DQT should adopt SQL-first thinking for rules and diagnostics.
-- Stretch: simple integration points for external monitoring stack.
+**For DQT:** floor — a minimal expectation-like rule system for SQL (F4/F5).
+Stretch — a curated, extensible rule catalog with generated documentation.
 
----
+**Caution:** GX 1.x reorganized its concepts substantially from the 0.18 line.
+Any DQT design borrowed from GX must be checked against current GX docs, not the
+0.18 branch, which is explicitly unmaintained.
 
-### 2.3 Baselinr
+### 2.2 Soda Core — Active
 
-Open-source data quality platform for SQL warehouses.
+SQL-centric checks via YAML or SQL.
 
-**Best-of features:**
+**Best-of:** SQL-first check definitions; monitoring and alerting via Soda Cloud;
+warehouse-native design.
 
-- **End-to-end pipeline coverage**:
-  - Profiling, diagnostics, validation, drift detection, anomaly detection.
-- **Warehouse integration**:
-  - Tight integration with dbt, Airflow, Dagster, and popular warehouses.
-- **Transparency & control**:
-  - Rule definitions and checks are explicit and inspectable.
+**For DQT:** SQL-first thinking for rules and diagnostics is already DQT's core
+identity. Stretch — a simple outbound integration point for pushing metrics and
+events to an external monitoring stack, rather than building alerting in-house.
 
-**Implications for DQT:**
+### 2.3 Baselinr — Active (young, 2025)
 
-- Floor: robust profiling + diagnostics for SQL tables.
-- Stretch: richer anomaly/drift detection for data quality metrics.
+Open-source data quality and observability for SQL warehouses.
 
----
+**Best-of:** end-to-end coverage (profiling, diagnostics, validation, schema and
+statistical drift, anomaly detection); dbt/Airflow/Dagster integration; web
+dashboard, CLI, and Python SDK; multi-database (PostgreSQL, MySQL, SQLite,
+Snowflake, BigQuery, Redshift).
 
-### 2.4 Apache Griffin
+**For DQT:** this is the **closest direct competitor** and the most useful
+benchmark in this document — same positioning, same stack family, similar
+surface. Floor — profiling and diagnostics for SQL tables. Stretch — drift
+detection for metrics, which maps directly to DQT's unbuilt F8.
 
-Big-data data quality solution for batch and streaming.
+**Honest note:** Baselinr already delivers most of DQT's target row. DQT's
+defensible differentiation is DBA-first framing, a lean dependency footprint, and
+bilingual EN/FA reporting — not feature count. That should shape the roadmap.
 
-**Best-of features:**
+### 2.4 Apache Griffin — **Retired (Attic, 2025)**
 
-- **Rule DSL and metrics**:
-  - Flexible DSL for defining DQ rules and associated metrics.
-- **Batch + streaming**:
-  - Supports data quality in streaming contexts (e.g. Spark).
-- **Dashboarding and monitoring**:
-  - Visualization of metrics over time for distributed systems.
+Big-data data quality for batch and streaming.
 
-**Implications for DQT:**
+**Best-of (historical):** a flexible rule DSL tied to a metric model; batch and
+streaming; metric dashboards over time.
 
-- Floor: rule engine with metrics for relational databases.
-- Stretch: well-designed metric model and dashboards for DBA workflows.
+**For DQT:** the rule-DSL-and-metric-model design remains a good reference. Do
+**not** treat Griffin as a live competitive baseline or cite it as evidence that
+a capability is table stakes today.
 
----
+### 2.5 Talend Data Quality — **Commercial (OSS retired 31 Jan 2024)**
 
-### 2.5 Talend Open Studio for Data Quality
+**Best-of:** graphical profiling; strong cleansing and standardization; a
+composite "trust score"; and — most relevant to DQT — **column-level quality bars
+showing valid/invalid/empty distribution directly in column headers**.
 
-Talend's data quality stack for profiling, cleansing, and masking.
+**For DQT:** the quality-bar visual is the single best UX idea in this document
+and maps cleanly onto DQT's `DQMetric` model. Stretch — a DQT quality score per
+table. Masking/compliance is explicitly out of scope and must not follow the
+visual idea in.
 
-**Best-of features:**
+**Caution:** Talend Open Studio no longer exists as an open-source option. It
+cannot be positioned as "the free alternative DQT competes with".
 
-- **Graphical profiling and exploration**:
-  - Visual profiling views (distributions, patterns, anomalies).
-- **Cleansing and standardization**:
-  - Built-in transforms for standardizing, deduplicating, and enriching data.
-- **Trust score**:
-  - A composite data-quality score to summarize dataset quality.
+### 2.6 MobyDQ — Unverified
 
-**Implications for DQT:**
+Pipeline-oriented data-quality indicators.
 
-- Floor: strong profiling + cleansing primitives.
-- Stretch: interactive/visual profiling and a DQT "quality score" per table.
+**Best-of:** indicator design toolbox; alerting on indicator failure.
 
----
+**For DQT:** floor — basic completeness and validity metrics. Stretch — simple
+alerting hooks.
 
-### 2.6 MobyDQ
+**Scope warning:** MobyDQ's indicator set includes "latency". That means *data*
+latency — how stale the data is — which maps to DQT's `timeliness` dimension.
+It does **not** mean service latency, which is a permanent non-goal. This
+document previously listed the term without the distinction, which is exactly the
+kind of vocabulary bleed that pulls service metrics into a data-quality product.
 
-Open-source data-quality tool for pipelines.
+### 2.7 OpenRefine — Active
 
-**Best-of features:**
+Interactive tabular cleaning with faceted exploration.
 
-- **Indicators for pipeline-oriented questions**:
-  - Completeness, freshness, latency, validity, anomaly detection.
-- **Custom indicator design**:
-  - Toolbox for designing DQ indicators tailored to pipeline requirements.
-- **Alerts and observability**:
-  - Captures DQ issues and triggers alerts when indicators fail.
+**Best-of:** faceted browsing; clustering; undo/redo history; strong
+human-in-the-loop repair.
 
-**Implications for DQT:**
+**For DQT:** stretch — faceted filtering for issue lists, and a clear history of
+applied cleansing actions. OpenRefine's undo model is also the right mental model
+for DQT's undo-statement requirement: reversibility is a first-class feature, not
+a log.
 
-- Floor: basic completeness and validity metrics.
-- Stretch: pipeline-oriented metrics (freshness) and simple alerting hooks.
+**Not applicable:** single-dataset, project-centric; no multi-schema SQL view, no
+metrics over time.
 
----
+### 2.8 DataLens (research prototype) — Research
 
-### 2.7 OpenRefine
+arXiv:2501.17074 — an ML-oriented interactive dashboard for tabular data quality.
 
-Interactive tabular data cleaning.
+**Best-of:** integrated profiling, error detection and repair combining
+statistical, rule-based and ML methods; user-in-the-loop rule validation and
+labeling; iterative cleaning strategy selection; experiment tracking.
 
-**Best-of features:**
+**For DQT:** floor — none. Stretch — a clean abstraction where ML-based detectors
+could be plugged in later, and a future path to interactive rule validation.
 
-- **Interactive exploration and cleaning**:
-  - Faceted browsing and transformation of tabular data.
-- **Strong UI for manual repair**:
-  - Human-in-the-loop cleaning for complex issues.
-
-**Implications for DQT:**
-
-- Stretch: interactive views or good HTML reports that DBAs can use to inspect
-  and manually fix issues.
-
----
-
-### 2.8 DataLens
-
-ML-oriented interactive tabular data-quality dashboard.
-
-**Best-of features:**
-
-- **Integrated profiling, error detection, and repair**:
-  - Combines statistical, rule-based, and ML-based methods.
-- **User-in-the-loop module**:
-  - Interactive rule validation, data labeling, and custom rule definition.
-- **Iterative cleaning**:
-  - Automatic selection of cleaning strategies guided by ML and user feedback.
-
-**Implications for DQT:**
-
-- Floor: none (DQT is not ML-heavy by default).
-- Stretch: clean abstraction for plugging in ML-based detectors.
+**Naming caution:** this is a research prototype, not Yandex DataLens (a
+commercial BI product with the same name). They are unrelated. Do not attribute
+BI dashboard features to this tool.
 
 ---
 
-## 3. Floor vs. Stretch Summary
+## 3. Floor vs. Stretch — summary
 
-- **Floor (must-have for DQT)**:
-  - SQL profiling (GX, Soda, Talend, Griffin).
-  - Strong diagnostics and rule engine (GX, Soda, Griffin, DQS).
-  - Basic cleansing primitives (Talend, OpenRefine).
-  - Core metrics and simple monitoring (MobyDQ, Griffin).
-  - Clear, visual HTML/PDF reports (GX, Talend, DataLens).
+**Floor (must be solid before v0.1.0 release):**
+SQL profiling · diagnostics across all six dimensions · a rule engine covering
+column *and* table scope · **safe** cleansing primitives · core metrics · a
+minimal monitoring/trend layer · clear HTML reports · tested public APIs.
 
-- **Stretch (directional goals)**:
-  - Rich expectation catalog + auto docs (GX).
-  - Warehouse- and pipeline-friendly monitoring with alerts (Soda, Baselinr, MobyDQ).
-  - Well-structured DQ metric model and dashboards (Griffin, Talend).
-  - Interactive exploration / human-in-the-loop cleaning (OpenRefine, DataLens).
-  - ML-based anomaly/error detection & guided repair (DataLens, MobyDQ).
+**Stretch (directional):**
+Rule catalog with generated docs (GX) · warehouse/pipeline monitoring with alerts
+(Soda, Baselinr) · column-level quality bars and a table trust score (Talend) ·
+faceted issue exploration and first-class undo (OpenRefine) · pluggable ML
+detectors (DataLens research) · a well-structured metric model (Griffin,
+historical).
+
+DQT should never try to match all of these. The floor defines what "usable"
+means; the stretch list defines where a lean, DBA-focused, SQL-centric tool can
+be genuinely better than a general-purpose one — by being narrower and more
+trustworthy, not broader.
