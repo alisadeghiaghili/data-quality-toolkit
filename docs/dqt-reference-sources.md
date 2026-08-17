@@ -1,5 +1,8 @@
 # DQT Reference Sources
 
+> *Verified against the repository on 2026-08-17 at commit `4629925`. Statuses rot — re-check before relying on one.*
+
+
 Key references for DQT's data-quality design, architecture, and ecosystem
 understanding.
 
@@ -92,7 +95,7 @@ Topics DQT's design depends on with no reference recorded. Each is a real
 decision that has been made implicitly and should be made explicitly:
 
 - **SQL identifier quoting and injection prevention per dialect** — directly
-  relevant to `CONVENTIONS-DQT.md` §S6.
+  relevant to `CONVENTIONS-DQT.md` §1 (S6).
 - **Table sampling techniques** (PostgreSQL `TABLESAMPLE`, approximate distinct
   counts / HyperLogLog) — needed for V2 performance budgets.
 - **PDF generation with RTL and Arabic-script shaping** (e.g. WeasyPrint plus an
