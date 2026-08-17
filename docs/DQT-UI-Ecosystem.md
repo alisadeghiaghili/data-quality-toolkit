@@ -1,5 +1,8 @@
 # DQT UI Ecosystem Matrix (UX & Flows)
 
+> *Verified against the repository on 2026-08-17 at commit `4629925`. Statuses rot — re-check before relying on one.*
+
+
 Compares the planned **DQT UI** with other data-quality tools from a UX /
 dashboard / flows perspective.
 
@@ -42,7 +45,7 @@ dashboard / flows perspective.
 
 | Tool / UI | Status | DQ Dashboard | Explorer | Column Detail | Issues | Rules | Interactive Cleaning | Viz Richness | Workflow Clarity | User-in-loop | Accessibility | Complexity |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **DQT UI (current)** | Pre-release | - | - | - | - | - | - | - | - | - | - | — (no frontend; a backend skeleton is likely but `UNVERIFIED`) |
+| **DQT UI (current)** | Pre-alpha | - | - | - | - | - | - | - | - | - | - | — (read-only backend only; no frontend) |
 | **DQT UI (target v1.0)** | — | ✓✓ | ✓✓ | ✓✓ | ✓✓ | ✓ | ~ | ✓✓ | ✓✓ | ~ | ✓✓ | **Low–Medium** |
 | **Talend DQ UI** | Commercial (OSS retired 2024) | ✓✓ | ✓ | ✓✓ | ✓✓ | ✓✓ | ✓ | ✓✓ | ✓ | ~ | ~ | Medium–High |
 | **DataLens (research prototype)** | Research | ✓✓ | ~ (dataset-centric) | ✓ | ✓✓ | ~ | ✓✓ | ✓✓ | ✓ | ✓✓ | Unknown | Medium |
@@ -50,9 +53,28 @@ dashboard / flows perspective.
 | **Great Expectations Data Docs** | Active | ✓ | ~ | ✓✓ | ✓✓ | ✓✓ | - | ✓ | ✓ | - | ✓ | Low–Medium |
 | *(reference only)* Yandex DataLens | Commercial BI | ✓✓ (generic BI) | - | - | - | - | - | ✓✓ | ✓ | ✓ | ✓ | High — **out of scope pattern** |
 
-**Note on the DQT rows:** the `current` row is empty on purpose. There is no
-frontend. Filling that row with the target values — as the previous single-row
-version effectively did — makes the matrix unusable as a progress measure.
+**Note on the DQT rows:** the `current` row is empty on purpose. Filling it
+with the target values — as the previous single-row version effectively did —
+makes the matrix unusable as a progress measure.
+
+**What actually exists (verified 2026-08-17).** More than the previous revision
+assumed, and it is worth being precise about, because the gap is narrower than
+"no UI" suggests:
+
+- `src/dqt/ui/api.py` — a real read-only data-access layer over `RunStore`,
+  returning plain dicts. No domain models cross the boundary. This is a sound
+  design and should be preserved as the single data path for every consumer.
+- `src/dqt/ui/app.py` — a FastAPI skeleton exposing `GET /runs`,
+  `/runs/{run_id}`, `/runs/{run_id}/tables`, `/runs/{run_id}/metrics`,
+  `/runs/{run_id}/issues`, `/health`. Behind the `ui` extra
+  (`fastapi`, `uvicorn`).
+- Neither module has any tests.
+- There is no frontend of any kind, so every `-` in the `current` row above is
+  still accurate as a *user-facing* assessment.
+
+So the honest position is: the backend contract for a UI largely exists and is
+untested; the UI does not. Two of the target row's columns are closer than the
+matrix implies, and none of them are reachable by a user yet.
 
 ---
 

@@ -1,5 +1,8 @@
 # DQT Competitors, Feature Floor, and Current Gap
 
+> *Verified against the repository on 2026-08-17 at commit `4629925`. Statuses rot — re-check before relying on one.*
+
+
 This document does three things: defines the **minimum capability floor** DQT
 must reach before release, records **where DQT actually stands against that
 floor**, and tracks **best-of features** worth borrowing from other tools.
@@ -24,25 +27,34 @@ Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 | F1 | **Profiling** — column stats (min, max, mean, distinct, null count/ratio) | PARTIAL | Null counts, row counts, completeness only. No min/max/mean/distinct/patterns. |
 | F2 | **Profiling** — table stats (row counts, orphan FK rows, referential integrity) | NOT MET | Row counts only. No orphan-FK detection. |
 | F3 | **Diagnostics** — all six canonical dimensions with structured issue objects | NOT MET | `completeness` only. Issue objects themselves are well-structured. |
-| F4 | **Rules** — column rules (range, regex, type, uniqueness, NOT NULL) | MET | Four expressions, YAML/JSON-driven, unit-tested. |
+| F4 | **Rules** — column rules (range, regex, type, uniqueness, NOT NULL) | PARTIAL | Four expressions declared, YAML/JSON-driven; `not_null`/`unique`/`range` unit-tested. **`regex` is dead on SQLite** — no REGEXP function is registered, so every regex rule emits a permanent false `error`. Semantic validity is the stated differentiator, so this is the costliest single gap. |
 | F5 | **Rules** — table rules (FK integrity, duplication, conditional constraints) | NOT MET | Column scope only. |
-| F6 | **Cleansing** — reversible standardization, dedup, lookup correction with audit trail | PARTIAL | Write-capable primitives exist (real `UPDATE`/`DELETE` + `commit()`), but they are not reachable from the pipeline, "reversible" currently means *manually* reconstructable, the audit log is not persisted, and there is no plan/apply split. Not safely usable as-is. |
+| F6 | **Cleansing** — reversible standardization, dedup, lookup correction with audit trail | PARTIAL | Write-capable primitives exist (real `UPDATE`/`DELETE` + `commit()`). `run()` *does* call `cleanse()` on every run, but it reaches a pass-through, so nothing is written today — the primitives sit one wiring commit off the default path. "Reversible" currently means *manually* reconstructable, the audit log is not persisted, and there is no plan/apply split. Not safely usable as-is. |
 | F7 | **Metrics** — per table/column/dimension scores | PARTIAL | Three global metrics: table count, column count, average completeness. |
 | F8 | **Monitoring** — metric snapshots over time + drift detection | NOT MET | `monitor()` returns its input unchanged. Storage exists but no trend layer. |
 | F9 | **Knowledge/Domain** — reference tables for validation | NOT MET | No module. |
 | F10 | **Classification** — semantic column typing | NOT MET | No module. The `semantic_type` field exists and is never populated. |
 | F11 | **Missingness (internal)** — null stats and patterns | PARTIAL | Counts and ratios; no co-occurrence patterns. |
 | F12 | **Reports** — HTML/PDF, per-table/column metrics, issues, trends | PARTIAL | Self-contained HTML with score bars and severity badges. No PDF, no bilingual content, no trends. |
-| F13 | **Code quality** — English docstrings, unit + integration tests, CI (pytest/mypy/ruff) | PARTIAL | CI is real and enforces lint, strict typing, and an 80% coverage gate. Four core modules have no unit tests; docstring compliance unaudited; PostgreSQL — the primary target — is untested in CI. |
+| F13 | **Code quality** — English docstrings, unit + integration tests, CI (pytest/mypy/ruff) | PARTIAL | CI is real and enforces lint, strict typing, and an 80% coverage gate. **Six** modules have zero unit tests (`profiling`, `diagnostics`, `metrics`, `monitoring`, `schema_discovery`, `reports`), plus both `ui/` modules; docstring compliance unaudited; PostgreSQL — the primary target — is untested in CI. |
 | F14 | **CLI** — profile, check rules, generate reports | PARTIAL | `dqt profile` only. `check` and `missing` subcommands absent. |
 
-**Score: 1 of 14 met.** Nothing here is a reason for discouragement — the
+| F15 | **Read-only query/API surface** for downstream consumers | PARTIAL | `ui/api.py` + a FastAPI skeleton in `ui/app.py` expose runs, tables, metrics and issues read-only. Untested; no frontend. |
+
+**Score: 0 of 15 fully met** (was recorded as 1 of 14 before `regex` was found
+dead on SQLite). Nothing here is a reason for discouragement — the
 architecture, data model, rule engine, and CI are real and sound. But DQT is not
 currently at its own stated floor, and any document, README, or matrix that
 implies otherwise should be corrected rather than defended.
 
 **Release rule:** a floor item may not be marked `MET` on the strength of a
-module existing. It requires read source and a passing test.
+module existing, or of a module plus a test that only asserts the code does what
+the code does. It requires read source and an externally grounded passing test —
+see the honesty gate in `CONVENTIONS-DQT.md` §4.
+
+F4 is the cautionary example: it sat at `MET` because four rule expressions
+existed and three of them had tests. The fourth had no test and had never worked
+on the only fully supported backend.
 
 ---
 

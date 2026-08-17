@@ -1,5 +1,8 @@
 # DQT Ecosystem Matrix
 
+> *Verified against the repository on 2026-08-17 at commit `4629925`. Statuses rot — re-check before relying on one.*
+
+
 > **Reading this matrix honestly.** Two changes from earlier revisions, both
 > necessary for it to mean anything:
 >
