@@ -5,8 +5,6 @@
 DQT connects to databases and can issue UPDATE and DELETE statements. Known open defects:
 
 - `ConnectionConfig.read_only` is accepted but not enforced anywhere in the code (DQT-03)
-- Range-rule bounds are interpolated into SQL rather than parameterized (DQT-02)
-- Table identifiers are not quoted in the rules engine (DQT-02)
 - Cleansing operations are not persisted and cannot be reverted (DQT-05)
 - `regex` rules do not work on SQLite: no REGEXP function is registered (DQT-04)
 
