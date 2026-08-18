@@ -29,3 +29,7 @@ dqt_report_*.html
 .idea/
 .DS_Store
 Thumbs.db
+
+# Patch delivery artifacts
+*.patch
+*.diff
