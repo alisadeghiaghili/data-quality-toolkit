@@ -148,6 +148,20 @@ class TestMaliciousTableIdentifierIsSafelyQuoted:
         assert '""' in quoted  # the embedded `"` was doubled, not left bare
 
     def test_malicious_table_name_does_not_drop_other_table(self):
+        """A table name carrying a quote and statement terminator stays inert.
+
+        What this proves: routing the identifier through
+        :func:`quote_identifier` keeps the generated query well-formed and
+        returning correct counts. Against the unquoted pre-fix code the same
+        call raised ``sqlite3.OperationalError: near "table": syntax error``.
+
+        What it does not prove: that quoting is what stopped a second
+        statement from running. Python's :mod:`sqlite3` permits only one
+        statement per ``execute()`` regardless of quoting, so the embedded
+        ``DROP TABLE`` could not have executed through this path either way.
+        The multi-statement vector is real on the ``psycopg2`` path, which
+        this test does not exercise.
+        """
         conn = sqlite3.connect(":memory:")
         quoted = quote_identifier(MALICIOUS_TABLE_NAME)
         conn.execute(f"CREATE TABLE {quoted} (id INTEGER)")
@@ -166,7 +180,7 @@ class TestMaliciousTableIdentifierIsSafelyQuoted:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        # The embedded `DROP TABLE t; --` never ran as a separate statement:
-        # both the malicious-named table and `t` are still present.
+        # Both tables survive. See this test's docstring for why that is
+        # weaker evidence than it looks on SQLite.
         assert "t" in remaining_tables
         assert MALICIOUS_TABLE_NAME in remaining_tables
