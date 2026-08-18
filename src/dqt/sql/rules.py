@@ -70,6 +70,7 @@ from dqt.common.models import (
     RuleConfig,
     RuleRunResult,
 )
+from dqt.sql._identifiers import qualified_identifier, quote_identifier
 from dqt.sql.schema_discovery import DiscoveredTable
 
 # ---------------------------------------------------------------------------
@@ -176,24 +177,29 @@ def _matches_scope(
 # ---------------------------------------------------------------------------
 
 
-def _qualified_table(schema_name: str | None, table_name: str) -> str:
-    """Return a schema-qualified table identifier.
+def _placeholder(dialect: str) -> str:
+    """Return the DBAPI bind-parameter placeholder for *dialect*.
 
     Args:
-        schema_name: Schema name, or ``None`` for unqualified.
-        table_name: Table name.
+        dialect: ``"sqlite"``, ``"postgresql"``, or ``"postgres"``.
 
     Returns:
-        ``schema.table`` or just ``table`` if schema is ``None``.
+        ``"?"`` for SQLite (paramstyle ``qmark``), ``"%s"`` for PostgreSQL
+        (paramstyle ``pyformat``/``format``, as used by ``psycopg2``).
+
+    Raises:
+        ValueError: If *dialect* is not supported.
 
     Example::
 
-        assert _qualified_table("public", "orders") == "public.orders"
-        assert _qualified_table(None, "orders") == "orders"
+        assert _placeholder("sqlite") == "?"
+        assert _placeholder("postgresql") == "%s"
     """
-    if schema_name and schema_name != "main":  # SQLite uses 'main' internally
-        return f"{schema_name}.{table_name}"
-    return table_name
+    if dialect == "sqlite":
+        return "?"
+    if dialect in ("postgresql", "postgres"):
+        return "%s"
+    raise ValueError(f"Unsupported dialect for parameter placeholders: {dialect!r}")
 
 
 def _eval_not_null(
@@ -201,6 +207,7 @@ def _eval_not_null(
     schema_name: str | None,
     table_name: str,
     column_name: str,
+    dialect: str = "sqlite",
 ) -> tuple[int, int]:
     """Count total rows and NULL rows for a column.
 
@@ -209,6 +216,7 @@ def _eval_not_null(
         schema_name: Schema name (may be ``None``).
         table_name: Table name.
         column_name: Column name to check.
+        dialect: Target SQL dialect, used for identifier quoting.
 
     Returns:
         Tuple of ``(total_rows, null_count)``.
@@ -217,8 +225,9 @@ def _eval_not_null(
 
         total, nulls = _eval_not_null(cursor, "public", "orders", "customer_id")
     """
-    tbl = _qualified_table(schema_name, table_name)
-    cursor.execute(f'SELECT COUNT(*), COUNT(*) - COUNT("{column_name}") FROM {tbl}')
+    tbl = qualified_identifier(schema_name, table_name, dialect)
+    col = quote_identifier(column_name, dialect)
+    cursor.execute(f"SELECT COUNT(*), COUNT(*) - COUNT({col}) FROM {tbl}")
     row = cursor.fetchone()
     return int(row[0]), int(row[1])
 
@@ -228,6 +237,7 @@ def _eval_unique(
     schema_name: str | None,
     table_name: str,
     column_name: str,
+    dialect: str = "sqlite",
 ) -> tuple[int, int]:
     """Count total non-null rows and duplicate rows for a column.
 
@@ -236,6 +246,7 @@ def _eval_unique(
         schema_name: Schema name.
         table_name: Table name.
         column_name: Column name to check.
+        dialect: Target SQL dialect, used for identifier quoting.
 
     Returns:
         Tuple of ``(total_rows, duplicate_count)`` where ``duplicate_count``
@@ -245,18 +256,19 @@ def _eval_unique(
 
         total, dupes = _eval_unique(cursor, "public", "users", "email")
     """
-    tbl = _qualified_table(schema_name, table_name)
-    cursor.execute(f'SELECT COUNT("{column_name}") FROM {tbl}')
+    tbl = qualified_identifier(schema_name, table_name, dialect)
+    col = quote_identifier(column_name, dialect)
+    cursor.execute(f"SELECT COUNT({col}) FROM {tbl}")
     total = int(cursor.fetchone()[0])
     cursor.execute(
         f"""
         SELECT COALESCE(SUM(cnt - 1), 0)
         FROM (
-            SELECT COUNT("{column_name}") AS cnt
+            SELECT COUNT({col}) AS cnt
             FROM {tbl}
-            WHERE "{column_name}" IS NOT NULL
-            GROUP BY "{column_name}"
-            HAVING COUNT("{column_name}") > 1
+            WHERE {col} IS NOT NULL
+            GROUP BY {col}
+            HAVING COUNT({col}) > 1
         ) AS dupes
         """
     )
@@ -271,8 +283,12 @@ def _eval_range(
     column_name: str,
     min_val: float | None,
     max_val: float | None,
+    dialect: str = "sqlite",
 ) -> tuple[int, int]:
     """Count rows outside the specified [min, max] range.
+
+    *min_val* and *max_val* are always passed to the database as DBAPI bind
+    parameters, never interpolated into the SQL text.
 
     Args:
         cursor: Open DBAPI cursor.
@@ -281,6 +297,8 @@ def _eval_range(
         column_name: Column name.
         min_val: Minimum acceptable value (inclusive).  ``None`` = no lower bound.
         max_val: Maximum acceptable value (inclusive).  ``None`` = no upper bound.
+        dialect: Target SQL dialect, used for identifier quoting and the
+            bind-parameter placeholder style.
 
     Returns:
         Tuple of ``(total_rows, out_of_range_count)``.
@@ -294,27 +312,25 @@ def _eval_range(
     """
     if min_val is None and max_val is None:
         raise ValueError("range rule requires at least one of params.min or params.max.")
-    tbl = _qualified_table(schema_name, table_name)
+    tbl = qualified_identifier(schema_name, table_name, dialect)
+    col = quote_identifier(column_name, dialect)
     cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
     total = int(cursor.fetchone()[0])
 
-    conditions: list[str] = [f'"{column_name}" IS NOT NULL']
-    if min_val is not None:
-        conditions.append(f'"{column_name}" < {min_val}')
-    if max_val is not None:
-        conditions.append(f'"{column_name}" > {max_val}')
-    # Only first condition is always present; wrap min/max in OR if both given
+    ph = _placeholder(dialect)
+    bind_params: list[float]
     if min_val is not None and max_val is not None:
-        where = (
-            f'"{column_name}" IS NOT NULL AND '
-            f'("{column_name}" < {min_val} OR "{column_name}" > {max_val})'
-        )
+        where = f"{col} IS NOT NULL AND ({col} < {ph} OR {col} > {ph})"
+        bind_params = [min_val, max_val]
     elif min_val is not None:
-        where = f'"{column_name}" IS NOT NULL AND "{column_name}" < {min_val}'
+        where = f"{col} IS NOT NULL AND {col} < {ph}"
+        bind_params = [min_val]
     else:
-        where = f'"{column_name}" IS NOT NULL AND "{column_name}" > {max_val}'
+        assert max_val is not None  # narrowed by the branch above
+        where = f"{col} IS NOT NULL AND {col} > {ph}"
+        bind_params = [max_val]
 
-    cursor.execute(f"SELECT COUNT(*) FROM {tbl} WHERE {where}")
+    cursor.execute(f"SELECT COUNT(*) FROM {tbl} WHERE {where}", bind_params)
     out_of_range = int(cursor.fetchone()[0])
     return total, out_of_range
 
@@ -351,23 +367,16 @@ def _eval_regex(
         total, bad = _eval_regex(cursor, None, "users", "email",
                                   r"^[^@]+@[^@]+$", "sqlite")
     """
-    tbl = _qualified_table(schema_name, table_name)
+    tbl = qualified_identifier(schema_name, table_name, dialect)
+    col = quote_identifier(column_name, dialect)
     cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
     total = int(cursor.fetchone()[0])
 
     if dialect == "sqlite":
-        not_match_sql = (
-            f"SELECT COUNT(*) FROM {tbl} "
-            f'WHERE "{column_name}" IS NOT NULL '
-            f'AND "{column_name}" NOT REGEXP ?'
-        )
+        not_match_sql = f"SELECT COUNT(*) FROM {tbl} WHERE {col} IS NOT NULL AND {col} NOT REGEXP ?"
         cursor.execute(not_match_sql, (pattern,))
     elif dialect in ("postgresql", "postgres"):
-        not_match_sql = (
-            f"SELECT COUNT(*) FROM {tbl} "
-            f'WHERE "{column_name}" IS NOT NULL '
-            f'AND NOT ("{column_name}" ~ %s)'
-        )
+        not_match_sql = f"SELECT COUNT(*) FROM {tbl} WHERE {col} IS NOT NULL AND NOT ({col} ~ %s)"
         cursor.execute(not_match_sql, (pattern,))
     else:
         raise ValueError(f"Unsupported dialect for regex evaluation: {dialect!r}")
@@ -439,7 +448,7 @@ def _evaluate_rule(
 
     try:
         if expr == "NOT NULL":
-            total, null_count = _eval_not_null(cursor, schema, tname, column_name)
+            total, null_count = _eval_not_null(cursor, schema, tname, column_name, dialect)
             if null_count > 0:
                 issues.append(
                     DQIssue(
@@ -460,7 +469,7 @@ def _evaluate_rule(
                 )
 
         elif expr == "UNIQUE":
-            total, duplicate_extra = _eval_unique(cursor, schema, tname, column_name)
+            total, duplicate_extra = _eval_unique(cursor, schema, tname, column_name, dialect)
             if duplicate_extra > 0:
                 issues.append(
                     DQIssue(
@@ -483,7 +492,9 @@ def _evaluate_rule(
         elif expr == "RANGE":
             min_val = rule.params.get("min")
             max_val = rule.params.get("max")
-            total, out_of_range = _eval_range(cursor, schema, tname, column_name, min_val, max_val)
+            total, out_of_range = _eval_range(
+                cursor, schema, tname, column_name, min_val, max_val, dialect
+            )
             if out_of_range > 0:
                 issues.append(
                     DQIssue(

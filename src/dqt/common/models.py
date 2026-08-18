@@ -629,6 +629,29 @@ class RuleConfig(BaseModel):
             )
         return v
 
+    @field_validator("params")
+    @classmethod
+    def range_bounds_must_be_numeric(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """Reject non-numeric ``params.min`` / ``params.max`` values.
+
+        The ``range`` rule expression (:mod:`dqt.sql.rules`) binds these
+        values as DBAPI query parameters. Rejecting a non-numeric value here,
+        before the config ever reaches the query builder, is defense in
+        depth alongside parameterization: a string payload cannot reach the
+        SQL layer through this field even if a call site were to bind it
+        incorrectly.
+        """
+        for key in ("min", "max"):
+            if key not in v:
+                continue
+            bound = v[key]
+            if isinstance(bound, bool) or not isinstance(bound, int | float):
+                raise ValueError(
+                    f"RuleConfig.params[{key!r}] must be an int or float, "
+                    f"got {type(bound).__name__}."
+                )
+        return v
+
 
 # ---------------------------------------------------------------------------
 # Public re-exports  (consumed by dqt/__init__.py)
