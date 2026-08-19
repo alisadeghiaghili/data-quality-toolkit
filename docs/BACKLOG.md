@@ -154,6 +154,28 @@ Returns its input unchanged. The storage layer already keeps per-run metrics, so
 the data is there; what is missing is comparison across runs. Blocked on `NEW-A`
 — trending a field that means two things produces confident nonsense.
 
+### `NEW-H` · CLI silently dropped `rule_files` from `--config` — **fixed, needs a roadmap ID**
+
+**Severity:** was high — silent false negative; **Status: fixed** on branch
+`new-h`, not yet assigned a roadmap task ID.
+
+`cli.py::_build_pipeline_config` built a `DQPipelineConfig` from the parsed
+config-file dict but forwarded every filter key (`exclude_schemas`,
+`include_tables`, `exclude_tables`) except `rule_files`. The practical effect:
+`dqt profile --config x.yaml` with `x.yaml` naming `rule_files:` ran the full
+pipeline and reported zero rule-engine issues — completeness diagnostics still
+fired, but every declared rule (`NOT NULL`, `UNIQUE`, `range`, `regex`) was
+silently skipped, with no error or warning. Measured directly: the same rule
+file driven through `DQPipelineConfig(rule_files=[...])` in Python reported
+issues that the CLI path, given an equivalent `--config` file, did not.
+
+Fixed by forwarding `file_cfg.get("rule_files", [])` into the built
+`DQPipelineConfig`, proven by a red-then-green test pair in
+`tests/unit/test_cli.py` (`test_build_pipeline_config_forwards_rule_files`,
+`test_profile_cli_applies_rule_files_from_config`) driven through `main()`
+against a hand-seeded SQLite fixture with one enumerated `NOT NULL` violation.
+No CLI-level rule-file flag exists; this fix only closes the config-file path.
+
 ---
 
 ## 3. Open design questions — owner decisions, not agent decisions

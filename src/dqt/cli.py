@@ -213,7 +213,10 @@ def _build_pipeline_config(
 ) -> DQPipelineConfig:
     """Merge CLI args + config file into a DQPipelineConfig.
 
-    CLI args take precedence over file values.
+    CLI args take precedence over file values. ``rule_files`` has no CLI-level
+    flag today, so a ``rule_files`` list in *file_cfg* is forwarded as-is;
+    without it, the pipeline evaluates no declarative rules regardless of
+    what the config file names.
 
     Args:
         args: Parsed CLI namespace.
@@ -224,7 +227,8 @@ def _build_pipeline_config(
 
     Example::
 
-        cfg = _build_pipeline_config(args, {})
+        cfg = _build_pipeline_config(args, {"rule_files": ["rules/base.yaml"]})
+        assert cfg.rule_files == ["rules/base.yaml"]
     """
     include_schemas = None
     if args.schema:
@@ -238,6 +242,7 @@ def _build_pipeline_config(
         exclude_schemas=file_cfg.get("exclude_schemas"),
         include_tables=file_cfg.get("include_tables"),
         exclude_tables=file_cfg.get("exclude_tables"),
+        rule_files=file_cfg.get("rule_files", []),
     )
 
 
