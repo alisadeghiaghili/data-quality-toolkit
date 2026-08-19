@@ -9,6 +9,15 @@ _get_connection() can find it by DSN.  Tests cover:
 - lookup_correct: mapping applied, unknown values unchanged, empty mapping
 - apply_cleansing: enabled flag, unknown operation, commit/rollback, multi-op
 - CleansingResult: log, total_changes, tables_affected, errors
+
+Every call below is deliberately explicit about the two independent DQT-03
+safety gates: ``_conn_cfg`` passes ``read_only=False`` (this file's whole
+purpose is exercising real writes, so its connections opt out of the
+read-only guard), and every ``apply_cleansing(...)`` call passes
+``dry_run=False`` (opting out of the preview-only default so the assertions
+below, which check actual row mutation, exercise real writes). The
+read-only-raises and dry-run-default-is-safe behaviors this implies are
+covered separately in ``tests/unit/sql/test_read_only.py``, not here.
 """
 
 from __future__ import annotations
@@ -35,7 +44,9 @@ def _dsn(db_file: Path) -> str:
 
 
 def _conn_cfg(db_file: Path) -> ConnectionConfig:
-    return ConnectionConfig(id="test", dsn=_dsn(db_file))
+    # read_only=False: this test file exercises real writes, so its
+    # connections must opt out of DQT-03's read-only default.
+    return ConnectionConfig(id="test", dsn=_dsn(db_file), read_only=False)
 
 
 def _read_col(db_file: Path, table: str, col: str) -> list:
@@ -161,7 +172,7 @@ class TestStandardize:
             operation="standardize",
             params={"trim": True, "case": "lower"},
         )
-        result = apply_cleansing("run-1", _conn_cfg(users_db), [cfg])
+        result = apply_cleansing("run-1", _conn_cfg(users_db), [cfg], dry_run=False)
         emails = _read_col(users_db, "users", "email")
         assert "alice@example.com" in emails
         assert "bob@example.com" in emails
@@ -178,7 +189,7 @@ class TestStandardize:
             operation="standardize",
             params={"trim": True, "case": "upper"},
         )
-        apply_cleansing("run-2", _conn_cfg(users_db), [cfg])
+        apply_cleansing("run-2", _conn_cfg(users_db), [cfg], dry_run=False)
         names = _read_col(users_db, "users", "name")
         assert "ALICE" in names
         assert "BOB" in names
@@ -201,7 +212,7 @@ class TestStandardize:
             operation="standardize",
             params={"normalize_spaces": True, "trim": False},
         )
-        result = apply_cleansing("run-3", _conn_cfg(db_file), [cfg])
+        result = apply_cleansing("run-3", _conn_cfg(db_file), [cfg], dry_run=False)
         vals = _read_col(db_file, "t", "v")
         assert "hello world" in vals
         assert "no extra" in vals
@@ -215,7 +226,7 @@ class TestStandardize:
             operation="standardize",
             params={"trim": False},  # no-op
         )
-        result = apply_cleansing("run-4", _conn_cfg(users_db), [cfg])
+        result = apply_cleansing("run-4", _conn_cfg(users_db), [cfg], dry_run=False)
         assert result.total_changes == 0
 
     def test_log_records_before_after(self, users_db):
@@ -225,7 +236,7 @@ class TestStandardize:
             operation="standardize",
             params={"trim": True, "case": "lower"},
         )
-        result = apply_cleansing("run-5", _conn_cfg(users_db), [cfg])
+        result = apply_cleansing("run-5", _conn_cfg(users_db), [cfg], dry_run=False)
         assert len(result.log) > 0
         entry: CleansingLog = result.log[0]
         assert entry.before_value is not None
@@ -247,7 +258,7 @@ class TestDeduplicate:
             operation="deduplicate",
             params={"key_columns": ["email"], "keep": "first"},
         )
-        result = apply_cleansing("run-6", _conn_cfg(dup_db), [cfg])
+        result = apply_cleansing("run-6", _conn_cfg(dup_db), [cfg], dry_run=False)
         assert _count_rows(dup_db, "users") == 3  # alice, bob, carol
         assert result.total_changes == 2  # 2 duplicate rows deleted
 
@@ -258,7 +269,7 @@ class TestDeduplicate:
             operation="deduplicate",
             params={"key_columns": ["email"], "keep": "last"},
         )
-        result = apply_cleansing("run-7", _conn_cfg(dup_db), [cfg])
+        result = apply_cleansing("run-7", _conn_cfg(dup_db), [cfg], dry_run=False)
         assert _count_rows(dup_db, "users") == 3
         # 'Alice 3' (id=5) should survive
         names = _read_col(dup_db, "users", "name")
@@ -272,7 +283,7 @@ class TestDeduplicate:
             operation="deduplicate",
             params={"key_columns": ["email"], "keep": "first"},
         )
-        result = apply_cleansing("run-null-key", _conn_cfg(dup_db_with_nulls), [cfg])
+        result = apply_cleansing("run-null-key", _conn_cfg(dup_db_with_nulls), [cfg], dry_run=False)
         # Only the one real 'alice@example.com' duplicate should be removed;
         # all three distinct NULL-email rows must survive.
         assert result.total_changes == 1
@@ -287,7 +298,7 @@ class TestDeduplicate:
             operation="deduplicate",
             params={"key_columns": ["id"]},
         )
-        result = apply_cleansing("run-8", _conn_cfg(users_db), [cfg])
+        result = apply_cleansing("run-8", _conn_cfg(users_db), [cfg], dry_run=False)
         assert result.total_changes == 0
 
     def test_missing_key_columns_raises(self, users_db):
@@ -297,7 +308,7 @@ class TestDeduplicate:
             operation="deduplicate",
             params={},  # no key_columns
         )
-        result = apply_cleansing("run-9", _conn_cfg(users_db), [cfg])
+        result = apply_cleansing("run-9", _conn_cfg(users_db), [cfg], dry_run=False)
         assert len(result.errors) == 1
         assert "key_columns" in result.errors[0]
 
@@ -308,7 +319,7 @@ class TestDeduplicate:
             operation="deduplicate",
             params={"key_columns": ["email"], "keep": "first"},
         )
-        result = apply_cleansing("run-10", _conn_cfg(dup_db), [cfg])
+        result = apply_cleansing("run-10", _conn_cfg(dup_db), [cfg], dry_run=False)
         assert len(result.log) == 2
         for entry in result.log:
             assert entry.operation == "deduplicate"
@@ -333,7 +344,7 @@ class TestLookupCorrect:
                 "to_column": "to_value",
             },
         )
-        result = apply_cleansing("run-11", _conn_cfg(lookup_db), [cfg])
+        result = apply_cleansing("run-11", _conn_cfg(lookup_db), [cfg], dry_run=False)
         statuses = _read_col(lookup_db, "orders", "status")
         assert "pending" in statuses
         assert "cancelled" in statuses
@@ -352,7 +363,7 @@ class TestLookupCorrect:
                 "to_column": "to_value",
             },
         )
-        apply_cleansing("run-12", _conn_cfg(lookup_db), [cfg])
+        apply_cleansing("run-12", _conn_cfg(lookup_db), [cfg], dry_run=False)
         statuses = _read_col(lookup_db, "orders", "status")
         assert "delivered" in statuses  # was not in map, must remain
 
@@ -363,7 +374,7 @@ class TestLookupCorrect:
             operation="lookup_correct",
             params={},
         )
-        result = apply_cleansing("run-13", _conn_cfg(lookup_db), [cfg])
+        result = apply_cleansing("run-13", _conn_cfg(lookup_db), [cfg], dry_run=False)
         assert len(result.errors) == 1
         assert "lookup_table" in result.errors[0]
 
@@ -382,7 +393,7 @@ class TestApplyCleansing:
             params={"case": "lower", "trim": True},
             enabled=False,
         )
-        result = apply_cleansing("run-14", _conn_cfg(users_db), [cfg])
+        result = apply_cleansing("run-14", _conn_cfg(users_db), [cfg], dry_run=False)
         assert result.total_changes == 0
 
     def test_unknown_operation_recorded_as_error(self, users_db):
@@ -394,7 +405,7 @@ class TestApplyCleansing:
         )
         # Force an invalid operation by direct attribute set after construction
         cfg.operation = "foobar"  # type: ignore[assignment]
-        result = apply_cleansing("run-15", _conn_cfg(users_db), [cfg])
+        result = apply_cleansing("run-15", _conn_cfg(users_db), [cfg], dry_run=False)
         assert len(result.errors) == 1
         assert "foobar" in result.errors[0]
 
@@ -413,7 +424,7 @@ class TestApplyCleansing:
                 params={"trim": True, "case": "title"},
             ),
         ]
-        result = apply_cleansing("run-16", _conn_cfg(users_db), cfgs)
+        result = apply_cleansing("run-16", _conn_cfg(users_db), cfgs, dry_run=False)
         assert result.total_changes >= 2
         assert result.tables_affected == 1  # both ops on same table
 
@@ -435,7 +446,7 @@ class TestApplyCleansing:
                 table_name="t2", column_name="v", operation="standardize", params={"trim": True}
             ),
         ]
-        result = apply_cleansing("run-17", _conn_cfg(db_file), cfgs)
+        result = apply_cleansing("run-17", _conn_cfg(db_file), cfgs, dry_run=False)
         assert result.tables_affected == 2
         assert result.total_changes == 2
 
@@ -446,5 +457,5 @@ class TestApplyCleansing:
             operation="standardize",
             params={"trim": True},
         )
-        result = apply_cleansing("my-run-id", _conn_cfg(users_db), [cfg])
+        result = apply_cleansing("my-run-id", _conn_cfg(users_db), [cfg], dry_run=False)
         assert result.run_id == "my-run-id"

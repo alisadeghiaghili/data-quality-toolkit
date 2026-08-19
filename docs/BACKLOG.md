@@ -30,20 +30,17 @@ repository:
 
 | Task | Branch | Result | On `main`? |
 |---|---|---|---|
-| `DQT-02` — parameterize SQL, unify identifier quoting | `dqt-02` | 158 → 166 passing; `range` bounds bound as DBAPI params; `_qualified_table` deleted; `sql/_identifiers.py` the sole quoting authority; the exact `DQT-critical-review.md` §1.3 payload plus a malicious-table-name payload blocked in `tests/unit/sql/test_sql_injection.py`, with a revert → fail → restore → pass transcript | **No** |
-| `DQT-03` — enforce `read_only`, add `--dry-run` | *(unverified — see below)* | Previously claimed done at `7ae3fdc`; that commit does not exist anywhere in this repository | **No** |
+| `DQT-02` — parameterize SQL, unify identifier quoting | `dqt-02` | 158 → 166 passing; `range` bounds bound as DBAPI params; `_qualified_table` deleted; `sql/_identifiers.py` the sole quoting authority; the exact `DQT-critical-review.md` §1.3 payload plus a malicious-table-name payload blocked in `tests/unit/sql/test_sql_injection.py`, with a revert → fail → restore → pass transcript | **Yes** (merged via PR #3, `e72d93d`) |
+| `DQT-03` — enforce `read_only`, add `--dry-run` | `dqt-03` | 166 → 183 passing; `sql/rules.py::_get_connection` opens SQLite `mode=ro` (PostgreSQL: `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`, untested — no driver in CI); `sql/cleansing.py::apply_cleansing` raises `ReadOnlyViolationError` (new: `src/dqt/exceptions.py`) before building any mutating statement when `read_only=True`, and separately defaults to `dry_run=True`; `dqt profile` gained `--dry-run`/`--commit`; four-hash checksum proof and a revert → fail → restore → pass transcript in `tests/unit/sql/test_read_only.py` | **No** |
 
-**Consequence:** `main` still contains both defects. It has 158 tests, an
-unparameterized `range` bound at `rules.py:295-319`, and an unenforced
-`read_only`. `DQT-02`'s fix is real and verifiable on branch `dqt-02` (166
-tests, all four honesty-gate gates green); `DQT-03`'s "done" status is not
-backed by anything reproducible in this repository and should be treated as
-not started until someone actually does the work and can point to a commit
-that exists.
+**Consequence:** `main` (at `e72d93d`) now has `DQT-02`'s fix merged, but still
+has an unenforced `read_only`: 166 tests, `ConnectionConfig.read_only` read by
+zero lines of code, `apply_cleansing()` writing regardless of it. `DQT-03`'s
+fix is real and verifiable on branch `dqt-03` (183 tests, all gates green;
+see `tests/unit/sql/test_read_only.py`) but is **not merged**.
 
-**Action:** merge `dqt-02` to pick up the `DQT-02` fix. `DQT-03` still needs to
-be done (or redone) from scratch in this repository — do not assume the prior
-"done" claim for it is real just because `DQT-02`'s turned out to be.
+**Action:** merge `dqt-03` to pick up the `DQT-03` fix, the same way `dqt-02`
+was merged before it.
 
 Remaining roadmap tasks, unstarted as far as this check could determine:
 `DQT-01` (README status block), `DQT-04` (regex dead on SQLite), `DQT-05`

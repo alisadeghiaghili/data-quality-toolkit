@@ -82,8 +82,36 @@ def _get_connection(config: ConnectionConfig) -> Any:
     """Return a DBAPI connection for *config*.
 
     Supports SQLite (``sqlite://...``) and PostgreSQL (``postgresql://...``).
-    The connection is always opened in read-only mode where the driver supports
-    it.
+
+    When ``config.read_only`` is ``True`` (the default — see
+    :class:`~dqt.common.models.ConnectionConfig`), the returned connection
+    cannot write, enforced by the driver/database itself rather than by
+    caller discipline:
+
+    * **SQLite** — opened via the ``file:<path>?mode=ro`` URI form, so any
+      ``INSERT``/``UPDATE``/``DELETE`` raises ``sqlite3.OperationalError:
+      attempt to write a readonly database``. A path of ``":memory:"`` is a
+      documented exception: a fresh in-memory database created by this call
+      is never a persistent asset, so ``mode=ro`` would only make it
+      permanently empty and unusable. It is opened normally in that case.
+      A consequence of the URI form: unlike a plain
+      ``sqlite3.connect(path)``, this does **not** create the database file
+      if it does not already exist — it raises ``sqlite3.OperationalError``
+      instead. That is a deliberate behavior change from the pre-`DQT-03`
+      code (which always auto-created the file); it is treated here as
+      correct, since silently creating a database file you were told to
+      treat as read-only is itself a surprise.
+    * **PostgreSQL** — the session is set to
+      ``SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`` immediately
+      after connecting, so every subsequent transaction on this connection
+      is read-only at the server, not just by convention. (Untested in this
+      repository: there is no PostgreSQL driver or server available in CI —
+      see the task report's ``UNTESTED CODE PATHS``.)
+
+    This is one of two independent enforcement layers for `DQT-03`; the
+    second is :class:`~dqt.exceptions.ReadOnlyViolationError`, raised by
+    :func:`dqt.sql.cleansing.apply_cleansing` before this function is even
+    called.
 
     Args:
         config: Validated connection configuration.
@@ -97,7 +125,11 @@ def _get_connection(config: ConnectionConfig) -> Any:
 
     Example::
 
-        conn = _get_connection(ConnectionConfig(id="dev", dsn="sqlite:///dev.db"))
+        # read_only=False because the example path need not already exist;
+        # the default (read_only=True) requires the file to exist first.
+        conn = _get_connection(
+            ConnectionConfig(id="dev", dsn="sqlite:///dev.db", read_only=False)
+        )
         conn.close()
     """
     dsn = config.dsn
@@ -107,7 +139,10 @@ def _get_connection(config: ConnectionConfig) -> Any:
         db_path = (
             dsn[len("sqlite:///") :] if dsn.startswith("sqlite:///") else dsn[len("sqlite://") :]
         )
-        conn = sqlite3.connect(db_path)
+        if config.read_only and db_path != ":memory:":
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        else:
+            conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         return conn
     if dsn.startswith("postgresql://") or dsn.startswith("postgres://"):
@@ -118,7 +153,13 @@ def _get_connection(config: ConnectionConfig) -> Any:
                 "psycopg2 is required for PostgreSQL connections. "
                 "Install with: pip install psycopg2-binary"
             ) from exc
-        return psycopg2.connect(dsn)
+        pg_conn = psycopg2.connect(dsn)
+        if config.read_only:
+            pg_cursor = pg_conn.cursor()
+            pg_cursor.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+            pg_cursor.close()
+            pg_conn.commit()
+        return pg_conn
     raise ValueError(
         f"Unsupported DSN scheme in '{dsn}'. Supported: sqlite://, postgresql://, postgres://"
     )
