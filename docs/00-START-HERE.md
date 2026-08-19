@@ -81,17 +81,28 @@ gone" as an inference (now verified absent), and it left `src/dqt/ui/` unread
 
 > **⚠ Read §3.0 first. The public repository is behind verified local work.**
 
-### 3.0 Two completed security fixes are not on `main`
+### 3.0 `DQT-02` is fixed on a branch in this repository; `DQT-03` is a separate, unverified claim
 
-`DQT-02` (parameterize all SQL, unify identifier quoting, commit `a1f6ce7`) and
-`DQT-03` (enforce `read_only`, add `--dry-run`, commit `7ae3fdc`) are **done and
-independently verified** — 158 → 197 → 218 passing tests, with supervisor-written
-exploits and a four-hash checksum proof. Neither commit exists on `origin/main`;
-they were produced without push credentials and exported as patches.
+The record that used to stand here claimed `DQT-02` was fixed at commit
+`a1f6ce7`. That commit does not exist in this repository
+(`git cat-file -t a1f6ce7` fails) — it was never landed, just claimed.
+`DQT-02` (parameterize all SQL, unify identifier quoting) is now actually
+implemented in this repository, on branch `dqt-02`: 158 → 166 passing tests,
+with a pre-fix exploit reproduced against unfixed `main` and a
+revert → fail → restore → pass transcript
+(`tests/unit/sql/test_sql_injection.py`). It has not been merged to `main`.
 
-Everything in §3.1–§3.3 below therefore describes **the public repository**, which
-still carries both defects. Land those two commits before treating any of it as
-the current state of your working tree. See `BACKLOG.md` §1.
+`DQT-03` (enforce `read_only`, add `--dry-run`) is still recorded elsewhere in
+this document set as done at commit `7ae3fdc`. That commit also does not exist
+in this repository (`git cat-file -t 7ae3fdc` fails, the same problem as the
+old `DQT-02` record). `DQT-03` was out of scope for the session that fixed
+`DQT-02`; treat its "done" claim as unverified until it is reproduced in this
+repository the same way `DQT-02` now has been. See `BACKLOG.md` §1.
+
+Everything in §3.1–§3.3 below therefore describes **the `main` branch**, which
+still carries the `DQT-03` defect (§3.3 item 2) and — until `dqt-02` is
+merged — nominally still lists the `DQT-02` defect (§3.3 item 1) as well,
+even though a fix for it exists on `dqt-02` in this repository.
 
 ### 3.1 Works, and is tested
 
@@ -119,10 +130,16 @@ the current state of your working tree. See `BACKLOG.md` §1.
 
 Each is a correctness or safety problem that constrains what can be built on top.
 
-1. **SQL injection via rule files.** `range` bounds are f-string-interpolated at
-   `rules.py:295-319`; table identifiers are not quoted in the rules engine.
-   `DQT-critical-review.md` §1.3 **reproduced a working exploit** — a subquery
-   executing through a range bound. → **`DQT-02`, fixed locally, not pushed.**
+1. **SQL injection via rule files** (on `main`; fixed on branch `dqt-02`).
+   `range` bounds were f-string-interpolated at `rules.py:295-319`; table
+   identifiers were not quoted in the rules engine. `DQT-critical-review.md`
+   §1.3 **reproduced a working exploit** — a subquery executing through a
+   range bound. → **`DQT-02`, fixed on branch `dqt-02` in this repository,
+   not merged to `main`.** The fix parameterizes every literal reaching SQL
+   in `rules.py`/`cleansing.py` and routes every identifier through the
+   single quoting authority in `sql/_identifiers.py`; see
+   `tests/unit/sql/test_sql_injection.py` for the exploit reproduction and
+   the fixed-code regression tests.
 2. **`read_only` is enforced nowhere.** `ConnectionConfig.read_only` is accepted
    and has zero consumers. There is no `--dry-run`. The tool issues `UPDATE` and
    `DELETE`. → **`DQT-03`, fixed locally, not pushed.**

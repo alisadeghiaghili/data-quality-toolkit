@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from dqt.common.models import ConnectionConfig, DQMetric
+from dqt.sql._identifiers import qualified_identifier, quote_identifier
 from dqt.sql.schema_discovery import DiscoveredColumn, DiscoveredTable, connect_sql
 
 
@@ -170,7 +171,7 @@ class SqlProfiler:
         )
 
     def _fetch_row_count(self, conn: Any, table: DiscoveredTable) -> int:
-        table_ref = _table_ref(table.schema_name, table.table_name)
+        table_ref = qualified_identifier(table.schema_name, table.table_name)
         cursor = conn.execute(f"SELECT COUNT(*) FROM {table_ref}")
         return int(cursor.fetchone()[0])
 
@@ -181,8 +182,8 @@ class SqlProfiler:
         column: DiscoveredColumn,
         row_count: int,
     ) -> ColumnProfile:
-        table_ref = _table_ref(table.schema_name, table.table_name)
-        col_ref = _ident(column.column_name)
+        table_ref = qualified_identifier(table.schema_name, table.table_name)
+        col_ref = quote_identifier(column.column_name)
         cursor = conn.execute(f"SELECT COUNT(*) FROM {table_ref} WHERE {col_ref} IS NULL")
         null_count = int(cursor.fetchone()[0])
         return ColumnProfile(
@@ -192,13 +193,3 @@ class SqlProfiler:
             null_count=null_count,
             row_count=row_count,
         )
-
-
-def _ident(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
-
-
-def _table_ref(schema_name: str, table_name: str) -> str:
-    if schema_name in {"main", ""}:
-        return _ident(table_name)
-    return f"{_ident(schema_name)}.{_ident(table_name)}"

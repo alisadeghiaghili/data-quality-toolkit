@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from dqt.common.models import ConnectionConfig
+from dqt.sql._identifiers import quote_identifier
 
 
 @dataclass(slots=True)
@@ -146,7 +147,9 @@ def _discover_sqlite(connection_config: ConnectionConfig) -> list[DiscoveredTabl
         tables: list[DiscoveredTable] = []
 
         for table_name in table_names:
-            pragma_rows = conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+            pragma_rows = conn.execute(
+                f"PRAGMA table_info({quote_identifier(table_name)})"
+            ).fetchall()
             columns = [
                 DiscoveredColumn(
                     schema_name="main",

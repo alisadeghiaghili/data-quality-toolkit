@@ -19,25 +19,31 @@
 
 ## 1. Roadmap task status — and a landing problem
 
-Two roadmap tasks are **complete and independently verified, but their commits
-are not on `origin/main`.** They were built in an environment with no push
-credentials and exported as `git format-patch` output.
+This section previously claimed both `DQT-02` and `DQT-03` were complete at
+commits `a1f6ce7` and `7ae3fdc` respectively, exported as patches from an
+environment with no push credentials. Neither commit exists in this
+repository (`git cat-file -t a1f6ce7` and `git cat-file -t 7ae3fdc` both
+fail) — that record could not be reproduced and should not have been trusted.
 
-| Task | Local commit | Result | On `origin/main`? |
+`DQT-02` has since actually been implemented, from scratch, in this
+repository:
+
+| Task | Branch | Result | On `main`? |
 |---|---|---|---|
-| `DQT-02` — parameterize SQL, unify identifier quoting | `a1f6ce7` | 158 → 197 passing; range bounds bound as DBAPI params; `_qualified_table` deleted; `sql/_identifiers.py` the sole quoting authority; 7 supervisor exploits blocked incl. a schema-name vector | **No** |
-| `DQT-03` — enforce `read_only`, add `--dry-run` | `7ae3fdc` | 197 → 218 passing; SQLite opened `mode=ro`; `ReadOnlyViolationError` raised before any statement; `apply_cleansing(dry_run=True)` by default; four-hash checksum proof | **No** |
+| `DQT-02` — parameterize SQL, unify identifier quoting | `dqt-02` | 158 → 166 passing; `range` bounds bound as DBAPI params; `_qualified_table` deleted; `sql/_identifiers.py` the sole quoting authority; the exact `DQT-critical-review.md` §1.3 payload plus a malicious-table-name payload blocked in `tests/unit/sql/test_sql_injection.py`, with a revert → fail → restore → pass transcript | **No** |
+| `DQT-03` — enforce `read_only`, add `--dry-run` | *(unverified — see below)* | Previously claimed done at `7ae3fdc`; that commit does not exist anywhere in this repository | **No** |
 
-**Consequence, and it is the most urgent item in this file:** the public
-repository still contains both defects. `origin/main` has 158 tests, an
+**Consequence:** `main` still contains both defects. It has 158 tests, an
 unparameterized `range` bound at `rules.py:295-319`, and an unenforced
-`read_only`. Anyone who clones the repo today — or reads its docs and starts
-work — will either be exposed to the vulnerabilities or will redo two days of
-verified work.
+`read_only`. `DQT-02`'s fix is real and verifiable on branch `dqt-02` (166
+tests, all four honesty-gate gates green); `DQT-03`'s "done" status is not
+backed by anything reproducible in this repository and should be treated as
+not started until someone actually does the work and can point to a commit
+that exists.
 
-**Action:** land `a1f6ce7` and `7ae3fdc` before starting anything else. Nothing
-below is worth doing on top of a `main` that is two verified security fixes
-behind a local branch.
+**Action:** merge `dqt-02` to pick up the `DQT-02` fix. `DQT-03` still needs to
+be done (or redone) from scratch in this repository — do not assume the prior
+"done" claim for it is real just because `DQT-02`'s turned out to be.
 
 Remaining roadmap tasks, unstarted as far as this check could determine:
 `DQT-01` (README status block), `DQT-04` (regex dead on SQLite), `DQT-05`

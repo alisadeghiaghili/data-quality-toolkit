@@ -63,7 +63,8 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from dqt.common.models import ConnectionConfig, PipelineResult
-from dqt.sql.rules import _get_connection, _qualified_table
+from dqt.sql._identifiers import qualified_identifier, quote_identifier
+from dqt.sql.rules import _get_connection
 
 # ---------------------------------------------------------------------------
 # Public data classes
@@ -248,11 +249,12 @@ def _standardize(
     trim = params.get("trim", True)
     normalize_spaces = params.get("normalize_spaces", False)
     case = params.get("case")  # "upper" | "lower" | "title" | None
-    tbl = _qualified_table(schema_name, table_name)
+    tbl = qualified_identifier(schema_name, table_name)
+    col = quote_identifier(column_name)
 
     rows = _fetch_all_dicts(
         cursor,
-        f'SELECT rowid AS dqt_row_id, "{column_name}" FROM {tbl} WHERE "{column_name}" IS NOT NULL',
+        f"SELECT rowid AS dqt_row_id, {col} FROM {tbl} WHERE {col} IS NOT NULL",
     )
 
     logs: list[CleansingLog] = []
@@ -275,7 +277,7 @@ def _standardize(
 
         if value != original:
             cursor.execute(
-                f'UPDATE {tbl} SET "{column_name}" = ? WHERE rowid = ?',
+                f"UPDATE {tbl} SET {col} = ? WHERE rowid = ?",
                 (value, row["dqt_row_id"]),
             )
             logs.append(
@@ -335,14 +337,15 @@ def _deduplicate(
     if not key_columns:
         raise ValueError("deduplicate operation requires params.key_columns (non-empty list).")
     keep: str = params.get("keep", "first")
-    tbl = _qualified_table(schema_name, table_name)
+    tbl = qualified_identifier(schema_name, table_name)
 
-    key_expr = ", ".join(f'"{c}"' for c in key_columns)
+    quoted_keys = [quote_identifier(c) for c in key_columns]
+    key_expr = ", ".join(quoted_keys)
     keep_func = "MIN" if keep == "first" else "MAX"
     # A NULL-valued key column is not equal to another NULL for duplicate purposes —
     # GROUP BY would otherwise collapse all NULL-keyed rows into one "duplicate" group
     # and delete genuinely distinct rows. Exclude any row with a NULL key column.
-    not_null_guard = " AND ".join(f'"{c}" IS NOT NULL' for c in key_columns)
+    not_null_guard = " AND ".join(f"{qk} IS NOT NULL" for qk in quoted_keys)
 
     # Find rowids to delete: those that are NOT the keep-rowid for their key group
     dup_sql = f"""
@@ -440,13 +443,16 @@ def _lookup_correct(
     to_col: str = params.get("to_column", "to_value")
     lookup_schema: str | None = params.get("lookup_schema", schema_name)
 
-    tbl = _qualified_table(schema_name, table_name)
-    lookup_tbl = _qualified_table(lookup_schema, lookup_table)
+    tbl = qualified_identifier(schema_name, table_name)
+    lookup_tbl = qualified_identifier(lookup_schema, lookup_table)
+    col = quote_identifier(column_name)
+    from_col_q = quote_identifier(from_col)
+    to_col_q = quote_identifier(to_col)
 
     # Fetch the mapping
     mapping_rows = _fetch_all_dicts(
         cursor,
-        f'SELECT "{from_col}", "{to_col}" FROM {lookup_tbl}',
+        f"SELECT {from_col_q}, {to_col_q} FROM {lookup_tbl}",
     )
     mapping: dict[Any, Any] = {r[from_col]: r[to_col] for r in mapping_rows}
     if not mapping:
@@ -455,14 +461,14 @@ def _lookup_correct(
     logs: list[CleansingLog] = []
     rows = _fetch_all_dicts(
         cursor,
-        f'SELECT rowid AS dqt_row_id, "{column_name}" FROM {tbl} WHERE "{column_name}" IS NOT NULL',
+        f"SELECT rowid AS dqt_row_id, {col} FROM {tbl} WHERE {col} IS NOT NULL",
     )
     for row in rows:
         old_val = row[column_name]
         if old_val in mapping:
             new_val = mapping[old_val]
             cursor.execute(
-                f'UPDATE {tbl} SET "{column_name}" = ? WHERE rowid = ?',
+                f"UPDATE {tbl} SET {col} = ? WHERE rowid = ?",
                 (new_val, row["dqt_row_id"]),
             )
             logs.append(
