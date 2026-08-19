@@ -23,6 +23,11 @@ Design invariants
 3. No schema changes, no DDL, no masking, no compliance features.
 4. All SQL is executed through DBAPI2 connections obtained from
    :func:`~dqt.sql.rules._get_connection` (shared helper).
+5. :func:`apply_cleansing` never writes by accident: it raises
+   :class:`~dqt.exceptions.ReadOnlyViolationError` if the connection is
+   ``read_only`` (the default), and separately defaults to ``dry_run=True``
+   so a caller must opt into both a writable connection and an explicit
+   commit before any row changes.
 
 Public API
 ----------
@@ -38,7 +43,8 @@ Example::
     from dqt.common.models import ConnectionConfig
     from dqt.sql.cleansing import CleansingConfig, apply_cleansing
 
-    conn_cfg = ConnectionConfig(id="dev", dsn="sqlite:///dev.db")
+    # read_only=False: this connection is being deliberately opted into writes.
+    conn_cfg = ConnectionConfig(id="dev", dsn="sqlite:///dev.db", read_only=False)
     configs = [
         CleansingConfig(
             table_name="customers",
@@ -53,7 +59,11 @@ Example::
             params={"key_columns": ["email"], "keep": "first"},
         ),
     ]
-    result = apply_cleansing(run_id="run-001", connection_config=conn_cfg, configs=configs)
+    # dry_run=False: without it, this call only previews the change and
+    # commits nothing.
+    result = apply_cleansing(
+        run_id="run-001", connection_config=conn_cfg, configs=configs, dry_run=False
+    )
     print(f"{result.total_changes} change(s) across {result.tables_affected} table(s)")
 """
 
@@ -63,6 +73,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from dqt.common.models import ConnectionConfig, PipelineResult
+from dqt.exceptions import ReadOnlyViolationError
 from dqt.sql._identifiers import qualified_identifier, quote_identifier
 from dqt.sql.rules import _get_connection
 
@@ -157,15 +168,24 @@ class CleansingResult:
     Attributes:
         run_id: Pipeline run identifier.
         log: Ordered list of all :class:`CleansingLog` entries produced
-            during this run.
+            during this run. When ``dry_run`` is ``True``, these entries
+            describe changes that *would* be made — the database was not
+            touched.
         total_changes: Total number of value-level changes (UPDATE + DELETE).
-        tables_affected: Number of distinct tables that were modified.
+            When ``dry_run`` is ``True``, this counts planned changes, not
+            changes actually applied.
+        tables_affected: Number of distinct tables that were modified (or,
+            in dry-run mode, that would have been modified).
         errors: List of error messages for operations that could not be
             applied (non-fatal; the run continues).
+        dry_run: ``True`` if this result came from a preview run that
+            executed no mutating SQL and committed nothing (the default for
+            :func:`apply_cleansing`); ``False`` if the changes described by
+            ``log`` were actually written and committed.
 
     Example::
 
-        result = apply_cleansing(run_id="run-001", ...)
+        result = apply_cleansing(run_id="run-001", ..., dry_run=False)
         print(result.total_changes, result.tables_affected)
     """
 
@@ -174,6 +194,7 @@ class CleansingResult:
     total_changes: int = 0
     tables_affected: int = 0
     errors: list[str] = field(default_factory=list)
+    dry_run: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +234,7 @@ def _standardize(
     table_name: str,
     column_name: str,
     params: dict[str, Any],
+    dry_run: bool = False,
 ) -> list[CleansingLog]:
     """Standardize string values in *column_name*.
 
@@ -227,8 +249,8 @@ def _standardize(
         ``"upper"``, ``"lower"``, or ``"title"``.  ``None`` = no case change.
         Default ``None``.
 
-    Only rows whose value would actually change are updated and logged.
-    NULL values are skipped.
+    Only rows whose value would actually change are logged; when
+    *dry_run* is ``False`` they are also updated.  NULL values are skipped.
 
     Args:
         cursor: Open DBAPI cursor.
@@ -237,14 +259,16 @@ def _standardize(
         table_name: Target table name.
         column_name: Target column name.
         params: Standardization parameters (see above).
+        dry_run: When ``True``, compute and log the rows that would change
+            without executing the ``UPDATE`` statement.
 
     Returns:
-        List of :class:`CleansingLog` entries, one per changed row.
+        List of :class:`CleansingLog` entries, one per (would-be) changed row.
 
     Example::
 
         logs = _standardize(cursor, "run-1", None, "users", "email",
-                            {"case": "lower", "trim": True})
+                            {"case": "lower", "trim": True}, dry_run=False)
     """
     trim = params.get("trim", True)
     normalize_spaces = params.get("normalize_spaces", False)
@@ -276,10 +300,11 @@ def _standardize(
             value = value.title()
 
         if value != original:
-            cursor.execute(
-                f"UPDATE {tbl} SET {col} = ? WHERE rowid = ?",
-                (value, row["dqt_row_id"]),
-            )
+            if not dry_run:
+                cursor.execute(
+                    f"UPDATE {tbl} SET {col} = ? WHERE rowid = ?",
+                    (value, row["dqt_row_id"]),
+                )
             logs.append(
                 CleansingLog(
                     run_id=run_id,
@@ -301,6 +326,7 @@ def _deduplicate(
     schema_name: str | None,
     table_name: str,
     params: dict[str, Any],
+    dry_run: bool = False,
 ) -> list[CleansingLog]:
     """Remove duplicate rows based on key columns.
 
@@ -312,8 +338,9 @@ def _deduplicate(
         ``"first"`` (keep the lowest rowid) or ``"last"`` (keep the highest).
         Default ``"first"``.
 
-    For every set of duplicates, all rows except the one to keep are deleted
-    and a :class:`CleansingLog` entry is written for each deleted row.
+    For every set of duplicates, all rows except the one to keep are
+    (would be, when *dry_run* is ``True``) deleted, and a
+    :class:`CleansingLog` entry is written for each such row.
 
     Args:
         cursor: Open DBAPI cursor.
@@ -321,9 +348,11 @@ def _deduplicate(
         schema_name: Schema name or ``None``.
         table_name: Target table name.
         params: Deduplication parameters (see above).
+        dry_run: When ``True``, identify the rows that would be deleted
+            without executing the ``DELETE`` statement.
 
     Returns:
-        List of :class:`CleansingLog` entries, one per deleted row.
+        List of :class:`CleansingLog` entries, one per (would-be) deleted row.
 
     Raises:
         ValueError: If *key_columns* is missing or empty.
@@ -331,7 +360,7 @@ def _deduplicate(
     Example::
 
         logs = _deduplicate(cursor, "run-1", None, "users",
-                            {"key_columns": ["email"], "keep": "first"})
+                            {"key_columns": ["email"], "keep": "first"}, dry_run=False)
     """
     key_columns: list[str] = params.get("key_columns", [])
     if not key_columns:
@@ -370,7 +399,8 @@ def _deduplicate(
             (row["dqt_row_id"],),
         )
         before = full_row[0] if full_row else {}
-        cursor.execute(f"DELETE FROM {tbl} WHERE rowid = ?", (row["dqt_row_id"],))
+        if not dry_run:
+            cursor.execute(f"DELETE FROM {tbl} WHERE rowid = ?", (row["dqt_row_id"],))
         logs.append(
             CleansingLog(
                 run_id=run_id,
@@ -393,6 +423,7 @@ def _lookup_correct(
     table_name: str,
     column_name: str,
     params: dict[str, Any],
+    dry_run: bool = False,
 ) -> list[CleansingLog]:
     """Replace column values using a domain lookup table.
 
@@ -420,9 +451,11 @@ def _lookup_correct(
         table_name: Target table name.
         column_name: Target column name.
         params: Lookup correction parameters (see above).
+        dry_run: When ``True``, identify the rows that would be corrected
+            without executing the ``UPDATE`` statement.
 
     Returns:
-        List of :class:`CleansingLog` entries, one per corrected row.
+        List of :class:`CleansingLog` entries, one per (would-be) corrected row.
 
     Raises:
         ValueError: If *lookup_table* param is missing.
@@ -434,6 +467,7 @@ def _lookup_correct(
             {"lookup_table": "status_map",
              "from_column": "raw_status",
              "to_column": "canonical_status"},
+            dry_run=False,
         )
     """
     lookup_table: str = params.get("lookup_table", "")
@@ -467,10 +501,11 @@ def _lookup_correct(
         old_val = row[column_name]
         if old_val in mapping:
             new_val = mapping[old_val]
-            cursor.execute(
-                f"UPDATE {tbl} SET {col} = ? WHERE rowid = ?",
-                (new_val, row["dqt_row_id"]),
-            )
+            if not dry_run:
+                cursor.execute(
+                    f"UPDATE {tbl} SET {col} = ? WHERE rowid = ?",
+                    (new_val, row["dqt_row_id"]),
+                )
             logs.append(
                 CleansingLog(
                     run_id=run_id,
@@ -495,30 +530,66 @@ def apply_cleansing(
     run_id: str,
     connection_config: ConnectionConfig,
     configs: list[CleansingConfig],
+    dry_run: bool = True,
 ) -> CleansingResult:
     """Execute a list of cleansing configs against a live database.
+
+    Two independent safety checks gate every call, corresponding to the two
+    ways a caller can fail to opt into a write:
+
+    1. **`read_only`.** If ``connection_config.read_only`` is ``True`` (the
+       default), this function raises
+       :class:`~dqt.exceptions.ReadOnlyViolationError` immediately, before
+       opening a connection or building any SQL statement. This check is
+       independent of, and in addition to, the connection-layer enforcement
+       in :func:`dqt.sql.rules._get_connection` (SQLite ``mode=ro``,
+       PostgreSQL ``TRANSACTION READ ONLY``): even if that layer were ever
+       bypassed or ported to a driver this check does not know about, this
+       one still stands.
+    2. **`dry_run`.** Independently of ``read_only``, if *dry_run* is
+       ``True`` (the default), this function computes and logs exactly the
+       same :class:`CleansingLog` entries it would produce for a real run,
+       but never executes an ``UPDATE``/``DELETE`` statement and never
+       commits. Pass ``dry_run=False`` — the equivalent of a CLI caller
+       passing ``--commit`` — to actually apply the changes.
+
+    Both defaults are safe: calling this function with only *run_id*,
+    *connection_config*, and *configs* neither raises nor writes; it returns
+    a preview. Actually writing requires an explicitly writable connection
+    (``read_only=False``) *and* an explicit ``dry_run=False``.
 
     Applies each :class:`CleansingConfig` in order.  Each operation is
     wrapped in a try/except so a single failing config does not abort the
     entire run; errors are collected in :attr:`CleansingResult.errors`.
 
-    All changes are committed together at the end.  If an unrecoverable
-    error occurs before commit, the connection is rolled back.
+    When *dry_run* is ``False``, all changes are committed together at the
+    end; if an unrecoverable error occurs before commit, the connection is
+    rolled back. When *dry_run* is ``True``, the connection is always rolled
+    back (nothing was executed that could commit in the first place).
 
     Args:
         run_id: Unique identifier for the current pipeline run.
-        connection_config: Database connection configuration.
+        connection_config: Database connection configuration.  Must have
+            ``read_only=False`` or this call raises immediately.
         configs: Ordered list of :class:`CleansingConfig` objects to apply.
+        dry_run: When ``True`` (the default), compute and log planned
+            changes without writing them. When ``False``, execute and
+            commit them.
 
     Returns:
-        :class:`CleansingResult` summarising all changes and any errors.
+        :class:`CleansingResult` summarising all (planned or applied)
+        changes and any errors.
+
+    Raises:
+        ReadOnlyViolationError: If ``connection_config.read_only`` is
+            ``True``.
 
     Example::
 
         from dqt.common.models import ConnectionConfig
         from dqt.sql.cleansing import CleansingConfig, apply_cleansing
 
-        conn_cfg = ConnectionConfig(id="dev", dsn="sqlite:///dev.db")
+        conn_cfg = ConnectionConfig(id="dev", dsn="sqlite:///dev.db", read_only=False)
         result = apply_cleansing(
             run_id="run-001",
             connection_config=conn_cfg,
@@ -530,10 +601,19 @@ def apply_cleansing(
                     params={"case": "lower", "trim": True},
                 )
             ],
+            dry_run=False,
         )
         print(result.total_changes)
     """
-    cleansing_result = CleansingResult(run_id=run_id)
+    if connection_config.read_only:
+        raise ReadOnlyViolationError(
+            f"Connection '{connection_config.id}' has read_only=True; "
+            "apply_cleansing() refuses to build any mutating statement against "
+            "it. Set read_only=False on the ConnectionConfig to permit "
+            "cleansing writes (dry_run=False is separately required to commit)."
+        )
+
+    cleansing_result = CleansingResult(run_id=run_id, dry_run=dry_run)
     tables_modified: set[str] = set()
 
     db_conn = _get_connection(connection_config)
@@ -554,6 +634,7 @@ def apply_cleansing(
                         cfg.table_name,
                         cfg.column_name,
                         cfg.params,
+                        dry_run,
                     )
                 elif cfg.operation == "deduplicate":
                     logs = _deduplicate(
@@ -562,6 +643,7 @@ def apply_cleansing(
                         cfg.schema_name,
                         cfg.table_name,
                         cfg.params,
+                        dry_run,
                     )
                 elif cfg.operation == "lookup_correct":
                     if not cfg.column_name:
@@ -573,6 +655,7 @@ def apply_cleansing(
                         cfg.table_name,
                         cfg.column_name,
                         cfg.params,
+                        dry_run,
                     )
                 else:
                     cleansing_result.errors.append(
@@ -591,7 +674,10 @@ def apply_cleansing(
                     f"Error in '{cfg.operation}' on {cfg.table_name}.{cfg.column_name}: {exc}"
                 )
 
-        db_conn.commit()
+        if dry_run:
+            db_conn.rollback()
+        else:
+            db_conn.commit()
 
     except Exception:
         db_conn.rollback()
