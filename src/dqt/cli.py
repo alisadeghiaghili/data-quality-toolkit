@@ -16,6 +16,19 @@ Usage examples::
 
 All log/progress output is written to stderr; only the final report path is
 printed to stdout so the caller can capture it via shell substitution.
+
+Dry run vs. commit
+------------------
+
+``profile`` defaults to ``--dry-run``: the connection to the profiled
+database is opened read-only (:attr:`~dqt.common.models.ConnectionConfig.read_only`,
+enforced by :func:`dqt.sql.rules._get_connection`), so no mutating
+operation can commit. Pass ``--commit`` to open the connection read-write.
+As of this version, ``profile`` itself never invokes cleansing (stage 5 of
+:meth:`~dqt.sql.pipeline.DQTPipeline.run` is a documented pass-through — see
+``dqt.sql.cleansing.cleanse``), so ``--commit`` currently only affects how
+the connection is opened; it becomes load-bearing once a future task wires
+cleansing configs into the pipeline.
 """
 
 from __future__ import annotations
@@ -104,6 +117,23 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Logical connection identifier stored in run history (default: cli).",
     )
+    commit_group = profile.add_mutually_exclusive_group()
+    commit_group.add_argument(
+        "--dry-run",
+        dest="commit",
+        action="store_false",
+        help=("Open the connection read-only and do not commit any mutating operation (default)."),
+    )
+    commit_group.add_argument(
+        "--commit",
+        dest="commit",
+        action="store_true",
+        help=(
+            "Open the connection read-write and allow mutating operations to "
+            "commit. Without this flag, the run is a dry run."
+        ),
+    )
+    profile.set_defaults(commit=False)
     return parser
 
 
@@ -145,6 +175,36 @@ def _load_config_file(path: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         _err.print(f"[red]Failed to parse config JSON:[/red] {exc}")
         sys.exit(1)
+
+
+def _build_connection_config(args: argparse.Namespace) -> ConnectionConfig:
+    """Build a ConnectionConfig from CLI args, honoring --dry-run/--commit.
+
+    ``args.commit`` defaults to ``False`` (i.e. ``--dry-run``, the default
+    unless ``--commit`` was passed).  This function maps that directly onto
+    :attr:`~dqt.common.models.ConnectionConfig.read_only`: without
+    ``--commit``, the connection used for this run is opened read-only
+    (enforced at the connection layer by
+    :func:`dqt.sql.rules._get_connection`), regardless of what a future
+    mutating stage might otherwise attempt. ``--commit`` is required to open
+    a writable connection.
+
+    Args:
+        args: Parsed CLI namespace for the ``profile`` subcommand.
+
+    Returns:
+        A validated :class:`~dqt.common.models.ConnectionConfig`.
+
+    Example::
+
+        cfg = _build_connection_config(args)
+        assert cfg.read_only is True  # unless --commit was passed
+    """
+    return ConnectionConfig(
+        id=args.connection_id,
+        dsn=args.dsn,
+        read_only=not args.commit,
+    )
 
 
 def _build_pipeline_config(
@@ -307,10 +367,7 @@ def _cmd_profile(args: argparse.Namespace) -> int:
     if args.config:
         file_cfg = _load_config_file(args.config)
 
-    connection_config = ConnectionConfig(
-        id=args.connection_id,
-        dsn=args.dsn,
-    )
+    connection_config = _build_connection_config(args)
     pipeline_config = _build_pipeline_config(args, file_cfg)
     report_dir = Path(args.report_dir) if args.report_dir else Path.cwd()
     store_path = Path(args.store) if args.store else Path.cwd() / "dqt_runs.db"
