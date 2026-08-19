@@ -92,17 +92,21 @@ with a pre-fix exploit reproduced against unfixed `main` and a
 revert → fail → restore → pass transcript
 (`tests/unit/sql/test_sql_injection.py`). It has not been merged to `main`.
 
-`DQT-03` (enforce `read_only`, add `--dry-run`) is still recorded elsewhere in
-this document set as done at commit `7ae3fdc`. That commit also does not exist
-in this repository (`git cat-file -t 7ae3fdc` fails, the same problem as the
-old `DQT-02` record). `DQT-03` was out of scope for the session that fixed
-`DQT-02`; treat its "done" claim as unverified until it is reproduced in this
-repository the same way `DQT-02` now has been. See `BACKLOG.md` §1.
+`DQT-03` (enforce `read_only`, add `--dry-run`) was also recorded elsewhere in
+this document set as done at commit `7ae3fdc`. That commit does not exist in
+this repository (`git cat-file -t 7ae3fdc` fails, the same problem as the old
+`DQT-02` record). `DQT-03` has since actually been implemented, from scratch,
+in this repository, on branch `dqt-03`: 166 → 183 passing tests, with a
+four-hash checksum proof (hash before / after a read-only run / after a
+guarded write attempt / after a real write with the guard removed — the first
+three match, the fourth differs) and a revert → fail → restore → pass
+transcript (`tests/unit/sql/test_read_only.py`). It has not been merged to
+`main`. See `BACKLOG.md` §1.
 
 Everything in §3.1–§3.3 below therefore describes **the `main` branch**, which
-still carries the `DQT-03` defect (§3.3 item 2) and — until `dqt-02` is
-merged — nominally still lists the `DQT-02` defect (§3.3 item 1) as well,
-even though a fix for it exists on `dqt-02` in this repository.
+— until `dqt-02` and `dqt-03` are merged — still nominally lists both the
+`DQT-02` defect (§3.3 item 1) and the `DQT-03` defect (§3.3 item 2), even
+though fixes for both exist on branches in this repository.
 
 ### 3.1 Works, and is tested
 
@@ -140,9 +144,19 @@ Each is a correctness or safety problem that constrains what can be built on top
    single quoting authority in `sql/_identifiers.py`; see
    `tests/unit/sql/test_sql_injection.py` for the exploit reproduction and
    the fixed-code regression tests.
-2. **`read_only` is enforced nowhere.** `ConnectionConfig.read_only` is accepted
-   and has zero consumers. There is no `--dry-run`. The tool issues `UPDATE` and
-   `DELETE`. → **`DQT-03`, fixed locally, not pushed.**
+2. **`read_only` is enforced nowhere** on `main`. `ConnectionConfig.read_only`
+   is accepted and has zero consumers; there is no `--dry-run`; the tool issues
+   `UPDATE` and `DELETE` regardless of the flag. → **`DQT-03`, fixed on branch
+   `dqt-03` in this repository, not merged to `main`.** The fix enforces
+   `read_only` at the connection layer (`sql/rules.py::_get_connection` opens
+   SQLite with `mode=ro`; PostgreSQL sessions get
+   `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`), adds an
+   independent `ReadOnlyViolationError` guard in
+   `sql/cleansing.py::apply_cleansing` before any mutating statement is built,
+   and adds `dry_run=True`-by-default to `apply_cleansing` plus
+   `--dry-run`/`--commit` flags on `dqt profile`; see
+   `tests/unit/sql/test_read_only.py` for the checksum proof and the
+   revert → fail → restore → pass transcript.
 3. **`regex` rules are dead on the only fully supported backend.** `rules.py:362`
    emits `NOT REGEXP ?`; SQLite ships no `REGEXP` implementation and
    `create_function` appears nowhere in the codebase. Every regex rule produces a

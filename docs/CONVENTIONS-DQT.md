@@ -103,9 +103,12 @@ Rationale: separating *credentials*, not just intent, is what makes the read-onl
 guarantee auditable by a DBA who is not reading DQT's source.
 
 **Status:** `DQT-03` instead enforces read-only on a single connection (SQLite
-opened `mode=ro`, `ReadOnlyViolationError` raised before any statement). That is
-shipped and verified. The two-connection split above is a stronger proposal that
-has not been adopted, and it interacts with `DQT-08`'s driver decision.
+opened `mode=ro`, PostgreSQL set to `TRANSACTION READ ONLY`,
+`ReadOnlyViolationError` raised independently in `sql/cleansing.py` before any
+statement is built). That is implemented and test-backed on branch `dqt-03`
+(`tests/unit/sql/test_read_only.py`), not yet merged to `main`. The
+two-connection split above is a stronger proposal that has not been adopted,
+and it interacts with `DQT-08`'s driver decision.
 
 ### ⚖ S2. Cleansing execution modes *(proposal — see `BACKLOG.md` §3, Q2)*
 
@@ -119,9 +122,14 @@ has not been adopted, and it interacts with `DQT-08`'s driver decision.
   3. an explicit CLI opt-in (`--apply-cleansing`),
   4. a preceding `plan` run whose `plan_id` is passed in.
 
-**Status:** `DQT-03` shipped `apply_cleansing(dry_run=True)` by default plus a
-`--dry-run` CLI flag. The four-condition scheme above is a superset; whether the
-extra ceremony is worth it is undecided.
+**Status:** `DQT-03` implements `apply_cleansing(dry_run=True)` by default plus
+`--dry-run`/`--commit` flags on `dqt profile` (branch `dqt-03`, not yet merged
+to `main`). The CLI flags currently govern only whether the profiled
+connection is opened read-write; `profile` does not itself invoke cleansing
+yet (see S3 below), so they become load-bearing for an actual write once a
+future task wires `CleansingConfig` into the pipeline. The four-condition
+scheme above is a superset; whether the extra ceremony is worth it is
+undecided.
 
 ### ⚖ S3. `cleanse` is not part of the default pipeline *(proposal — see `BACKLOG.md` §3, Q1)*
 
@@ -132,10 +140,10 @@ A profiling run must never be capable of mutating the database it profiles.
 
 > **⚠ Not implemented, and not agreed.** `run()` calls `self.cleanse(result)`
 > unconditionally at stage 5. It reaches a pass-through today, so no writes
-> occur, and `DQT-03`'s read-only enforcement now stands between that path and
-> the database. Two defensible philosophies are in play: defence in depth (what
-> shipped) versus separation of paths (what this section proposes). Escalate;
-> do not pick one silently.
+> occur, and `DQT-03`'s read-only enforcement (branch `dqt-03`, not yet merged)
+> now stands between that path and the database. Two defensible philosophies
+> are in play: defence in depth (what `dqt-03` implements) versus separation of
+> paths (what this section proposes). Escalate; do not pick one silently.
 
 ### S4. Definition of "reversible"
 
