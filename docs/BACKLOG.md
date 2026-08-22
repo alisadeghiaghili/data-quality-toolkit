@@ -13,7 +13,7 @@
 > If an item here ever conflicts with the roadmap, the roadmap wins
 > (`00-START-HERE.md` §1).
 
-**Verified:** 2026-08-17 against `origin/main` at `4629925`.
+**Verified:** 2026-08-22 against `origin/main` at `915bb1c`.
 
 ---
 
@@ -31,16 +31,22 @@ repository:
 | Task | Branch | Result | On `main`? |
 |---|---|---|---|
 | `DQT-02` — parameterize SQL, unify identifier quoting | `dqt-02` | 158 → 166 passing; `range` bounds bound as DBAPI params; `_qualified_table` deleted; `sql/_identifiers.py` the sole quoting authority; the exact `DQT-critical-review.md` §1.3 payload plus a malicious-table-name payload blocked in `tests/unit/sql/test_sql_injection.py`, with a revert → fail → restore → pass transcript | **Yes** (merged via PR #3, `e72d93d`) |
-| `DQT-03` — enforce `read_only`, add `--dry-run` | `dqt-03` | 166 → 183 passing; `sql/rules.py::_get_connection` opens SQLite `mode=ro` (PostgreSQL: `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`, untested — no driver in CI); `sql/cleansing.py::apply_cleansing` raises `ReadOnlyViolationError` (new: `src/dqt/exceptions.py`) before building any mutating statement when `read_only=True`, and separately defaults to `dry_run=True`; `dqt profile` gained `--dry-run`/`--commit`; four-hash checksum proof and a revert → fail → restore → pass transcript in `tests/unit/sql/test_read_only.py` | **No** |
+| `DQT-03` — enforce `read_only`, add `--dry-run` | `dqt-03` | 166 → 183 passing; `sql/rules.py::_get_connection` opens SQLite `mode=ro` (PostgreSQL: `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`, untested — no driver in CI); `sql/cleansing.py::apply_cleansing` raises `ReadOnlyViolationError` (new: `src/dqt/exceptions.py`) before building any mutating statement when `read_only=True`, and separately defaults to `dry_run=True`; `dqt profile` gained `--dry-run`/`--commit`; four-hash checksum proof and a revert → fail → restore → pass transcript in `tests/unit/sql/test_read_only.py` | **Yes** (merged via PR #4, `1b3f917`) |
 
-**Consequence:** `main` (at `e72d93d`) now has `DQT-02`'s fix merged, but still
-has an unenforced `read_only`: 166 tests, `ConnectionConfig.read_only` read by
-zero lines of code, `apply_cleansing()` writing regardless of it. `DQT-03`'s
-fix is real and verifiable on branch `dqt-03` (183 tests, all gates green;
-see `tests/unit/sql/test_read_only.py`) but is **not merged**.
+**Consequence:** `main` (at `915bb1c`) now has both `DQT-02`'s fix (PR #3,
+`e72d93d`) and `DQT-03`'s fix (PR #4, `1b3f917`) merged. `read_only`
+enforcement is real on `main`: `sql/rules.py::_get_connection` opens SQLite
+`mode=ro`, and `sql/cleansing.py::apply_cleansing` raises
+`ReadOnlyViolationError` before building any mutating statement when
+`read_only=True` (`git grep -n read_only -- src/` and
+`git grep -n ReadOnlyViolationError -- src/ tests/` both show it wired
+through; see `tests/unit/sql/test_read_only.py`). The full suite passes: 185
+tests (`pytest -q`).
 
-**Action:** merge `dqt-03` to pick up the `DQT-03` fix, the same way `dqt-02`
-was merged before it.
+**Action:** none — both fixes are merged. The one gap that remains is the
+PostgreSQL side of the same enforcement (`SET SESSION CHARACTERISTICS AS
+TRANSACTION READ ONLY`): it is still untested, since there is no PostgreSQL
+driver or server available in CI.
 
 Remaining roadmap tasks, unstarted as far as this check could determine:
 `DQT-01` (README status block), `DQT-04` (regex dead on SQLite), `DQT-05`

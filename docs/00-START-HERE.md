@@ -90,7 +90,8 @@ The record that used to stand here claimed `DQT-02` was fixed at commit
 implemented in this repository, on branch `dqt-02`: 158 → 166 passing tests,
 with a pre-fix exploit reproduced against unfixed `main` and a
 revert → fail → restore → pass transcript
-(`tests/unit/sql/test_sql_injection.py`). It has not been merged to `main`.
+(`tests/unit/sql/test_sql_injection.py`). It has since been merged to `main`
+via PR #3 (`e72d93d`).
 
 `DQT-03` (enforce `read_only`, add `--dry-run`) was also recorded elsewhere in
 this document set as done at commit `7ae3fdc`. That commit does not exist in
@@ -100,13 +101,13 @@ in this repository, on branch `dqt-03`: 166 → 183 passing tests, with a
 four-hash checksum proof (hash before / after a read-only run / after a
 guarded write attempt / after a real write with the guard removed — the first
 three match, the fourth differs) and a revert → fail → restore → pass
-transcript (`tests/unit/sql/test_read_only.py`). It has not been merged to
-`main`. See `BACKLOG.md` §1.
+transcript (`tests/unit/sql/test_read_only.py`). It has since been merged to
+`main` via PR #4 (`1b3f917`). See `BACKLOG.md` §1.
 
-Everything in §3.1–§3.3 below therefore describes **the `main` branch**, which
-— until `dqt-02` and `dqt-03` are merged — still nominally lists both the
-`DQT-02` defect (§3.3 item 1) and the `DQT-03` defect (§3.3 item 2), even
-though fixes for both exist on branches in this repository.
+Everything in §3.1–§3.3 below therefore describes **the `main` branch**. §3.3
+items 1 and 2 — the `DQT-02` and `DQT-03` defects — are kept as history: both
+are now fixed and merged, and the entries record what was wrong and how each
+fix was verified.
 
 ### 3.1 Works, and is tested
 
@@ -132,22 +133,23 @@ though fixes for both exist on branches in this repository.
 
 ### 3.3 Known defects on `origin/main`
 
-Each is a correctness or safety problem that constrains what can be built on top.
+Each began as a correctness or safety problem that constrained what could be built on top; check each item's own status line, since some are now fixed and merged while others remain open on `main`.
 
-1. **SQL injection via rule files** (on `main`; fixed on branch `dqt-02`).
-   `range` bounds were f-string-interpolated at `rules.py:295-319`; table
+1. **SQL injection via rule files** — fixed and merged to `main` (`DQT-02`,
+   PR #3, `e72d93d`). `range` bounds were f-string-interpolated at `rules.py:295-319`; table
    identifiers were not quoted in the rules engine. `DQT-critical-review.md`
    §1.3 **reproduced a working exploit** — a subquery executing through a
    range bound. → **`DQT-02`, fixed on branch `dqt-02` in this repository,
-   not merged to `main`.** The fix parameterizes every literal reaching SQL
+   merged to `main` via PR #3 (`e72d93d`).** The fix parameterizes every literal reaching SQL
    in `rules.py`/`cleansing.py` and routes every identifier through the
    single quoting authority in `sql/_identifiers.py`; see
    `tests/unit/sql/test_sql_injection.py` for the exploit reproduction and
    the fixed-code regression tests.
-2. **`read_only` is enforced nowhere** on `main`. `ConnectionConfig.read_only`
-   is accepted and has zero consumers; there is no `--dry-run`; the tool issues
-   `UPDATE` and `DELETE` regardless of the flag. → **`DQT-03`, fixed on branch
-   `dqt-03` in this repository, not merged to `main`.** The fix enforces
+2. **`read_only` was enforced nowhere** on `main` before this fix.
+   `ConnectionConfig.read_only` was accepted but had zero consumers; there was
+   no `--dry-run`; the tool issued `UPDATE` and `DELETE` regardless of the
+   flag. → **`DQT-03`, fixed on branch
+   `dqt-03` in this repository, merged to `main` via PR #4 (`1b3f917`).** The fix enforces
    `read_only` at the connection layer (`sql/rules.py::_get_connection` opens
    SQLite with `mode=ro`; PostgreSQL sessions get
    `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`), adds an
