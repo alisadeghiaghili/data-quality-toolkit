@@ -48,10 +48,15 @@
 > since the plan's `1b3f917` baseline.
 >
 > **The "§ Open questions for the owner" section below has since had some
-> of its items settled by the owner.** Rather than rewrite that section,
-> each settled item is annotated in place, dated 2026-08-19, without
-> deleting the original question text — see the annotations inline within
-> that section.
+> of its items settled by the owner, in two rounds** — 2026-08-19 (five
+> items) and 2026-08-26 (Q1, Q2, and Q4, formally settled; Q2 **against**
+> this plan's own recommendation). Rather than rewrite that section, each
+> settled item is annotated in place, without deleting the original
+> question text — see the annotations inline within that section. The
+> 2026-08-26 round also adds a scope amendment to "§ Non-goals reaffirmed"
+> (SQL Server support, sequenced after the two PRs currently in flight),
+> annotated the same way, in place, without deleting the original
+> non-goal text.
 
 **Baseline this plan is written against:** `main` at `1b3f917`. 183 tests passing.
 `ruff check`, `ruff format --check`, `mypy --strict` (22 files), and
@@ -1204,6 +1209,18 @@ Unit 12 downgrades the doc wording; `NEW-E` (render or delete `evidence` and
   configuration.
   > **Still OPEN as of 2026-08-19 (annotated at landing).** Not resolved by
   > this reconciliation.
+  > **SETTLED 2026-08-26:** the owner adopted this plan's own recommendation
+  > — `cleanse` is **removed** from `run()`'s call path. Rationale, as
+  > recorded above and now adopted: a profiling run must not be
+  > *structurally capable* of mutating what it profiles; relying on
+  > `DQT-03`'s read-only guard as the only barrier is the single-point-of-
+  > failure pattern `ENGINEERING-STANDARDS.md` §1.4 says to remove by
+  > design, not by configuration alone. **Consequence:** separate
+  > `cleanse_plan()` / `cleanse_apply()` entry points replace the call inside
+  > `run()`. See Q2's 2026-08-26 annotation immediately below for how this
+  > interacts with unit 6 (`DQT-05`) — Q1 and Q2 together now define those
+  > two entry points. This plan does not redesign unit 6 itself; that is
+  > future work.
 - **Q2 (`--dry-run` vs. a stricter `plan`/`apply` with `plan_id`).** Blocks:
   any future work formalizing distinct cleansing entry points, and shapes
   (without blocking) unit 6's persistence design. Options: keep the shipped
@@ -1217,6 +1234,20 @@ Unit 12 downgrades the doc wording; `NEW-E` (render or delete `evidence` and
   toward keeping cleansing on an automated path.
   > **Still OPEN as of 2026-08-19 (annotated at landing).** Not resolved by
   > this reconciliation.
+  > **SETTLED 2026-08-26, AGAINST this plan's own recommendation above:**
+  > the stricter `plan`/`apply` ceremony with a `plan_id`
+  > (`CONVENTIONS-DQT.md` §1 S2) wins, not the shipped `dry_run` boolean.
+  > This is recorded as an override, not a reword of the recommendation
+  > above — the recommendation text above is left as originally written,
+  > because it is what was actually recommended and rejected, not because
+  > it is still the plan's position. **Consequence:** unit 6 (`DQT-05`)
+  > as scheduled above **must be reshaped** — a plan is generated and
+  > persisted, reviewed, and `apply` runs only against that `plan_id`,
+  > rather than the `dry_run`-boolean persistence design unit 6 currently
+  > describes. Q1 (removing `cleanse` from `run()`) and Q2 (this item)
+  > together now define the two entry points (`cleanse_plan()` /
+  > `cleanse_apply()`). This document does not redesign unit 6 to match —
+  > that redesign is future work, flagged here so it is not missed.
 - **Q4 (separate read/write connections).** Blocks: nothing in this plan
   outright, but determines whether `DQT-08`'s `_connect.py` (unit 9) later
   grows a second entry point. Options: single enforced connection (current,
@@ -1229,6 +1260,12 @@ Unit 12 downgrades the doc wording; `NEW-E` (render or delete `evidence` and
   this plan's v0.1 scope.
   > **Deferred, as recommended (annotated 2026-08-19 at landing).** No
   > change to this plan's treatment of Q4.
+  > **SETTLED 2026-08-26:** formally confirmed as deferred, as this plan
+  > recommended — the single enforced connection stays for now. The
+  > two-credential read/write split is revisited in plan unit 9 (`DQT-08`),
+  > consistent with that unit's own "Not blocked by Q4, but shaped by it"
+  > note above (`_connect.py` would gain a sibling entry point rather than
+  > being redesigned, if this is later resolved the other way).
 - **New: the `metric_name`/`dimension` co-population question (§ Specification
   gaps item 1).** Blocks: unit 5 starting with a settled ground truth for its
   shape tests. Options stated there. Recommendation: the narrower reading
@@ -1282,6 +1319,25 @@ above is later read as license to add them "while in there":
   abstraction exists — nothing in this plan adds one; `DQT-08`'s
   consolidation to `_connect.py` makes adding that abstraction later
   easier, but does not itself build it.
+  > **Amended 2026-08-26 (annotated, original non-goal text above left
+  > intact — SQL Server is no longer withheld indefinitely, it is
+  > scoped):** SQL Server support is being added, as a new explicit unit
+  > sequenced **after** the two PRs currently in flight (this
+  > documentation PR, and unit 2/`DQT-04`). That new unit is not created,
+  > numbered, or detailed here — this is a scope decision, not an
+  > implementation plan for it — but its shape is fixed: it builds the
+  > `dqt/sql/dialects/` abstraction **first**, then the SQL Server driver
+  > and schema discovery on top of it; only after that unit do later units
+  > in whatever sequence follows treat all three dialects (SQLite,
+  > PostgreSQL, SQL Server) uniformly. The original non-goal above — no
+  > third dialect before the abstraction exists — is not being violated by
+  > this amendment; it is being satisfied by construction, since the new
+  > unit builds the abstraction before it builds the dialect.
+  > **Documentation debt this creates, not fixed here:**
+  > `docs/CONVENTIONS-DQT.md:241` and `README.md:32` both currently state
+  > SQL Server is unsupported; both must be amended in that future unit's
+  > own PR, once the support actually lands — not in this documentation-only
+  > PR, which touches neither file.
 - No new hard runtime dependency. `DQT-08` (unit 9) *removes* one
   (`psycopg2-binary`); nothing here adds one. If `ARC-01`'s tooling or
   `DOC-01`'s copied script needs a package not already a `dev` extra, name
