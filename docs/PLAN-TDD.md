@@ -180,6 +180,21 @@ nothing; there is no real dependency between them.
   rows are silently excluded). Ground truth: shape 3 — a human enumerated
   which of the 5 seeded values are valid emails by reading the pattern, not
   by running the code.
+  > **Corrected 2026-08-26:** the failing set asserted above is wrong. The
+  > correct hand-derived failing set is `{"", "not-an-email", "x@y"}` —
+  > three of the five seeded values, not two. The bullet above treated the
+  > empty string as excluded the same way `NULL` is; only `NULL` is actually
+  > excluded, by `_eval_regex`'s `IS NOT NULL` guard. `""` is not `NULL`, so
+  > it passes that guard and is then checked against the pattern, where
+  > `^[^@\s]+@[^@\s]+\.[^@\s]+$` requires at least one character before the
+  > `@`, which an empty string cannot supply — so it fails the pattern and
+  > counts as invalid, not "not applicable". This was caught while
+  > implementing `DQT-04`, by hand-deriving the expected value from the
+  > pattern text itself rather than from the code — the same method this
+  > bullet already required, which is what exposed the error in the
+  > bullet's own stated expectation. The shipped
+  > `test_email_rule_flags_exactly_invalid_addresses` test asserts the
+  > three-element set.
 - `tests/unit/sql/test_rules.py::test_malformed_pattern_is_a_config_error_not_a_data_issue`
   — an invalid regex (e.g. unbalanced `(`) must not be reported as a `DQIssue`
   with false "all rows failed"; it must raise a typed, catchable error at
