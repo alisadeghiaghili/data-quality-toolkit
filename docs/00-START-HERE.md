@@ -29,8 +29,9 @@ in this order — **higher wins, always**:
 | 8 | **`docs/CONVENTIONS-DQT.md`** | Scope, facet model, canonical vocabulary, supported dialects. Its §1 safety model is partly **proposal**, not settled — see `BACKLOG.md` §3. |
 | 9 | **`docs/CONVENTIONS-DQT-data-model.md`** | Class shapes, the aggregation contract, the storage schema. |
 | 10 | **`docs/BACKLOG.md`** | Defects with no roadmap ID yet, and open design questions. A supplement, not a task list. |
-| 11 | Everything else (`docs/dqt_*`, `docs/DQT-UI-Ecosystem.md`, `docs/guides/`) | Context, comparisons, design direction. Never normative. |
-| 12 | Dated reviews (`DQT-critical-review.md`; the 2026-08-16 Persian document review) | Historical record only — **never** cite as current state. |
+| 11 | **`docs/PLAN-TDD.md`** | A sequencing plan for turning `BACKLOG.md`/roadmap items into TDD units, in what order and why. Planning context, not a task list — see its own status header. |
+| 12 | Everything else (`docs/dqt_*`, `docs/DQT-UI-Ecosystem.md`, `docs/guides/`) | Context, comparisons, design direction. Never normative. |
+| 13 | Dated reviews (`DQT-critical-review.md`; the 2026-08-16 Persian document review) | Historical record only — **never** cite as current state. |
 
 Three consequences worth stating explicitly:
 
@@ -52,6 +53,7 @@ docs/
   00-START-HERE.md                  ← you are here
   HONESTY-GATE.md                   ← what counts as evidence, made concrete for DQT
   BACKLOG.md                        ← defects with no roadmap ID; open questions
+  PLAN-TDD.md                       ← sequencing plan for TDD units; not a task list
   CONVENTIONS-DQT.md                ← scope, vocabulary, safety model, statuses
   CONVENTIONS-DQT-data-model.md     ← classes, aggregation contract, storage
   DQT-UI-Ecosystem.md               ← UI screens and design direction
