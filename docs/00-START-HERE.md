@@ -159,12 +159,24 @@ Each began as a correctness or safety problem that constrained what could be bui
    `--dry-run`/`--commit` flags on `dqt profile`; see
    `tests/unit/sql/test_read_only.py` for the checksum proof and the
    revert → fail → restore → pass transcript.
-3. **`regex` rules are dead on the only fully supported backend.** `rules.py:362`
-   emits `NOT REGEXP ?`; SQLite ships no `REGEXP` implementation and
-   `create_function` appears nowhere in the codebase. Every regex rule produces a
-   permanent false `error`-severity issue instead of validating anything —
-   including the email rule in `examples/rules/advanced_rules.yaml`. Semantic
-   validity is the stated differentiator, so this is not a small gap. → **`DQT-04`.**
+3. **`regex` rules were dead on the only fully supported backend.** SQLite ships
+   no `REGEXP` implementation of its own, and nothing called `create_function`
+   to register one, so `rules.py`'s `NOT REGEXP ?` query failed with
+   `sqlite3.OperationalError: no such function: REGEXP` on every regex rule —
+   including the email rule in `examples/rules/advanced_rules.yaml` — turning
+   it into a permanent false `error`-severity issue instead of validating
+   anything. → **`DQT-04`, fixed on branch `dqt-04` in this repository (PR
+   open, not yet merged).** The fix registers a Python `re`-backed `REGEXP`
+   function on every SQLite connection returned by
+   `sql/rules.py::_get_connection` (the connection's read/write mode does not
+   affect this), backed by a bounded, length-limited compiled-pattern cache,
+   and makes `_eval_regex` raise `ValueError` for a malformed pattern before
+   any query runs rather than reporting it as a data failure. Note:
+   `sql/schema_discovery.py::connect_sql` is a second, non-conforming
+   connection-opening path that was already known and is unaffected by this
+   fix — a `regex` rule evaluated through that path still has no `REGEXP`
+   support; see `tests/unit/sql/test_rules.py` for the fixed-code tests and
+   the reproduction of the original defect.
 4. **Cleansing is neither reversible nor persisted.** No `revert()` or `undo()`
    exists; `storage.py` has no cleansing table. `CleansingLog` is built in memory
    and returned — drop the return value and the before-values are gone. → **`DQT-05`.**
@@ -201,6 +213,10 @@ Recorded so they are not re-investigated:
 - The coverage gate is 80% in both `pyproject.toml` and CI.
 - The CLI runs. The `rowid` aliasing bug and the NULL-key dedup data-loss bug
   were both fixed in the Phase 0 remediation.
+- `DQT-04`'s `REGEXP` registration does not add a raw-SQL rule type or a
+  second identifier-quoting path: it registers one Python callable on the
+  connection and leaves `rules.py`'s fixed set of expression types
+  (`NOT NULL`, `UNIQUE`, `range`, `regex`) unchanged.
 
 ---
 
