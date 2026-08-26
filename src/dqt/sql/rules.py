@@ -23,8 +23,10 @@ Supported expressions
 +------------------+-----------------------------------------------------------+
 | ``regex``        | Values match a regular expression (validity).             |
 |                  | Requires ``params.pattern``.                              |
-|                  | Only supported on databases with a REGEXP operator or     |
-|                  | equivalent (SQLite REGEXP requires a registered function).|
+|                  | SQLite has no native REGEXP; this module registers a      |
+|                  | Python ``re``-backed implementation on every connection    |
+|                  | it opens (see :func:`_get_connection`). PostgreSQL uses    |
+|                  | its native ``~`` operator.                                 |
 +------------------+-----------------------------------------------------------+
 
 Engine architecture
@@ -61,6 +63,8 @@ Example::
 from __future__ import annotations
 
 import fnmatch
+import functools
+import re
 import uuid
 from typing import Any
 
@@ -72,6 +76,124 @@ from dqt.common.models import (
 )
 from dqt.sql._identifiers import qualified_identifier, quote_identifier
 from dqt.sql.schema_discovery import DiscoveredTable
+
+# ---------------------------------------------------------------------------
+# Internal: SQLite REGEXP support
+# ---------------------------------------------------------------------------
+
+# SQLite ships no REGEXP implementation of its own: the ``REGEXP`` operator
+# is only usable if a two-argument function named ``REGEXP`` is registered
+# on the connection (https://www.sqlite.org/lang_expr.html#the_like_glob_regexp_and_match_operators).
+# Without this registration every ``regex`` rule fails with
+# ``sqlite3.OperationalError: no such function: REGEXP`` on every column it
+# targets, which is exactly the defect `DQT-04` fixes.
+
+# Upper bound on pattern length accepted for compilation. This is not a
+# performance-tuning knob so much as a config-sanity guard: a rule file is
+# trusted input in this project (there is no raw-SQL rule type, and rule
+# files are not accepted from untrusted users), but a many-kilobyte
+# "pattern" is never an intentional regex and is far more likely to be a
+# copy-paste accident (e.g. an entire file pasted into params.pattern) that
+# is cheaper to reject up front than to hand to ``re.compile``.
+_REGEX_PATTERN_MAX_LENGTH = 1000
+
+# Bounds the compiled-pattern cache so a rule file with many distinct (or
+# templated/generated) regex patterns cannot grow this process-lifetime
+# cache without limit. 256 comfortably covers realistic rule files (DQT's
+# own example rule files define a handful of regex rules total) while
+# capping worst-case memory to a small, fixed number of compiled patterns.
+_REGEX_CACHE_MAXSIZE = 256
+
+
+@functools.lru_cache(maxsize=_REGEX_CACHE_MAXSIZE)
+def _compile_regex_pattern(pattern: str) -> re.Pattern[str]:
+    """Compile *pattern* into a :class:`re.Pattern`, cached and length-bounded.
+
+    This is the single place a ``regex`` rule's pattern is turned into a
+    compiled expression, for two reasons: it lets the SQLite ``REGEXP``
+    callback (:func:`_sqlite_regexp`) and :func:`_eval_regex`'s own
+    up-front validation share one cache, and it means the length guard and
+    the "invalid pattern" error message only need to be written once.
+
+    Args:
+        pattern: Regular expression source, as written in ``params.pattern``
+            of a rule file.
+
+    Returns:
+        The compiled pattern, memoized by :func:`functools.lru_cache` (see
+        module-level ``_REGEX_CACHE_MAXSIZE`` for the bound).
+
+    Raises:
+        ValueError: If *pattern* is longer than ``_REGEX_PATTERN_MAX_LENGTH``,
+            or is not a syntactically valid Python regular expression. This
+            is deliberately :class:`ValueError`, matching the convention
+            already used by :func:`_eval_range` for bad rule parameters —
+            a malformed pattern is a rule-configuration error, not a data
+            issue, and must not be reported as if every row failed the
+            check. (Once `DQT-09` lands a shared exception hierarchy, this
+            should become that hierarchy's ``RuleEvaluationError`` instead;
+            tracked there, not here.)
+
+    Example::
+
+        compiled = _compile_regex_pattern(r"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+        assert compiled.search("a@b.com") is not None
+    """
+    if len(pattern) > _REGEX_PATTERN_MAX_LENGTH:
+        raise ValueError(
+            f"regex rule pattern is {len(pattern)} characters, which exceeds the "
+            f"maximum of {_REGEX_PATTERN_MAX_LENGTH}. Refusing to compile it."
+        )
+    try:
+        return re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"Invalid regex pattern {pattern!r}: {exc}") from exc
+
+
+def _sqlite_regexp(pattern: str, value: object) -> bool | None:
+    """Implement SQLite's ``REGEXP`` operator via Python's :mod:`re`.
+
+    Registered as the connection-wide ``REGEXP(X, Y)`` function by
+    :func:`_get_connection`. SQLite rewrites the infix expression
+    ``value REGEXP pattern`` into the function call ``REGEXP(pattern,
+    value)`` — the pattern comes first, the value second — so this
+    function's parameter order mirrors that call exactly. Getting this
+    backwards would not raise; it would silently invert every match
+    (verified empirically in
+    ``tests/unit/sql/test_rules.py::test_regexp_function_registered_on_sqlite_connection``).
+
+    Args:
+        pattern: The regex pattern (SQLite's first argument, ``X`` in
+            ``REGEXP(X, Y)``).
+        value: The column value being tested (SQLite's second argument).
+            May be any SQLite-native Python type, or ``None``.
+
+    Returns:
+        ``True`` if *value* (coerced to ``str``) matches *pattern* anywhere
+        (via :func:`re.search`); ``False`` if it does not; ``None`` if
+        *value* is SQL ``NULL`` (SQLite treats a ``NULL`` function result as
+        ``NULL``, which is falsy in a ``WHERE`` clause — callers in this
+        module additionally guard with an explicit ``IS NOT NULL``, so this
+        is defense in depth rather than the only NULL handling).
+
+    Raises:
+        ValueError: If *pattern* is invalid or too long — see
+            :func:`_compile_regex_pattern`. SQLite reports this to the
+            caller as ``sqlite3.OperationalError: user-defined function
+            raised exception``; :func:`_eval_regex` avoids that by
+            validating the pattern itself before ever issuing the query.
+
+    Example::
+
+        assert _sqlite_regexp("^a", "abc") is True
+        assert _sqlite_regexp("^a", "zzz") is False
+        assert _sqlite_regexp("^a", None) is None
+    """
+    if value is None:
+        return None
+    compiled = _compile_regex_pattern(pattern)
+    return compiled.search(str(value)) is not None
+
 
 # ---------------------------------------------------------------------------
 # Internal: DB connection helper
@@ -113,6 +235,17 @@ def _get_connection(config: ConnectionConfig) -> Any:
     :func:`dqt.sql.cleansing.apply_cleansing` before this function is even
     called.
 
+    Every SQLite connection returned here (regardless of *config.read_only*)
+    also has :func:`_sqlite_regexp` registered as the ``REGEXP`` function
+    (`DQT-04`), since SQLite dispatches its ``REGEXP`` operator to a
+    user-defined function rather than implementing one itself. This is the
+    single place that registration happens; nothing in this module opens a
+    second, non-conforming SQLite connection. (Note:
+    :func:`dqt.sql.schema_discovery.connect_sql` is a separate,
+    non-conforming connection-opening path elsewhere in this package — out
+    of scope for `DQT-04`, but its ``regex`` rules would not get REGEXP
+    support from this change.)
+
     Args:
         config: Validated connection configuration.
 
@@ -144,6 +277,13 @@ def _get_connection(config: ConnectionConfig) -> Any:
         else:
             conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
+        # See _sqlite_regexp: SQLite has no built-in REGEXP, only the
+        # ability to dispatch it to a registered function. Registering it
+        # here, on every connection this function returns (read-only or
+        # not, file-backed or :memory:), is what makes the `regex` rule
+        # expression actually work on SQLite (`DQT-04`). Registering a
+        # function is not a write and is unaffected by mode=ro.
+        conn.create_function("REGEXP", 2, _sqlite_regexp)
         return conn
     if dsn.startswith("postgresql://") or dsn.startswith("postgres://"):
         try:
@@ -386,8 +526,23 @@ def _eval_regex(
 ) -> tuple[int, int]:
     """Count rows whose column value does not match *pattern*.
 
-    SQLite support requires the REGEXP function to be registered on the
-    connection.  PostgreSQL uses the native ``~`` operator.
+    On SQLite this relies on the ``REGEXP`` function registered by
+    :func:`_get_connection` (`DQT-04`); *cursor* must come from a
+    connection opened through that function, or the query below raises
+    ``sqlite3.OperationalError: no such function: REGEXP``. PostgreSQL uses
+    the native ``~`` operator instead and needs no such registration.
+
+    For SQLite, *pattern* is validated (compiled) up front via
+    :func:`_compile_regex_pattern` before any query runs. This is
+    deliberate: without it, a malformed pattern would only be discovered
+    when SQLite invokes the registered function mid-query, which surfaces
+    as ``sqlite3.OperationalError: user-defined function raised
+    exception`` rather than the ``ValueError`` this module otherwise uses
+    for bad rule configuration (see :func:`_eval_range`) — and, more
+    importantly, callers must never receive a row count computed against a
+    pattern that failed to compile, which is why validation happens before
+    the counting query rather than being left for the per-row callback to
+    discover.
 
     Args:
         cursor: Open DBAPI cursor.
@@ -401,7 +556,9 @@ def _eval_regex(
         Tuple of ``(total_rows, non_matching_count)``.
 
     Raises:
-        ValueError: If *dialect* is not supported.
+        ValueError: If *dialect* is not supported, or (SQLite only) if
+            *pattern* is not a valid, length-bounded regular expression —
+            see :func:`_compile_regex_pattern`.
 
     Example::
 
@@ -414,6 +571,7 @@ def _eval_regex(
     total = int(cursor.fetchone()[0])
 
     if dialect == "sqlite":
+        _compile_regex_pattern(pattern)  # raise ValueError before querying, not during
         not_match_sql = f"SELECT COUNT(*) FROM {tbl} WHERE {col} IS NOT NULL AND {col} NOT REGEXP ?"
         cursor.execute(not_match_sql, (pattern,))
     elif dialect in ("postgresql", "postgres"):

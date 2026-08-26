@@ -304,7 +304,7 @@ table says so — see `BACKLOG.md` §1.
 | Area | State on `origin/main` | Task |
 |---|---|---|
 | Rules engine — `not_null`, `unique`, `range` | Works, tested | — |
-| Rules engine — `regex` | **Dead on SQLite.** Emits `NOT REGEXP ?`; no `create_function` anywhere. Every regex rule yields a permanent false `error`. No test | `DQT-04` |
+| Rules engine — `regex` | Was dead on SQLite (emitted `NOT REGEXP ?` with no `create_function` registered anywhere, so every regex rule yielded a permanent false `error`). Fixed on branch `dqt-04`, tested, **not yet merged** | `DQT-04` |
 | Rules engine, table scope | Not started | no ID yet |
 | Rule-file SQL safety | **Defective** — reproduced exploit. Fixed at `a1f6ce7`, **not pushed** | `DQT-02` |
 | `read_only` enforcement | **None.** Zero consumers, no `--dry-run`. Fixed at `7ae3fdc`, **not pushed** | `DQT-03` |

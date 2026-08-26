@@ -32,6 +32,7 @@ repository:
 |---|---|---|---|
 | `DQT-02` — parameterize SQL, unify identifier quoting | `dqt-02` | 158 → 166 passing; `range` bounds bound as DBAPI params; `_qualified_table` deleted; `sql/_identifiers.py` the sole quoting authority; the exact `DQT-critical-review.md` §1.3 payload plus a malicious-table-name payload blocked in `tests/unit/sql/test_sql_injection.py`, with a revert → fail → restore → pass transcript | **Yes** (merged via PR #3, `e72d93d`) |
 | `DQT-03` — enforce `read_only`, add `--dry-run` | `dqt-03` | 166 → 183 passing; `sql/rules.py::_get_connection` opens SQLite `mode=ro` (PostgreSQL: `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`, untested — no driver in CI); `sql/cleansing.py::apply_cleansing` raises `ReadOnlyViolationError` (new: `src/dqt/exceptions.py`) before building any mutating statement when `read_only=True`, and separately defaults to `dry_run=True`; `dqt profile` gained `--dry-run`/`--commit`; four-hash checksum proof and a revert → fail → restore → pass transcript in `tests/unit/sql/test_read_only.py` | **Yes** (merged via PR #4, `1b3f917`) |
+| `DQT-04` — register a SQLite `REGEXP` function | `dqt-04` | 185 → 190 passing; `sql/rules.py::_get_connection` registers a Python `re`-backed `REGEXP` function on every SQLite connection it opens, behind a bounded (256-entry), length-limited (1000 char) compiled-pattern cache; `_eval_regex` now raises `ValueError` for a malformed pattern before any query runs instead of reporting a false data failure; fail → pass transcript (`sqlite3.OperationalError: no such function: REGEXP` → passing) in `tests/unit/sql/test_rules.py` | **No** (PR open, not merged) |
 
 **Consequence:** `main` (at `915bb1c`) now has both `DQT-02`'s fix (PR #3,
 `e72d93d`) and `DQT-03`'s fix (PR #4, `1b3f917`) merged. `read_only`
@@ -48,10 +49,13 @@ PostgreSQL side of the same enforcement (`SET SESSION CHARACTERISTICS AS
 TRANSACTION READ ONLY`): it is still untested, since there is no PostgreSQL
 driver or server available in CI.
 
+`DQT-04` (SQLite `REGEXP` registration) has since been implemented on branch
+`dqt-04` (see the table above) — a PR is open but not yet merged.
+
 Remaining roadmap tasks, unstarted as far as this check could determine:
-`DQT-01` (README status block), `DQT-04` (regex dead on SQLite), `DQT-05`
-(persist cleansing log, implement `revert`), `DQT-06` (exit-code contract),
-`DQT-08` (two-PostgreSQL-driver split), `DQT-09` (exception hierarchy),
+`DQT-01` (README status block), `DQT-05` (persist cleansing log, implement
+`revert`), `DQT-06` (exit-code contract), `DQT-08`
+(two-PostgreSQL-driver split), `DQT-09` (exception hierarchy),
 `DOC-01`/`DOC-02` (documentation gate and debt), `ARC-01` (architecture gate).
 
 ---
