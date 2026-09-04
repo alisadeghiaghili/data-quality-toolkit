@@ -1,0 +1,5 @@
+# tools/doc_audit.py is vendored verbatim from the Consilient engineering
+# standard (DOC-01) and must remain byte-identical to its source, including
+# line endings. Force LF on checkout regardless of core.autocrlf so cloning
+# or checking out this file on Windows does not silently rewrite it to CRLF.
+tools/doc_audit.py text eol=lf

@@ -58,6 +58,45 @@ Remaining roadmap tasks, unstarted as far as this check could determine:
 (two-PostgreSQL-driver split), `DQT-09` (exception hierarchy),
 `DOC-01`/`DOC-02` (documentation gate and debt), `ARC-01` (architecture gate).
 
+### Update 2026-09-04 — `DQT-04` merged, `DOC-01` partially landed
+
+`DQT-04` is merged: PR #7, merge commit `c80eb63`. `main` now carries the
+SQLite `REGEXP` registration; the README bullet that called it an open defect
+was removed on branch `dqt-01`.
+
+**`DOC-01` — the DQT slice landed on branch `doc-01`; the task is NOT closed.**
+The roadmap scopes `DOC-01` to three repositories (`MSY`, `DQT`, `PDP`) and its
+acceptance criteria require the gate wired into CI in **all three**. Only the
+`DQT` slice is done. The `MSY` and `PDP` slices remain outstanding and
+`DOC-01` stays open until they land.
+
+Doing DQT alone was a deliberate sequencing decision, not an oversight: the
+gate's value is per-repo with no technical coupling between the three, and
+14 of the 30 baselined violations sit in `common/models.py`, which units 5 and
+6 of `docs/PLAN-TDD.md` rewrite. Delaying DQT's gate to bundle three repos
+would let those rewrites land ungated — which is precisely what the task
+exists to prevent.
+
+**Count drift, and what was fixed rather than baselined.** The roadmap records
+29 violations for `DQT` measured 2026-08-12; re-measured on `c80eb63` the tree
+had **31**. The difference is code added since that measurement, so the
+acceptance criterion's "exact counts above" is no longer literally
+satisfiable. Ratchet mode tolerates existing debt but forbids growth, so debt
+introduced by our own recent work was **fixed, not baselined**:
+`src/dqt/exceptions.py` did not exist on 2026-08-12 — it was created by
+`DQT-03` — and its `missing-example` violation was repaired by writing the
+`Example` block the standard requires. The remaining **30** entries are
+genuine pre-existing debt in `common/models.py` (14), `ui/app.py` (12) and
+four single violations elsewhere; `DOC-02` exists to pay them down.
+
+**Gate proof.** With a baseline matching the tree the gate exits `0`; with a
+public function carrying no docstring planted in `src/dqt/`, it exits `1` and
+names both the module and the function; with the plant removed it returns to
+`0`. Note `NEW-L` below: the committed baseline is in POSIX form because CI
+runs on `ubuntu-latest`, and the tool does not normalise path separators, so
+the gate is not runnable locally on Windows against that file without
+regenerating it.
+
 ---
 
 ## 2. New defects — no roadmap ID yet
@@ -187,6 +226,56 @@ against a hand-seeded SQLite fixture with one enumerated `NOT NULL` violation.
 No CLI-level rule-file flag exists; this fix only closes the config-file path.
 
 ---
+
+### `NEW-K` · `expression` is documented as accepting SQL, but does not
+
+**Severity:** medium — a false docstring on a public field · **Blocks:** nothing
+
+`common/models.py:395` documents `RuleConfig.expression` as "A DSL keyword or
+SQL fragment defining the check". There is no SQL-fragment path.
+`sql/rules.py:645` normalises the field with
+`expr = rule.expression.strip().upper()` and dispatches over a closed set —
+`NOT NULL`, `UNIQUE`, `RANGE`, `REGEX` — emitting an error-severity `DQIssue`
+for anything else (`rules.py:752-764`). A SQL fragment placed in that field is
+not executed; it is reported as an unknown expression.
+
+The docstring is therefore false, and it undersells the design: a closed
+keyword set has **no SQL injection surface at all**, which is a stronger
+safety property than the docstring implies. `DQT-02` parameterised the rule
+*parameters*; this field was never an injection vector in the first place.
+
+Proposed fix: correct the docstring on both `models.py:395` and `models.py:600`
+to describe the closed vocabulary, and say plainly that unknown values produce
+an error-severity issue rather than being executed. Consider narrowing the type
+to a `Literal` so the closed set is enforced at validation time instead of at
+dispatch time — that is a behaviour change and needs an owner decision.
+
+### `NEW-L` · `doc_audit.py` baseline keys are not portable across platforms
+
+**Severity:** medium — the gate cannot be run locally on Windows · **Blocks:**
+nothing in CI · **Found:** 2026-09-04, while landing `DOC-01`
+
+`Violation.key()` is `path::qualname::rule`, and `path` is emitted with the
+**native** separator. The tool never normalises it: a baseline written on
+Windows contains `src\dqt\common\models.py::...`, one written on Linux
+contains `src/dqt/common/models.py::...`, and neither is accepted by the other.
+Every entry then reads as a new violation and the gate exits `1`.
+
+Consequence for this repo: `.doc_audit_baseline.json` is committed in POSIX
+form because the gate's enforcement point is CI on `ubuntu-latest`, where it is
+correct and green. A developer on Windows cannot run the gate locally against
+the committed baseline without regenerating it first.
+
+This is **not** `DOC-04`. `DOC-04` concerns two symbols colliding on one
+`path::qualname::rule` triple — the roadmap measures `data-quality-toolkit` at
+0 colliding keys. This is a separate portability defect in the same `key()`
+function, and both are fixed in the same place.
+
+Proposed fix: normalise the path to POSIX form inside `Violation.key()`
+(`PurePath(path).as_posix()`) before composing the key, then regenerate every
+baseline. The tool is vendored verbatim from the engineering standard and the
+roadmap says not to rewrite it, so this must be fixed upstream in the standard's
+copy and re-vendored — not patched here.
 
 ## 3. Open design questions — owner decisions, not agent decisions
 

@@ -6,10 +6,13 @@
 #
 #   lint          ruff check + ruff format --check
 #   typecheck     mypy --strict on src/
+#   docs          tools/doc_audit.py ratchet gate against .doc_audit_baseline.json (DOC-01)
 #   test-unit     pytest tests/unit/ with coverage (threshold 80 %)
 #   test-integration  pytest tests/integration/ (SQLite; no coverage gate)
 #
-# All jobs run on both Python 3.11 and 3.12.
+# All jobs run on both Python 3.11 and 3.12, except `docs`: the gate's result
+# depends only on docstring text via `ast.parse`, not on interpreter version,
+# so running it twice would burn CI minutes without adding coverage.
 
 name: CI
 
@@ -84,7 +87,37 @@ jobs:
         run: mypy src/dqt/
 
   # --------------------------------------------------------------------------
-  # Job 3: Unit tests + coverage
+  # Job 3: Documentation gate (DOC-01)
+  # --------------------------------------------------------------------------
+  # Enforces ENGINEERING-STANDARDS.md §2 in ratchet mode: pre-existing debt
+  # recorded in .doc_audit_baseline.json is tolerated, any *new* violation
+  # fails the build. Single Python version only -- the result is a function of
+  # docstring text parsed via `ast`, not of the interpreter running it, so a
+  # 3.11/3.12 matrix here would duplicate work for zero additional signal.
+  docs:
+    name: "Documentation gate (doc_audit)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run documentation gate
+        run: |
+          python tools/doc_audit.py \
+            --root . \
+            --path src/dqt \
+            --style google \
+            --require-example \
+            --baseline .doc_audit_baseline.json
+
+  # --------------------------------------------------------------------------
+  # Job 4: Unit tests + coverage
   # --------------------------------------------------------------------------
   test-unit:
     name: "Unit tests — Python ${{ matrix.python-version }}"
@@ -127,7 +160,7 @@ jobs:
           retention-days: 14
 
   # --------------------------------------------------------------------------
-  # Job 4: Integration tests (SQLite; no Docker required)
+  # Job 5: Integration tests (SQLite; no Docker required)
   # --------------------------------------------------------------------------
   test-integration:
     name: "Integration tests — Python ${{ matrix.python-version }}"
