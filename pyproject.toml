@@ -38,6 +38,13 @@ dev = [
     # collection error in tests/unit/ui/ rather than a skip -- so it must be a
     # declared dependency, not something a developer happens to have.
     "httpx2>=0.1",
+    # tests/unit/bridges/ builds DataFrames to exercise the missingly adapter's
+    # translation. It is a test dependency, not a runtime one: DQT core never
+    # imports pandas. Declared here rather than relying on the bridges extra so
+    # CI runs those tests instead of skipping them -- a skipped test
+    # contributes no coverage, which would make the 90% gate measure less than
+    # it claims to.
+    "pandas>=2.0",
 ]
 postgres = [
     # One driver per database (DQT-08). psycopg 3 is the maintained line and
@@ -62,7 +69,7 @@ bridges = [
     # it to `missingly`. Both are optional: DQT core is SQL-first and neither
     # is imported unless a bridge is explicitly called.
     "pandas>=2.0",
-    "missingly>=0.1",
+    "missingly>=1.0",
 ]
 
 [project.scripts]
