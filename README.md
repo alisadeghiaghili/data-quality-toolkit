@@ -5,7 +5,6 @@
 DQT connects to databases and can issue UPDATE and DELETE statements. Known open defects:
 
 - Cleansing operations are not persisted and cannot be reverted (DQT-05)
-- `regex` rules do not work on SQLite: no REGEXP function is registered (DQT-04)
 
 Do not point this tool at a production database. Full audit: `DQT-critical-review.md`.
 
@@ -103,4 +102,7 @@ passing test covers.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Source-available under the Business Source License 1.1 (BUSL-1.1), not an
+OSI-approved open-source license — see [LICENSE](LICENSE) and
+[NOTICE.md](NOTICE.md). On 2030-09-04 the license converts automatically to
+the Apache License, Version 2.0.
