@@ -176,3 +176,47 @@ def test_the_natural_key_still_prevents_duplicate_metrics(
 
     with pytest.raises(sqlite3.IntegrityError):
         store_connection.execute(insert)
+
+
+class TestStaleStoreIsDetected:
+    """A store created before `NEW-A` / `DQT-05` must fail clearly, not cryptically.
+
+    The DDL uses ``CREATE TABLE IF NOT EXISTS``, so an existing
+    ``dqt_runs.db`` is left exactly as it was and the new columns never
+    appear. `CONVENTIONS-DQT.md` calls the store a local artifact meant to be
+    recreated rather than migrated, which is a reasonable decision -- but only
+    if the tool says so. Without this check the first symptom is
+    ``sqlite3.OperationalError: table run_metrics has no column named
+    metric_name``, thrown from the middle of a run that already did its work,
+    which tells a DBA nothing about what to do.
+    """
+
+    def test_a_pre_new_a_store_is_rejected_with_an_actionable_message(
+        self, tmp_path: Path
+    ) -> None:
+        """The error names the file and says to recreate it."""
+        db = tmp_path / "old.db"
+        connection = sqlite3.connect(str(db))
+        try:
+            # The run_metrics shape as it was before NEW-A: no metric_name.
+            connection.execute(
+                "CREATE TABLE run_metrics ("
+                "id INTEGER PRIMARY KEY, run_id TEXT, dimension TEXT, score REAL)"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with pytest.raises(RuntimeError, match="recreate|out of date"):
+            RunStore(db_path=db).init_schema()
+
+    def test_a_fresh_store_initialises_without_complaint(self, tmp_path: Path) -> None:
+        """The guard must not fire on a new store, or on a current one twice.
+
+        ``init_schema`` is documented as safe to call repeatedly, and a
+        migration check that broke that would be a worse defect than the one
+        it detects.
+        """
+        db = tmp_path / "new.db"
+        RunStore(db_path=db).init_schema()
+        RunStore(db_path=db).init_schema()
