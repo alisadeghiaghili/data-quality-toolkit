@@ -58,7 +58,7 @@ from dqt.common.models import (
 )
 from dqt.sql.pipeline import DQTPipeline
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0"
 
 
 def from_dsn(

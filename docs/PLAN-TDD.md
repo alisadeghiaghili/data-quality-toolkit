@@ -63,6 +63,31 @@
 > annotated the same way, in place, without deleting the original
 > non-goal text.
 >
+> ## Status update — 2026-09-05: the v0.1 cut line is met
+>
+> **All nine units of the cut line have landed on `main`.** In order: unit 1
+> `NEW-H` (PR #5), unit 2 `DQT-04` (PR #7), unit 3 `DOC-01` (PR #12, DQT slice
+> only), unit 4 `NEW-C` slice 1 (PR #13), unit 5 `NEW-A` (PR #18), unit 6
+> `DQT-05` (PR #19), unit 7 `NEW-B` (PR #20), unit 8 `DQT-06` (PR #21), unit 9
+> `DQT-08` (PR #16).
+>
+> Units 9a (SQL Server), 10-15 and 16 (performance) are **not** started, except
+> that unit 9a's dialect shipped inside `DQT-08` because the abstraction could
+> not be validated without a third implementation.
+>
+> Measured on `main`: **564 tests, 93.70% coverage** against a gate raised from
+> 80 to 90 partway through. The version moved `0.1.0.dev0` → `0.1.0`.
+>
+> **One caveat on `DOC-01`.** The roadmap scopes it to `MSY`, `DQT` and `PDP`
+> and requires the gate in all three. Only the DQT slice is done, so the
+> roadmap task stays open even though this plan's unit 3 — which is
+> DQT-scoped — is satisfied. The two are not the same statement and the
+> distinction is recorded rather than smoothed over.
+>
+> Landed outside the cut line: the `dqt.sql.dialects` abstraction, the
+> semantic classification facet with Iranian identifiers, the `missingly`
+> bridge (`B1`-`B3`), and the read-only HTTP surface's tests (`NEW-D`).
+
 > ## Status update — 2026-09-04
 >
 > **Unit 2 (`DQT-04`) is done and merged.** Red commit `005bb51`

@@ -4,18 +4,33 @@
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](pyproject.toml)
 [![Coverage gate](https://img.shields.io/badge/coverage%20gate-90%25-brightgreen.svg)](pyproject.toml)
 
-## Status: pre-alpha — not for production use
+## Status: alpha
 
-Version `0.1.0.dev0`. Nothing has been released: there are no git tags and no
-published package. `0.1.0` is not claimed yet — `docs/PLAN-TDD.md`'s cut line
-defines v0.1 as its units 1-9, of which 3 have landed. See
-[`CHANGELOG.md`](CHANGELOG.md).
+Version `0.1.0`. `docs/PLAN-TDD.md`'s cut line defines v0.1 as its units 1-9,
+and all nine have landed. See [`CHANGELOG.md`](CHANGELOG.md).
 
-DQT connects to databases and can issue UPDATE and DELETE statements. Known open defects:
+What that bar meant, in the plan's own words, was closing everything that was
+either **silently wrong** or **false in a shipped docstring**. Both are now
+closed: `regex` rules evaluate on SQLite, the CLI forwards the rule files it
+is given, `run()` reports failure instead of returning success on it,
+`dimension` no longer carries two meanings, cleansing is genuinely reversible,
+and the exit code is a contract rather than a constant.
 
-- Cleansing operations are not persisted and cannot be reverted (DQT-05)
+**What is still true and worth knowing before you point this at anything.**
+Profiling opens the connection read-only and cannot be made to write —
+`run()`'s call graph contains no path that mutates. Cleansing does write, and
+is reached only by calling it deliberately: `cleanse_plan()` computes and
+stores a change set without touching anything, `cleanse_apply(plan_id)`
+executes that stored plan, and `revert(plan_id)` undoes it. The legacy
+`apply_cleansing()` remains reversible only by hand, and only while you still
+hold the log it returns — prefer the triple.
 
-Do not point this tool at a production database. Full audit: `DQT-critical-review.md`.
+Supported and exercised: **SQLite** and **PostgreSQL**. **SQL Server** ships a
+dialect but has never been run against a live server — its ODBC connection
+string and `INFORMATION_SCHEMA` queries are tested as SQL text only. Treat it
+as unproven.
+
+Full audit: `DQT-critical-review.md`.
 
 ---
 
@@ -39,9 +54,15 @@ computed with SQL, against the live database, without extracting the data.
   badges.
 - **Read-only HTTP API** — an optional FastAPI surface over the stored results.
 
-Supported databases: **SQLite** and **PostgreSQL**. MySQL and SQL Server are not
-supported. Connections use DB-API 2.0 drivers directly; SQLAlchemy is not a
-dependency.
+Supported databases: **SQLite** and **PostgreSQL**, both exercised in CI.
+**SQL Server** has a dialect but no live-server coverage — see the status
+block above. MySQL is not supported.
+
+Adding a database means registering a dialect in `dqt.sql.dialects`, not
+editing branches across the codebase: identifier quoting, the read-only
+incantation, regex matching and introspection are all asked of the dialect
+rather than decided by the caller. Connections use DB-API 2.0 drivers
+directly; SQLAlchemy is not a dependency.
 
 ## What it deliberately does not do
 
