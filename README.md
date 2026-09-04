@@ -85,6 +85,38 @@ lists are overlapping views of the same issues — summing them double-counts. S
 Note that `result.status` is currently always `"success"`: there is no per-stage
 error handling yet, so a failed run raises rather than recording a failure.
 
+## Exit codes
+
+`dqt profile` is meant to be usable as a data-quality gate in CI, which means
+the exit code is a contract:
+
+| Code | Meaning |
+|---|---|
+| `0` | Nothing at or above the chosen threshold was found. |
+| `1` | At least one `error` or `critical` finding. |
+| `2` | `warning` findings only, with `--fail-on warning`. |
+| `3` | Configuration or connection error — DQT never reached your database. |
+| `4` | Internal error — DQT reached your database and then broke. |
+
+`--fail-on {error,warning,none}` chooses the threshold at which findings
+become a failure; the default is `error`, so warnings are reported but do not
+fail a build.
+
+Two properties worth relying on. A run that did not finish outranks whatever
+it managed to find, so a broken run never reports `1` — `3` and `4` mean the
+verdict on your data is unknown, not clean. And `--fail-on` governs findings
+only: `--fail-on none` still exits `3` on a connection failure, because
+choosing not to gate on data quality is not the same as choosing not to be
+told the run failed.
+
+The `3`/`4` split tells you where to look: `3` is your invocation, `4` is a
+bug in DQT.
+
+```bash
+dqt profile --dsn "sqlite:///app.db" --rules rules.yaml --fail-on error
+echo "exit=$?"
+```
+
 ## Documentation
 
 | Document | What it covers |

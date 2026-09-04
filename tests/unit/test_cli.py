@@ -21,6 +21,7 @@ import pytest
 
 from dqt.cli import _build_connection_config, _build_parser, _build_pipeline_config, main
 from dqt.common.storage import RunStore
+from dqt.exit_codes import ExitCode
 
 
 @pytest.fixture
@@ -59,7 +60,11 @@ def test_profile_command_runs_end_to_end(small_db: Path, tmp_path: Path, monkeyp
     with pytest.raises(SystemExit) as exc_info:
         main()
 
-    assert exc_info.value.code == 0
+    # DQT-06: the seeded fixture has NULLs, so diagnostics raise error-severity
+    # issues and the gate exits 1. That the exit code moved off 0 is itself
+    # evidence the checks ran -- under the old always-zero behaviour this
+    # assertion held whether or not anything had been evaluated.
+    assert exc_info.value.code == int(ExitCode.ERROR_FINDINGS)
     reports = list(report_dir.glob("*.html"))
     assert len(reports) == 1
 
@@ -180,7 +185,11 @@ def test_profile_cli_applies_rule_files_from_config(
 
     with pytest.raises(SystemExit) as exc_info:
         main()
-    assert exc_info.value.code == 0
+    # DQT-06: the seeded fixture has NULLs, so diagnostics raise error-severity
+    # issues and the gate exits 1. That the exit code moved off 0 is itself
+    # evidence the checks ran -- under the old always-zero behaviour this
+    # assertion held whether or not anything had been evaluated.
+    assert exc_info.value.code == int(ExitCode.ERROR_FINDINGS)
 
     reports = list(report_dir.glob("*.html"))
     assert len(reports) == 1
@@ -242,3 +251,109 @@ def test_the_profiled_connection_is_always_read_only(tmp_path: Path) -> None:
     conn_cfg = _build_connection_config(args)
 
     assert conn_cfg.read_only is True
+
+
+# ---------------------------------------------------------------------------
+# DQT-06: the exit-code matrix, end to end through main()
+# ---------------------------------------------------------------------------
+
+
+def _run_cli(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> int:
+    """Invoke the CLI and return the exit code it produced.
+
+    Args:
+        argv: Arguments after the program name.
+        monkeypatch: pytest monkeypatch fixture, used to set sys.argv.
+
+    Returns:
+        The integer passed to SystemExit.
+
+    Example:
+        code = _run_cli(["profile", "--dsn", "sqlite:///x.db"], monkeypatch)
+    """
+    monkeypatch.setattr("sys.argv", ["dqt", *argv])
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    return int(exc_info.value.code or 0)
+
+
+class TestExitCodeMatrix:
+    """The roadmap's `DQT-06` verification block, as tests.
+
+    The unit tests in ``test_exit_codes.py`` cover the decision itself. This
+    matrix covers the wiring: a contract that is correct in a pure function
+    and unreachable from the command line is not a contract a CI job can use.
+    """
+
+    @staticmethod
+    def _argv(db: Path, tmp_path: Path, *extra: str) -> list[str]:
+        return [
+            "profile",
+            "--dsn",
+            f"sqlite:///{db}",
+            "--store",
+            str(tmp_path / "r.db"),
+            "--report-dir",
+            str(tmp_path),
+            *extra,
+        ]
+
+    def test_clean_database_exits_zero(
+        self, tmp_path: Path, make_sqlite_db, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No NULLs, no findings, no gate."""
+        db = make_sqlite_db(
+            "clean.db", "CREATE TABLE t (id INTEGER NOT NULL); INSERT INTO t VALUES (1);"
+        )
+
+        code = _run_cli(self._argv(db, tmp_path), monkeypatch)
+
+        assert code == int(ExitCode.SUCCESS)
+
+    def test_dirty_database_exits_one(
+        self, tmp_path: Path, make_sqlite_db, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every row NULL, so completeness raises an error-severity issue.
+
+        This is the case the contract exists for: before `DQT-06` this exited
+        0 and a CI job gated on it went green.
+        """
+        db = make_sqlite_db(
+            "dirty.db",
+            "CREATE TABLE t (id INTEGER, email TEXT);"
+            "INSERT INTO t VALUES (1, NULL); INSERT INTO t VALUES (2, NULL);",
+        )
+
+        code = _run_cli(self._argv(db, tmp_path), monkeypatch)
+
+        assert code == int(ExitCode.ERROR_FINDINGS)
+
+    def test_fail_on_none_exits_zero_on_the_same_dirty_database(
+        self, tmp_path: Path, make_sqlite_db, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same data, different threshold, different code.
+
+        Proves the flag reaches the decision rather than being accepted and
+        ignored -- which is exactly the defect `NEW-H` was.
+        """
+        db = make_sqlite_db(
+            "dirty.db",
+            "CREATE TABLE t (id INTEGER, email TEXT);"
+            "INSERT INTO t VALUES (1, NULL); INSERT INTO t VALUES (2, NULL);",
+        )
+
+        code = _run_cli(self._argv(db, tmp_path, "--fail-on", "none"), monkeypatch)
+
+        assert code == int(ExitCode.SUCCESS)
+
+    def test_unreachable_database_exits_three(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A wrong DSN is the caller's to fix, and 3 says so.
+
+        Critically it is neither 0 nor 1: a CI job must be able to tell "your
+        data is bad" from "I never saw your data".
+        """
+        code = _run_cli(self._argv(tmp_path / "missing" / "nope.db", tmp_path), monkeypatch)
+
+        assert code == int(ExitCode.CONFIGURATION_ERROR)

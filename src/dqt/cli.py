@@ -52,6 +52,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from dqt.common.models import ConnectionConfig, DQPipelineConfig, PipelineResult
+from dqt.exit_codes import FAIL_ON_CHOICES, ExitCode, decide_exit_code
 from dqt.sql.pipeline import DQTPipeline
 
 _err = Console(stderr=True)
@@ -122,6 +123,17 @@ def _build_parser() -> argparse.ArgumentParser:
     # that stage, so the flag's only remaining effect would be to drop a guard
     # in exchange for nothing. --dry-run is kept as an accepted no-op because
     # scripts pass it and its intent is now simply unconditional.
+    profile.add_argument(
+        "--fail-on",
+        choices=FAIL_ON_CHOICES,
+        default="error",
+        help=(
+            "Severity at which findings make the process exit non-zero. "
+            "'error' (default) fails on error and critical; 'warning' also "
+            "fails on warnings; 'none' never gates on findings. A broken run "
+            "still exits non-zero whatever this is set to."
+        ),
+    )
     profile.add_argument(
         "--dry-run",
         action="store_true",
@@ -412,13 +424,15 @@ def _cmd_profile(args: argparse.Namespace) -> int:
                 try:
                     result, report_path = pipeline.run()
                 except Exception as exc:  # noqa: BLE001
-                    _err.print(f"[red]Pipeline error:[/red] {exc}")
-                    return 1
+                    # NEW-B means run() reports rather than raises, so reaching
+                    # here is DQT breaking, not the data being bad.
+                    _err.print(f"[red]Internal error:[/red] {exc}")
+                    return int(ExitCode.INTERNAL_ERROR)
             progress.advance(task)
 
     if result is None or report_path is None:
         _err.print("[red]Pipeline did not complete.[/red]")
-        return 1
+        return int(ExitCode.INTERNAL_ERROR)
 
     status_style = "green" if result.status == "success" else "red"
     status_text = f"[{status_style}]{result.status}[/{status_style}]"
@@ -437,9 +451,12 @@ def _cmd_profile(args: argparse.Namespace) -> int:
     _err.rule()
     _err.print(f"[bold]Report:[/bold] {report_path}")
 
+    for stage_error in result.stage_errors:
+        _err.print(f"[yellow]{stage_error.stage}:[/yellow] {stage_error.message}")
+
     # Only the report path goes to stdout for shell capture
     _out.print(str(report_path))
-    return 0
+    return int(decide_exit_code(result, fail_on=args.fail_on))
 
 
 # ---------------------------------------------------------------------------
