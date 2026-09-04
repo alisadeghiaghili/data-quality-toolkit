@@ -105,7 +105,16 @@ Found by reading source on 2026-08-17. Each needs an ID assigned by whoever owns
 the roadmap; the labels below are placeholders, deliberately in a separate range
 so they cannot be mistaken for roadmap IDs.
 
-### `NEW-A` · `dimension` carries two incompatible meanings
+### `NEW-A` · `dimension` carries two incompatible meanings — **fixed**
+
+**Fixed:** 2026-09-05 on branch `new-a-dimension`. `DQMetric.dimension` is now
+`DQDimension | None` (the closed six-value `Literal`, exported from `dqt` as
+§0.1 requires) and raw measurements moved to a new `metric_name` field.
+`__post_init__` enforces exactly one of the two and rejects a dimension
+outside the set; four `CHECK` constraints plus one table-level check put the
+same rules in the DDL, so direct SQL cannot store what the model would
+refuse. The natural-key index now coalesces both fields, closing the
+duplicate-row hole that making `dimension` nullable would otherwise open.
 
 **Severity:** high — silently wrong output · **Blocks:** any per-dimension
 scoring, trend, or filter
