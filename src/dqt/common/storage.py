@@ -406,6 +406,67 @@ class RunStore:
     # Private mapping helpers
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Cleansing plans and their logs (DQT-05)
+    # ------------------------------------------------------------------
+
+    def save_cleansing_plan(self, plan: Any) -> None:
+        """Persist a cleansing plan and the change set it computed.
+
+        Args:
+            plan: The CleansingPlan to store.
+
+        Returns:
+            None.
+
+        Example:
+            store.save_cleansing_plan(plan)
+        """
+        raise NotImplementedError("save_cleansing_plan is specified but not implemented")
+
+    def load_cleansing_plan(self, plan_id: str) -> Any:
+        """Load a cleansing plan by its identifier.
+
+        Args:
+            plan_id: Plan to load.
+
+        Returns:
+            The CleansingPlan, or None if no such plan exists.
+
+        Example:
+            plan = store.load_cleansing_plan("plan-abc")
+        """
+        raise NotImplementedError("load_cleansing_plan is specified but not implemented")
+
+    def load_cleansing_log(self, plan_id: str) -> list[dict[str, Any]]:
+        """Load the per-row log written when a plan was applied.
+
+        Args:
+            plan_id: Plan whose log to read.
+
+        Returns:
+            One dict per changed row, oldest first.
+
+        Example:
+            entries = store.load_cleansing_log("plan-abc")
+        """
+        raise NotImplementedError("load_cleansing_log is specified but not implemented")
+
+    def mark_cleansing_plan_applied(self, plan_id: str, applied_at: Any) -> None:
+        """Record that a plan has been executed.
+
+        Args:
+            plan_id: Plan that ran.
+            applied_at: When it ran.
+
+        Returns:
+            None.
+
+        Example:
+            store.mark_cleansing_plan_applied(plan.plan_id, applied_at)
+        """
+        raise NotImplementedError("mark_cleansing_plan_applied is specified but not implemented")
+
     @staticmethod
     def _metric_row(run_id: str, metric: DQMetric) -> tuple[Any, ...]:
         """Map a DQMetric dataclass to a parameter tuple for run_metrics INSERT."""

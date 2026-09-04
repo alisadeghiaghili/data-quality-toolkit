@@ -712,3 +712,113 @@ def cleanse(result: PipelineResult) -> PipelineResult:
         result = cleanse(result)
     """
     return result
+
+
+@dataclass
+class CleansingPlan:
+    """What a cleansing run would change, computed and stored before it runs.
+
+    A plan is the addressable unit `Q2` chose over a discarded ``--dry-run``
+    preview: what a reviewer approved and what is later executed are the same
+    object, retrieved by ``plan_id`` rather than reconstructed.
+
+    Attributes:
+        plan_id: Identifier assigned at planning time.
+        connection_id: Connection the plan was computed against.
+        configs: The cleansing configs it covers.
+        created_at: When planning ran.
+        changes: One entry per row that would change, with its before-value.
+        fingerprint: Digest of the affected rows as they were at planning
+            time, used to refuse a stale plan.
+        run_id: Pipeline run that produced it, or None for an ad hoc call.
+        applied_at: When it was executed, or None if it has not been.
+
+    Example:
+        plan = cleanse_plan(connection_config, configs, store=store)
+    """
+
+    plan_id: str
+    connection_id: str
+    configs: list[CleansingConfig]
+    created_at: datetime
+    changes: list[CleansingLog] = field(default_factory=list)
+    fingerprint: str = ""
+    run_id: str | None = None
+    applied_at: datetime | None = None
+
+
+def cleanse_plan(
+    connection_config: ConnectionConfig,
+    configs: list[CleansingConfig],
+    *,
+    store: Any,
+    run_id: str | None = None,
+) -> CleansingPlan:
+    """Compute and persist what cleansing would change, mutating nothing.
+
+    Args:
+        connection_config: Connection to read from. May be read-only.
+        configs: Cleansing operations to plan.
+        store: RunStore that persists the plan.
+        run_id: Owning pipeline run, or None for an ad hoc call.
+
+    Returns:
+        The persisted :class:`CleansingPlan`.
+
+    Example:
+        plan = cleanse_plan(config, configs, store=store)
+    """
+    raise NotImplementedError("cleanse_plan is specified but not implemented")
+
+
+def cleanse_apply(
+    plan_id: str,
+    connection_config: ConnectionConfig,
+    *,
+    store: Any,
+) -> CleansingResult:
+    """Execute a previously planned change set.
+
+    Args:
+        plan_id: Plan to execute.
+        connection_config: Connection to write through. Must not be read-only.
+        store: RunStore holding the plan.
+
+    Returns:
+        A :class:`CleansingResult` describing what changed.
+
+    Raises:
+        ValueError: If the plan is unknown, already applied, or the data has
+            drifted since it was planned.
+        ReadOnlyViolationError: If the connection is read-only.
+
+    Example:
+        result = cleanse_apply(plan.plan_id, config, store=store)
+    """
+    raise NotImplementedError("cleanse_apply is specified but not implemented")
+
+
+def revert(
+    plan_id: str,
+    connection_config: ConnectionConfig,
+    *,
+    store: Any,
+) -> CleansingResult:
+    """Replay a plan's log backwards, restoring the prior values.
+
+    Args:
+        plan_id: Plan to undo.
+        connection_config: Connection to write through.
+        store: RunStore holding the plan and its log.
+
+    Returns:
+        A :class:`CleansingResult` describing what was restored.
+
+    Raises:
+        ValueError: If the plan is unknown or was never applied.
+        ReadOnlyViolationError: If the connection is read-only.
+
+    Example:
+        revert(plan.plan_id, config, store=store)
+    """
+    raise NotImplementedError("revert is specified but not implemented")
