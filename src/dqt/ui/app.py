@@ -43,6 +43,7 @@ try:
 except ImportError:
     _FASTAPI_AVAILABLE = False
 
+from dqt import __version__
 from dqt.ui.api import (
     get_run_issues,
     get_run_metrics,
@@ -64,7 +65,7 @@ app = FastAPI(
         "Read-only REST API for exploring DQT pipeline run results. "
         "Data-quality focused: profiling, diagnostics, metrics, issues."
     ),
-    version="0.1.0",
+    version=__version__,
 )
 
 
