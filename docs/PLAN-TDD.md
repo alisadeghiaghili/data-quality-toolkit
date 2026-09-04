@@ -17,6 +17,11 @@
 > **Units 2–15 below are not started.** The next unit in sequence is unit 2,
 > `DQT-04` — register a `REGEXP` function for SQLite.
 >
+> **Superseded 2026-09-04 — see the full 2026-09-04 status block at the end
+> of this header for detail.** The sentence above is now stale: unit 2
+> (`DQT-04`) is done and merged. **Units 3–15 are not started. The next unit
+> in sequence is unit 3, `DOC-01`.**
+>
 > **Rank and status of this document itself.** This is a **sequencing plan,
 > not a task list and not normative** — `docs/00-START-HERE.md` §1 forbids
 > inventing a task list that competes with the roadmap. The authoritative
@@ -57,6 +62,50 @@
 > (SQL Server support, sequenced after the two PRs currently in flight),
 > annotated the same way, in place, without deleting the original
 > non-goal text.
+>
+> ## Status update — 2026-09-04
+>
+> **Unit 2 (`DQT-04`) is done and merged.** Red commit `005bb51`
+> (`test(sql): prove regex rules are dead on SQLite (DQT-04)`), green commit
+> `faa3714` (`fix(sql): register a REGEXP function for SQLite connections
+> (DQT-04)`), docs commit `0712ed7`, merged to `main` via PR #7 as merge
+> commit `c80eb63`.
+>
+> **`main` is now at `c80eb63`:** **190 tests passing**, coverage ~**85.25%**,
+> `ruff check` / `ruff format --check` / `mypy --strict` all green, CI green
+> on the push.
+>
+> PRs #6 and #7 had been merged locally but sat unpushed until 2026-09-04,
+> when they were pushed to `origin/main`.
+>
+> **Units 3–15 are not started. The next unit in sequence is unit 3,
+> `DOC-01`.**
+>
+> A separate open PR #8 (branch `dqt-01`) relicenses the project from
+> Apache-2.0 to BUSL-1.1 and corrects the README status block; it touches no
+> unit in this plan.
+>
+> **Superseded planning document.** An earlier, competing plan proposed a
+> TDD spec suite built on `@pytest.mark.xfail(strict=True)` markers, with
+> tasks numbered #15–26, in which unimplemented behaviour would be specced
+> as strict-xfail so that an XPASS hard-fails the moment code lands. That
+> approach was **never implemented** — verified 2026-09-04: the tree
+> contains zero `xfail` markers, zero `@pytest.mark` usages anywhere under
+> `src/` or `tests/`, and no `markers` entry in `pyproject.toml`. **This
+> document is the authoritative sequencing plan.** One genuinely useful idea
+> is salvaged from the superseded plan, and the precise reason it cannot be
+> applied wholesale is recorded here rather than silently dropped:
+> strict-xfail is a good forcing function for units **not yet started** —
+> it makes an accidental early implementation impossible to merge quietly.
+> But it is incompatible with this project's red/green commit discipline
+> for the unit **currently being worked**, because a red commit must fail on
+> a behavioural assertion, and a strict-xfail test reports as an expected
+> failure, not a failure — `pytest` exits 0 on a test module that is all
+> `xfail(strict=True)`, which is exactly the silent-pass shape this plan's
+> own honesty gate exists to prevent. If strict-xfail is ever adopted, it is
+> for future, not-yet-started units only, and a unit's specs must be
+> converted to plain failing tests at the moment work on that unit begins —
+> not left as strict-xfail through the red commit.
 
 **Baseline this plan is written against:** `main` at `1b3f917`. 183 tests passing.
 `ruff check`, `ruff format --check`, `mypy --strict` (22 files), and
@@ -459,6 +508,136 @@ exists at (keyed by `run_id`, which every call already carries) so it survives
 either resolution — do not invent a `plan_id` concept preemptively, since
 that is the owner's call.
 
+> **Superseded 2026-09-04 — Q2 settled against this paragraph's own
+> assumption.** The paragraph above (in particular "implement persistence at
+> the level `apply_cleansing()` already exists at... do not invent a
+> `plan_id` concept preemptively") is now obsolete. The owner settled Q2 on
+> 2026-08-26 **in favour of `plan`/`apply` keyed by `plan_id`** —
+> deliberately against this plan's own recommendation, for a stricter and
+> plan-specific audit trail. Q1 was settled in the same round: `cleanse` is
+> removed from `run()`'s call path entirely, because profiling must not be
+> structurally capable of mutation — a read-only guard alone is
+> insufficient. Both settlements reshape this unit; the reshaped design
+> follows immediately below. The "Tests first" / "Implementation" sections
+> further down are left as originally written except where the reshape
+> explicitly says otherwise — the checksum method, the kill-the-process
+> proof, and the drift-refusal test all survive the reshape unchanged in
+> substance, only their entry points change.
+>
+> ### Unit 6 reshaped design — 2026-09-04
+>
+> **Two entry points replace `apply_cleansing()`.**
+> - `cleanse_plan(run_id: str | None, config: CleansingConfig, ...) ->
+>   CleansingPlan` computes and persists what would change, mutating
+>   nothing, and returns a plan carrying a new `plan_id`. It runs the same
+>   set-based SQL the old `apply_cleansing(dry_run=True)` path ran to find
+>   affected rows, but now persists the result as a durable, addressable
+>   artifact instead of only returning it to the caller in memory.
+> - `cleanse_apply(plan_id: str) -> CleansingResult` executes a previously
+>   persisted plan: it re-reads the plan by `plan_id`, re-verifies it
+>   against current data (the drift check below is unchanged in substance
+>   from the original design), and performs the mutation.
+> - `revert(plan_id: str) -> CleansingResult` replays that plan's log
+>   backwards, exactly as the original `revert(run_id)` design intended,
+>   keyed by `plan_id` instead of `run_id` now that `plan_id` is the
+>   addressable unit.
+>
+> **Neither entry point is reachable from `DQTPipeline.run()`.** This is
+> Q1's requirement and it is structural, not a runtime flag: `run()`'s call
+> graph must not contain a code path that reaches `cleanse_plan` or
+> `cleanse_apply` at all — not behind a default-off flag, not behind a
+> config toggle. A profiling run must be *incapable* of mutating what it
+> profiles by construction, per `ENGINEERING-STANDARDS.md` §1.4's
+> single-point-of-failure reasoning, which Q1's settlement adopted from this
+> plan's own recommendation.
+>
+> **Storage.** Two tables, both keyed by `plan_id`:
+> - `cleansing_plans` — one row per `cleanse_plan()` call: `plan_id` (PK),
+>   `run_id` (nullable FK into `runs`, same `ON DELETE SET NULL` reasoning
+>   as `cleansing_log.run_id` below — a plan's audit value must outlive the
+>   run's retention window), the serialized plan (table/column/operation/
+>   predicate), `created_at`, and `applied_at` (`NULL` until `cleanse_apply`
+>   runs it, non-`NULL` after).
+> - `cleansing_log` — unchanged in spirit from the "Implementation"
+>   paragraph below, but now keyed by `plan_id` instead of `run_id`: one row
+>   per affected row, with table, column, row key, before/after value,
+>   operation, timestamp. `plan_id` is the FK; `run_id` is reachable
+>   transitively through `cleansing_plans.run_id` rather than duplicated
+>   onto every log row.
+> - The `plan_id`→`run_id` relationship, stated explicitly: a plan is
+>   typically generated *during* a run, but is applied and reverted
+>   independently of that run's lifecycle — which is the entire point of
+>   giving it its own identity rather than reusing `run_id`. An ad hoc CLI
+>   invocation with no run at all leaves `run_id` `NULL`, the same nullable
+>   design the original unit already specified.
+> - `_deduplicate()` already captures the full row via
+>   `_fetch_all_dicts(..., "SELECT * FROM ...")` as `CleansingLog.
+>   before_value` before deleting, so the data an automated `revert` needs
+>   already exists at cleanse time — this unit's job is persisting it into
+>   `cleansing_log` keyed by `plan_id` and replaying it in
+>   `revert(plan_id)`, not computing it for the first time.
+>
+> **`--dry-run`/`--commit` CLI flags (shipped by `DQT-03`) — resolved
+> explicitly, not left implicit.** Once `plan`/`apply` exists:
+> - `--dry-run` is **redefined** as sugar for `cleanse_plan(...)`: it
+>   computes and persists a plan, mutating nothing (as it always has), but
+>   must now print the resulting `plan_id` instead of a preview that is
+>   discarded on process exit — the plan becomes a durable, addressable
+>   artifact rather than terminal output.
+> - `--commit` in its currently shipped form (compute-and-immediately-apply
+>   in one invocation) is **deprecated**, not kept as-is.
+>   **Recommendation:** replace it with a new `--apply-plan <plan_id>` flag
+>   that calls `cleanse_apply(plan_id)` against a plan a prior `--dry-run`
+>   invocation already persisted, so the two steps are genuinely separate
+>   CLI invocations. **Reasoning:** keeping `--commit` alive as an alias
+>   that silently runs plan-then-apply in a single step would reintroduce
+>   exactly the weaker calling convention Q2 rejected — the `plan_id` would
+>   exist in storage but never surface to a human reviewer, so the stricter
+>   audit trail Q2 was chosen *for* would be satisfied in schema only, not
+>   in practice. A fast one-shot path can return later as an explicit,
+>   separately decided opt-in (e.g. `--commit --skip-review`) if the owner
+>   later decides speed matters more than the review habit for some CI use
+>   case, but that is a new decision to make deliberately, not a
+>   resurrection of `DQT-03`'s flag under its old semantics.
+>
+> **Checksum-based test design is unaffected and unchanged.** The `sha256`-
+> over-serialized-values approach (not row counts, per `HONESTY-GATE.md`'s
+> "row counts can match while values changed") in the "Tests first" section
+> below still applies verbatim — only the entry points and the keying
+> (`plan_id` vs. `run_id`) around those tests change; substitute
+> `cleanse_plan`/`cleanse_apply`/`revert(plan_id)` for
+> `apply_cleansing`/`revert(run_id)` throughout when this unit is
+> implemented.
+>
+> **Scale.** Cleansing is the one facet in this plan that unavoidably reads
+> rows — profiling and rules can be made set-based end-to-end, but a plan
+> must still know which specific rows it would touch in order to log a
+> per-row before/after record. Accordingly:
+> - `cleanse_plan`'s computation of "what would change" must be set-based
+>   SQL (e.g. `INSERT ... SELECT` into a staging shape), never row-by-row
+>   Python iteration over a result set.
+> - `cleanse_apply` and `revert` must read in bounded chunks or via a
+>   server-side cursor so memory stays flat regardless of table size —
+>   never `fetchall()` the entire affected set into a Python list.
+> - The persisted log must never require holding the whole affected set in
+>   memory at once, in either direction (writing it during `cleanse_plan`,
+>   or replaying it during `cleanse_apply`/`revert`).
+> - The connection must be reused across the plan and apply phases rather
+>   than reopened per call, consistent with `DQT-08`'s single
+>   connection-authority consolidation (unit 9) once that lands.
+>
+> **Storage-schema consequence — stated explicitly, not left implicit.**
+> Unit 5 (`NEW-A`) also changes the storage schema (the `dimension`/
+> `metric_name` split's `CHECK` constraints). This plan already sequences
+> unit 6 immediately after unit 5 specifically so the two share **one**
+> schema recreation — `RunStore` is a local SQLite artifact meant to be
+> recreated, not migrated, per `BACKLOG.md` `NEW-A`'s own note. Reaching
+> unit 6 without unit 5 having landed first would mean two separate breaking
+> recreations of `dqt_runs.db` instead of one, for anyone with an existing
+> local database — this is a deliberate, visible cost of the sequencing
+> choice, stated here so it is a visible, deliberate choice rather than an
+> accident.
+
 **Tests first.**
 - `tests/integration/test_cleansing_revert.py::test_standardize_round_trip`
   — seed a table, run `apply_cleansing(..., dry_run=False)` with a
@@ -762,6 +941,115 @@ a single repo's PR).
 
 ---
 
+### 9a. New unit, added 2026-09-04 — SQL Server support (`dqt/sql/dialects/` abstraction, driver, schema discovery)
+
+> **Numbering note.** This is inserted as "9a" rather than renumbered as a
+> new "10" (with units 10–15 pushed down) so that every existing
+> cross-reference in this document to "unit 10", "unit 13", "unit 14", "unit
+> 15", etc. stays correct without a whole-document rewrite — consistent with
+> this plan's own amendment convention of annotating and appending, not
+> silently rewriting. Physically, this unit is placed immediately after unit
+> 9, which is where the 2026-08-26 decision (see the amended non-goal below)
+> requires it to be justified against.
+
+**Depends on:** unit 9 (`DQT-08`), physically and architecturally — see
+"Why this placement" below.
+
+**Why this unit exists.** `§ Non-goals reaffirmed`'s 2026-08-26 amendment
+records that the owner added SQL Server support as "a new explicit unit,"
+with a fixed shape (`dqt/sql/dialects/` abstraction first, then driver and
+schema discovery) but explicitly did not create, number, or detail that unit
+in the sequence. This is that unit, written now so the sequence has no gap
+between "decided" and "scheduled."
+
+**Why this placement — immediately after unit 9, not literally "after the
+two PRs currently in flight."** The 2026-08-26 annotation's literal wording
+sequences this "after the two PRs currently in flight" — which, at the time
+it was written, meant this documentation PR and unit 2/`DQT-04`; both are
+now merged (see the 2026-09-04 status block above), so a literal reading
+would place this unit next, immediately after `DOC-01` (unit 3). This plan
+recommends placing it later instead, **immediately after unit 9**
+(`DQT-08`), and flags that recommendation explicitly as **owner-overridable**,
+with the reasoning stated plainly rather than buried in a diff:
+
+- The `dqt/sql/dialects/` abstraction this unit must build is the same
+  architectural seam `DQT-08` opens: `DQT-08` consolidates every
+  connection-opening path into one function
+  (`dqt.sql._connect.get_connection`) and settles, for the first time, what
+  "one connection authority per dialect" looks like in this codebase.
+  Building a dialects abstraction *before* that consolidation lands would
+  mean building it once against the pre-`DQT-08` two-driver, two-path
+  shape, then rebuilding it again once `DQT-08`'s single-authority design
+  exists — the same "write it twice" waste this plan already avoids
+  elsewhere (see unit 10's own rationale for waiting on `NEW-A`, and unit
+  9's own rationale for folding the `schema_discovery` bypass fix into
+  itself rather than doing it separately).
+- Placing this unit before `DOC-01` (unit 3) or before the `NEW-C` ground
+  work (units 4, 9's folded slice) would also mean writing a third dialect's
+  schema-discovery tests before `schema_discovery.py`'s own SQLite/Postgres
+  behavior has dedicated ground-truthed tests at all (that lands as part of
+  unit 9, folded in per that unit's own text) — testing dialect dispatch
+  before the two-dialect baseline it dispatches between is itself
+  characterized is the same ordering hazard `NEW-A`/`metrics.py` (unit 5→10)
+  and `profiling.py`/`DQT-05` (unit 4→6) already avoid elsewhere in this
+  plan.
+- This is a recommendation, not a mandate: the owner may prefer schedule
+  pressure (ship SQL Server sooner, accept a dialects-layer rewrite risk) over
+  architectural cleanliness (build it once, later). Both are defensible; this
+  plan's default is the latter, consistent with its treatment of `ARC-01`
+  (unit 14) landing after `DQT-08`/`DQT-09` for the same "smaller, truer
+  baseline is worth the wait" reasoning.
+
+**The three ordered pieces, in the order they must be built.**
+1. **`dqt/sql/dialects/` abstraction first.** A dialect-dispatch seam that
+   `_connect.py` (unit 9) and `schema_discovery.py`/`rules.py` can call
+   through instead of branching on `db_type` inline — the same kind of
+   single-authority shape `DQT-08` establishes for connection-opening,
+   applied to dialect-specific SQL generation (identifier quoting, type
+   mapping, `REGEXP`/`~` dispatch per unit 2's own SQLite/PostgreSQL split,
+   approximate-distinct support per the new performance unit below).
+2. **Then the driver.** A SQL Server DB-API 2.0 driver (e.g. `pyodbc` or
+   `pymssql` — pick one, per `ENGINEERING-STANDARDS.md` §1.2's single-driver
+   precedent that `DQT-08` already applies to PostgreSQL) wired through the
+   dialects abstraction from step 1, not around it — so the read-only
+   enforcement and connection-authority guarantees `DQT-08` established
+   extend to SQL Server automatically rather than needing a third bespoke
+   enforcement path.
+3. **Then schema discovery.** SQL Server table/column/nullability discovery
+   built on the same `discover_schema()` contract the SQLite/PostgreSQL
+   paths already satisfy, tested the same way unit 9's folded
+   `schema_discovery.py` slice tests the existing two dialects: a hand-built
+   database with known DDL, asserting `discover_schema` returns exactly
+   those tables/columns with exactly those `nullable` flags.
+
+**Documentation debt this unit must pay down when it lands.** Two files
+currently state SQL Server is unsupported, and both become false the moment
+this unit ships — both must be corrected in this unit's own PR, not
+deferred further:
+- `docs/CONVENTIONS-DQT.md:241` — the dialect-status table's "SQL Server |
+  **Not supported** | No driver, no discovery implementation." row.
+- `README.md:32` — "Supported databases: **SQLite** and **PostgreSQL**.
+  MySQL and SQL Server are not supported."
+
+Note MySQL is unaffected by this unit and remains correctly listed as
+unsupported in both files — only the SQL Server claims change.
+
+**Acceptance criteria (derived — this unit did not exist as a numbered plan
+item before 2026-09-04; there is no roadmap ID to cite).** The three pieces
+land in the stated order, each independently testable the way the rest of
+this plan requires (ground-truthed fixtures, not self-referential
+assertions). `docs/CONVENTIONS-DQT.md:241` and `README.md:32` are corrected
+in the same PR the support actually ships in. No other dialect's behavior
+regresses — `test_only_connect_module_imports_a_db_driver` (unit 9) and its
+sibling structural tests must still pass with a third driver added.
+
+**Size.** Not estimated here — this unit's scope (a new abstraction layer
+plus a full third-dialect implementation) is large enough that a size
+estimate without first designing the `dialects/` interface would be a guess
+dressed as a plan; size it properly when this unit is actually picked up.
+
+---
+
 ### 10. `NEW-C` (slice 2) — Ground `metrics.py`, post-`NEW-A`
 
 **Depends on:** `NEW-A` (unit 5) — this is the case `BACKLOG.md` names
@@ -999,6 +1287,109 @@ examples execute in CI.
 
 **Size.** 1–2 days, depends heavily on what's left after the churn above —
 re-measure before estimating precisely.
+
+---
+
+### 16. New unit, added 2026-09-04 — Performance and scale
+
+**Depends on:** nothing to start; cross-references unit 14 (`ARC-01`) below.
+Placed last in the numbered sequence because it is cross-cutting — it touches
+profiling, rules, cleansing, and reporting, all of which are reshaped by
+earlier units in this plan, so writing it last avoids specifying performance
+work against code shapes (`cleanse_plan`/`cleanse_apply`, the `dialects/`
+abstraction) that change under it.
+
+**Why this unit exists.** The owner stated on 2026-09-04 that DQT must work
+well on large data and that the design must be efficient. This plan had no
+performance unit at all before this — verified: the only match for
+"performance" anywhere in this document was the unrelated `§ Non-goals
+reaffirmed` entry about *service*/runtime monitoring (latency, CPU, wait
+stats), not data-processing performance. That is a genuine gap: efficiency
+at scale is a design constraint this plan should have carried from the
+start, not a later optimization pass bolted on after the fact.
+
+**Scope.**
+- **Single-pass profiling.** Many column statistics in one aggregate query
+  per table, rather than one query per statistic per column. This is not new
+  scope invented here — it already exists as an unscheduled idea
+  (`DQT-critical-review.md`, "Phase 2 — Make it useful," item 16:
+  "Single-pass profiler with real column stats; wire `SamplingConfig`; add
+  `--timeout`," detailed further at that document's §7.2). This unit
+  schedules that existing intent into the plan rather than inventing new
+  scope.
+- **Set-based rules grouped per table.** Rules must compile to aggregate SQL,
+  never row iteration; rules targeting the same table should share one scan
+  instead of each rule triggering its own scan of that table.
+- **Bounded evidence.** `DQIssue.evidence` must cap sample values with a
+  `LIMIT` so an issue never materializes the whole violating set — only a
+  bounded sample of it.
+- **Chunked or server-side cursor reads** wherever rows genuinely must be
+  read (the same requirement unit 6's reshaped `cleanse_apply`/`revert` state
+  for cleansing specifically — this unit generalizes it to every remaining
+  row-reading path), so memory stays flat regardless of table size.
+- **Connection reuse across rules**, rather than reopening a connection per
+  rule — the rules-engine counterpart to unit 6's "reuse the connection
+  across plan and apply phases" and unit 9's single connection-authority
+  consolidation.
+- **An approximate-distinct option where the dialect supports it**, since
+  `COUNT(DISTINCT ...)` is expensive at scale (e.g. PostgreSQL's
+  `HyperLogLog`-backed extensions or `approx_count_distinct`-style
+  functions where available), dispatched through the `dqt/sql/dialects/`
+  abstraction unit 9a introduces — plus honoring the existing
+  `SamplingConfig` (already defined in `common/models.py`, already wired
+  into `DQPipelineConfig`) so a full scan is not forced when a sample
+  answers the question.
+- **Performance budgets and a benchmark suite**, tracked in CI where
+  feasible — a budget without a benchmark measuring against it is just an
+  aspiration restated as a number; this unit's acceptance criteria require
+  both to exist together.
+
+**Honest caveat — a known scaling limit, not a defect.** The SQLite
+`REGEXP` function unit 2 (`DQT-04`) registered is a Python callback invoked
+once per row (`conn.create_function("REGEXP", 2, ...)`), so `regex` rules on
+SQLite are inherently a full scan with per-row Python overhead and will not
+scale to large tables — this is a known scaling limit of the current
+design, not a regression or a defect in the `DQT-04` fix, and it should not
+be mistaken for one. On PostgreSQL, the native `~` operator should be used
+instead of a callback (dispatched through the same `dqt/sql/dialects/`
+abstraction), since PostgreSQL evaluates `~` in-engine rather than round-
+tripping every row through Python. Stating this plainly here, rather than
+letting it surface later as a surprise regression report against `DQT-04`.
+
+**Cross-reference to `ARC-01` (unit 14).** The architecture gate's
+dependency-direction and I/O-at-the-edges rules are what make these
+optimizations possible without leaking database concerns into the domain
+layer — a set-based rewrite of profiling or rules that reached back into
+`common/models.py` to do it would violate the same layering `ARC-01` checks
+for. This unit's implementation should run against a codebase where
+`ARC-01`'s baseline is already established, so a performance-motivated
+layering shortcut gets caught by the gate rather than merged.
+
+**Acceptance criteria (derived — no roadmap ID exists for this unit; it is
+new as of 2026-09-04 and needs one from the owner).** Profiling issues one
+aggregate query per table for its column statistics, shown by query-count
+assertions against a fixture with multiple columns. Rules targeting the same
+table share one scan, shown the same way. `DQIssue.evidence` never exceeds
+its configured cap regardless of violation-set size, shown against a
+large-violation fixture. `cleanse_apply`/`revert` (unit 6) and any other
+row-reading path introduced by this point in the sequence read in bounded
+chunks, shown by a memory- or cursor-based test rather than a timing
+assertion alone. A benchmark suite exists and runs in CI (or is explicitly
+scoped out of CI with a stated reason, e.g. runtime cost) with at least one
+tracked budget per major operation (profile, rule evaluation, cleanse plan).
+The SQLite-`REGEXP`-is-a-full-scan caveat is documented in the same places
+`DQT-04`'s own docs updates touched (`docs/CONVENTIONS-DQT.md` §5's Rules
+engine status row), not just in this plan.
+
+**Docs to update.** `docs/CONVENTIONS-DQT.md` §5 (add a Performance/scale
+status row); `README.md` if a benchmark command is added; `docs/BACKLOG.md`
+(retire the `DQT-critical-review.md` Phase 2 item 16 reference once this
+unit's single-pass-profiling piece lands, or mark it "scheduled" if only
+partially landed).
+
+**Size.** Not estimated here, for the same reason unit 9a's size is not
+estimated — this unit's scope depends on decisions (which benchmark
+framework, which budgets) not yet made; size it when it is picked up.
 
 ---
 
