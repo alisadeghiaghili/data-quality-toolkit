@@ -90,9 +90,7 @@ class TestReadOnlyIsActuallyEnforced:
     never checked against a server.
     """
 
-    def test_the_server_refuses_a_write_on_a_read_only_connection(
-        self, seeded_table: str
-    ) -> None:
+    def test_the_server_refuses_a_write_on_a_read_only_connection(self, seeded_table: str) -> None:
         """PostgreSQL itself rejects the UPDATE, not just DQT.
 
         This is the layer that matters. DQT's own guard can be bypassed by any
@@ -125,9 +123,7 @@ class TestReadOnlyIsActuallyEnforced:
         finally:
             connection.close()
 
-    def test_cleanse_apply_refuses_before_reaching_the_server(
-        self, seeded_table: str
-    ) -> None:
+    def test_cleanse_apply_refuses_before_reaching_the_server(self, seeded_table: str) -> None:
         """DQT's own guard fires first, so the server is the second line.
 
         Defence in depth is the point: the application refuses to build the
