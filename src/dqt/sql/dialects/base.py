@@ -2,8 +2,8 @@
 dqt.sql.dialects.base
 =====================
 
-The :class:`Dialect` protocol â€” DQT's single declaration of everything that
-varies between one relational database and another â€” plus the small set of
+The :class:`Dialect` protocol — DQT's single declaration of everything that
+varies between one relational database and another — plus the small set of
 ANSI-common SQL builders that concrete dialects share rather than each
 re-implementing.
 
@@ -17,8 +17,8 @@ that needs one, so that ``import dqt`` never requires ``psycopg`` or
 
 What deliberately is *not* here. This protocol describes single-statement
 SQL construction and connection opening. It does not describe query
-*planning* â€” how many statements a caller issues, or whether several column
-statistics are folded into one scan â€” because that is the calling module's
+*planning* — how many statements a caller issues, or whether several column
+statistics are folded into one scan — because that is the calling module's
 decision, not the database's. :meth:`Dialect.select_aggregates_sql` takes a
 *sequence* of expressions precisely so a future single-pass profiler can pass
 one expression per column per statistic and get one query per table, without
@@ -26,10 +26,12 @@ this protocol changing at all.
 """
 
 from __future__ import annotations
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, NoReturn, Protocol, runtime_checkable
+
 from dqt.common.models import ConnectionConfig
 
 
@@ -37,7 +39,7 @@ def _unimplemented(symbol: str) -> NoReturn:
     """Fail loudly for a symbol whose interface exists but whose body does not.
 
     This exists so that `DQT-08`'s tests-first commit can ship the complete
-    ``dialects`` interface â€” signatures, types, and docstrings â€” while every
+    ``dialects`` interface — signatures, types, and docstrings — while every
     behavioural test still fails by *executing* the code under test rather
     than by failing to import it. The implementing commit replaces each of
     these calls with a real body; none may survive into a merged branch.
@@ -51,7 +53,7 @@ def _unimplemented(symbol: str) -> NoReturn:
     Raises:
         NotImplementedError: Always.
     """
-    raise NotImplementedError("_unimplemented is specified but not implemented yet")
+    raise NotImplementedError(f"{symbol} is declared but not yet implemented (DQT-08).")
 
 
 class ReadOnlyEnforcement(Enum):
@@ -103,7 +105,7 @@ class ColumnMetadata:
         table_name: Table the column belongs to.
         column_name: Column name, exactly as the database reports it.
         data_type: Database-reported type name, uppercased or lowercased
-            exactly as the database returns it â€” DQT does not normalise it.
+            exactly as the database returns it — DQT does not normalise it.
         nullable: ``True`` when the column accepts ``NULL``.
 
     Example:
@@ -140,12 +142,12 @@ class Dialect(Protocol):
             ``"sqlserver"``). This is the key used by
             :func:`dqt.sql.dialects.get_dialect_by_name`.
         parameter_placeholder: The DBAPI bind-parameter placeholder this
-            database's driver expects â€” ``"?"`` for ``qmark`` drivers,
+            database's driver expects — ``"?"`` for ``qmark`` drivers,
             ``"%s"`` for ``pyformat``/``format`` drivers. Literal values
             must always reach SQL through a placeholder, never through
             string interpolation.
         read_only_enforcement: How strongly :meth:`connect` can hold a
-            ``read_only=True`` connection â€” see :class:`ReadOnlyEnforcement`.
+            ``read_only=True`` connection — see :class:`ReadOnlyEnforcement`.
 
     Example:
         from dqt.sql.dialects import get_dialect
@@ -186,7 +188,7 @@ class Dialect(Protocol):
             connection = dialect.connect(config)
             connection.close()
         """
-        raise NotImplementedError("connect is specified but not implemented yet")
+        ...
 
     def quote_identifier(self, name: str) -> str:
         """Quote and escape one SQL identifier for this dialect.
@@ -203,7 +205,7 @@ class Dialect(Protocol):
         Example:
             assert dialect.quote_identifier("orders").endswith("orders" + dialect_close)
         """
-        raise NotImplementedError("quote_identifier is specified but not implemented yet")
+        ...
 
     def qualified_identifier(self, schema_name: str | None, table_name: str) -> str:
         """Return a quoted, possibly schema-qualified table reference.
@@ -211,7 +213,7 @@ class Dialect(Protocol):
         Args:
             schema_name: Schema name, or ``None`` for an unqualified
                 reference. A dialect may additionally treat its own implicit
-                default schema as "unqualified" â€” SQLite does this for
+                default schema as "unqualified" — SQLite does this for
                 ``"main"``.
             table_name: Table name.
 
@@ -223,7 +225,7 @@ class Dialect(Protocol):
             reference = dialect.qualified_identifier(None, "orders")
             assert "orders" in reference
         """
-        raise NotImplementedError("qualified_identifier is specified but not implemented yet")
+        ...
 
     def fetch_column_metadata(self, connection: Any) -> list[ColumnMetadata]:
         """Read every user column from the database's catalogue.
@@ -244,10 +246,13 @@ class Dialect(Protocol):
             rows = dialect.fetch_column_metadata(connection)
             assert all(row.table_name for row in rows)
         """
-        raise NotImplementedError("fetch_column_metadata is specified but not implemented yet")
+        ...
 
     def select_aggregates_sql(
-        self, qualified_table: str, expressions: Sequence[str], where_clause: str | None = None
+        self,
+        qualified_table: str,
+        expressions: Sequence[str],
+        where_clause: str | None = None,
     ) -> str:
         """Build one set-based aggregate query over *qualified_table*.
 
@@ -276,7 +281,7 @@ class Dialect(Protocol):
             sql = dialect.select_aggregates_sql("t", ["COUNT(*)"])
             assert sql.startswith("SELECT COUNT(*) FROM t")
         """
-        raise NotImplementedError("select_aggregates_sql is specified but not implemented yet")
+        ...
 
     def limited_select_sql(
         self,
@@ -313,7 +318,7 @@ class Dialect(Protocol):
             sql = dialect.limited_select_sql("t", ["a"], limit=5)
             assert "5" in sql
         """
-        raise NotImplementedError("limited_select_sql is specified but not implemented yet")
+        ...
 
     def regex_not_matching_predicate(self, quoted_column: str, pattern: str) -> str:
         """Build a predicate selecting rows whose value fails *pattern*.
@@ -327,7 +332,7 @@ class Dialect(Protocol):
             pattern: The regular expression source, as written in a rule
                 file's ``params.pattern``. It is *validated* here where the
                 dialect needs validation up front, but it is never
-                interpolated into the returned SQL â€” the caller binds it as
+                interpolated into the returned SQL — the caller binds it as
                 a parameter.
 
         Returns:
@@ -343,9 +348,7 @@ class Dialect(Protocol):
             predicate = dialect.regex_not_matching_predicate('"email"', "^a")
             assert "IS NOT NULL" in predicate
         """
-        raise NotImplementedError(
-            "regex_not_matching_predicate is specified but not implemented yet"
-        )
+        ...
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Return an approximate distinct-count expression, if one exists.
@@ -368,9 +371,7 @@ class Dialect(Protocol):
             expression = dialect.approximate_distinct_expression('"customer_id"')
             assert expression is None or "customer_id" in expression
         """
-        raise NotImplementedError(
-            "approximate_distinct_expression is specified but not implemented yet"
-        )
+        ...
 
 
 def quote_with_doubled_delimiter(name: str, quote_char: str) -> str:
@@ -378,7 +379,7 @@ def quote_with_doubled_delimiter(name: str, quote_char: str) -> str:
 
     This is the ANSI identifier-quoting algorithm, shared by every dialect
     whose opening and closing delimiter are the same character. SQL Server's
-    bracket form is asymmetric and does not use this function â€” which is
+    bracket form is asymmetric and does not use this function — which is
     exactly why the algorithm lives here as a shared helper rather than as a
     single hard-coded rule.
 
@@ -393,11 +394,14 @@ def quote_with_doubled_delimiter(name: str, quote_char: str) -> str:
         assert quote_with_doubled_delimiter("orders", '"') == '"orders"'
         assert quote_with_doubled_delimiter('a"b', '"') == '"a""b"'
     """
-    raise NotImplementedError("quote_with_doubled_delimiter is specified but not implemented yet")
+    escaped = name.replace(quote_char, quote_char * 2)
+    return f"{quote_char}{escaped}{quote_char}"
 
 
 def ansi_select_aggregates_sql(
-    qualified_table: str, expressions: Sequence[str], where_clause: str | None = None
+    qualified_table: str,
+    expressions: Sequence[str],
+    where_clause: str | None = None,
 ) -> str:
     """Build a ``SELECT ... FROM ... [WHERE ...]`` statement in ANSI form.
 
@@ -413,14 +417,19 @@ def ansi_select_aggregates_sql(
         The assembled statement, with expressions comma-separated.
 
     Raises:
-        ValueError: If *expressions* is empty â€” a ``SELECT`` with no
+        ValueError: If *expressions* is empty — a ``SELECT`` with no
             projection is a programming error, not a query.
 
     Example:
         sql = ansi_select_aggregates_sql("t", ["COUNT(*)"], '"c" IS NULL')
         assert sql == 'SELECT COUNT(*) FROM t WHERE "c" IS NULL'
     """
-    raise NotImplementedError("ansi_select_aggregates_sql is specified but not implemented yet")
+    if not expressions:
+        raise ValueError("A SELECT needs at least one expression to project.")
+    statement = f"SELECT {', '.join(expressions)} FROM {qualified_table}"
+    if where_clause:
+        statement = f"{statement} WHERE {where_clause}"
+    return statement
 
 
 def validate_row_limit(limit: int | None) -> None:
@@ -441,4 +450,5 @@ def validate_row_limit(limit: int | None) -> None:
         validate_row_limit(10)
         validate_row_limit(None)
     """
-    raise NotImplementedError("validate_row_limit is specified but not implemented yet")
+    if limit is not None and limit <= 0:
+        raise ValueError(f"Row limit must be a positive integer, got {limit!r}.")

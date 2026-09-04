@@ -7,7 +7,7 @@ The single place a **user database** connection is ever opened (`DQT-08`).
 Before this module there were two independent connection paths:
 ``rules._get_connection`` and ``schema_discovery.connect_sql``. They used
 different PostgreSQL drivers (``psycopg2`` and ``psycopg``), and only the
-first honoured ``ConnectionConfig.read_only`` at all â€” ``connect_sql``
+first honoured ``ConnectionConfig.read_only`` at all — ``connect_sql``
 contained no reference to the flag, so schema discovery and profiling opened
 writable connections no matter what the configuration said. Nothing exploited
 that (both paths only ever issued ``SELECT``), but it meant `DQT-03`'s
@@ -28,8 +28,10 @@ resolution wants.
 """
 
 from __future__ import annotations
+
 import warnings
 from typing import Any
+
 from dqt.common.models import ConnectionConfig
 from dqt.sql.dialects import Dialect, ReadOnlyEnforcement, get_dialect
 
@@ -41,10 +43,10 @@ def get_connection(connection_config: ConnectionConfig) -> Any:
     the read-only incantation is whichever one that database actually
     supports rather than a branch written here.
 
-    Where a dialect cannot enforce read-only at the driver or server â€” today
+    Where a dialect cannot enforce read-only at the driver or server — today
     only SQL Server, whose
     :attr:`~dqt.sql.dialects.base.ReadOnlyEnforcement.ADVISORY` value says so
-    â€” a :class:`RuntimeWarning` is emitted for a ``read_only=True``
+    — a :class:`RuntimeWarning` is emitted for a ``read_only=True``
     connection. Opening it silently would let a caller believe it had a
     guarantee DQT cannot give on that database.
 
@@ -66,7 +68,21 @@ def get_connection(connection_config: ConnectionConfig) -> Any:
         connection = get_connection(config)
         connection.close()
     """
-    raise NotImplementedError("get_connection is specified but not implemented yet")
+    dialect = get_dialect(connection_config.dsn)
+    if (
+        connection_config.read_only
+        and dialect.read_only_enforcement is ReadOnlyEnforcement.ADVISORY
+    ):
+        warnings.warn(
+            f"Connection {connection_config.id!r} asks for read_only=True, but the "
+            f"{dialect.name!r} dialect cannot enforce it: read-only is advisory there, "
+            "not enforced by the driver or the server. DQT still refuses to build "
+            "mutating SQL against this connection, but the database will not stop a "
+            "write that reaches it. Connect with a read-only login.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return dialect.connect(connection_config)
 
 
 def get_dialect_for(connection_config: ConnectionConfig) -> Dialect:
@@ -92,7 +108,7 @@ def get_dialect_for(connection_config: ConnectionConfig) -> Dialect:
         config = ConnectionConfig(id="t", dsn="sqlite:///:memory:")
         assert get_dialect_for(config).name == "sqlite"
     """
-    raise NotImplementedError("get_dialect_for is specified but not implemented yet")
+    return get_dialect(connection_config.dsn)
 
 
 __all__ = ["ReadOnlyEnforcement", "get_connection", "get_dialect_for"]

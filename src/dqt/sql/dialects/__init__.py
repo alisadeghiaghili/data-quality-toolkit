@@ -27,21 +27,29 @@ Public surface::
 """
 
 from __future__ import annotations
+
 from dqt.sql.dialects.base import ColumnMetadata, Dialect, ReadOnlyEnforcement
 from dqt.sql.dialects.postgresql import POSTGRESQL
 from dqt.sql.dialects.sqlite import SQLITE
 from dqt.sql.dialects.sqlserver import SQLSERVER
 
+# DSN scheme prefixes, in the order they are tested, mapped to the dialect
+# they select. Prefix matching (rather than a strict "scheme://" parse) is
+# deliberate: it preserves exactly the behaviour the pre-DQT-08 dialect
+# detection had, where "sqlite:///x.db" and "sqlite://x.db" both resolve.
 _DSN_PREFIXES: tuple[tuple[tuple[str, ...], Dialect], ...] = (
     (("sqlite",), SQLITE),
     (("postgresql", "postgres"), POSTGRESQL),
     (("mssql", "sqlserver"), SQLSERVER),
 )
+
 _DIALECTS_BY_NAME: dict[str, Dialect] = {
     SQLITE.name: SQLITE,
     POSTGRESQL.name: POSTGRESQL,
     SQLSERVER.name: SQLSERVER,
 }
+
+#: Canonical names of every dialect DQT supports, in DSN-resolution order.
 SUPPORTED_DIALECT_NAMES: tuple[str, ...] = tuple(_DIALECTS_BY_NAME)
 
 
@@ -70,7 +78,15 @@ def get_dialect(dsn: str) -> Dialect:
         assert get_dialect("postgres://u:p@h/db").name == "postgresql"
         assert get_dialect("mssql://sa@h/db").name == "sqlserver"
     """
-    raise NotImplementedError("get_dialect is specified but not implemented yet")
+    normalised = dsn.strip()
+    for prefixes, dialect in _DSN_PREFIXES:
+        if normalised.startswith(prefixes):
+            return dialect
+    schemes = [prefix for prefixes, _ in _DSN_PREFIXES for prefix in prefixes]
+    raise ValueError(
+        f"Cannot detect a supported dialect from DSN: {dsn!r}. "
+        f"Supported schemes: {', '.join(schemes)}."
+    )
 
 
 def get_dialect_by_name(name: str) -> Dialect:
@@ -90,7 +106,14 @@ def get_dialect_by_name(name: str) -> Dialect:
     Example:
         assert get_dialect_by_name("sqlserver").parameter_placeholder == "?"
     """
-    raise NotImplementedError("get_dialect_by_name is specified but not implemented yet")
+    if name == "postgres":
+        return POSTGRESQL
+    try:
+        return _DIALECTS_BY_NAME[name]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unsupported dialect name: {name!r}. Supported: {', '.join(SUPPORTED_DIALECT_NAMES)}."
+        ) from exc
 
 
 __all__ = [

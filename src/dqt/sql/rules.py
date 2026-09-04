@@ -23,10 +23,10 @@ Supported expressions
 +------------------+-----------------------------------------------------------+
 | ``regex``        | Values match a regular expression (validity).             |
 |                  | Requires ``params.pattern``.                              |
-|                  | SQLite has no native REGEXP; this module registers a      |
-|                  | Python ``re``-backed implementation on every connection    |
-|                  | it opens (see :func:`_get_connection`). PostgreSQL uses    |
-|                  | its native ``~`` operator.                                 |
+|                  | Each dialect owns how it matches: SQLite registers a       |
+|                  | Python ``re``-backed ``REGEXP`` function, PostgreSQL uses  |
+|                  | its native ``~``, and SQL Server has no regex operator at  |
+|                  | all and says so rather than reporting a false result.      |
 +------------------+-----------------------------------------------------------+
 
 Engine architecture
@@ -63,8 +63,6 @@ Example::
 from __future__ import annotations
 
 import fnmatch
-import functools
-import re
 import uuid
 from typing import Any
 
@@ -74,7 +72,8 @@ from dqt.common.models import (
     RuleConfig,
     RuleRunResult,
 )
-from dqt.sql._identifiers import qualified_identifier, quote_identifier
+from dqt.sql._connect import get_connection, get_dialect_for
+from dqt.sql.dialects.base import Dialect
 from dqt.sql.schema_discovery import DiscoveredTable
 
 # ---------------------------------------------------------------------------
@@ -105,204 +104,9 @@ _REGEX_PATTERN_MAX_LENGTH = 1000
 _REGEX_CACHE_MAXSIZE = 256
 
 
-@functools.lru_cache(maxsize=_REGEX_CACHE_MAXSIZE)
-def _compile_regex_pattern(pattern: str) -> re.Pattern[str]:
-    """Compile *pattern* into a :class:`re.Pattern`, cached and length-bounded.
-
-    This is the single place a ``regex`` rule's pattern is turned into a
-    compiled expression, for two reasons: it lets the SQLite ``REGEXP``
-    callback (:func:`_sqlite_regexp`) and :func:`_eval_regex`'s own
-    up-front validation share one cache, and it means the length guard and
-    the "invalid pattern" error message only need to be written once.
-
-    Args:
-        pattern: Regular expression source, as written in ``params.pattern``
-            of a rule file.
-
-    Returns:
-        The compiled pattern, memoized by :func:`functools.lru_cache` (see
-        module-level ``_REGEX_CACHE_MAXSIZE`` for the bound).
-
-    Raises:
-        ValueError: If *pattern* is longer than ``_REGEX_PATTERN_MAX_LENGTH``,
-            or is not a syntactically valid Python regular expression. This
-            is deliberately :class:`ValueError`, matching the convention
-            already used by :func:`_eval_range` for bad rule parameters —
-            a malformed pattern is a rule-configuration error, not a data
-            issue, and must not be reported as if every row failed the
-            check. (Once `DQT-09` lands a shared exception hierarchy, this
-            should become that hierarchy's ``RuleEvaluationError`` instead;
-            tracked there, not here.)
-
-    Example::
-
-        compiled = _compile_regex_pattern(r"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
-        assert compiled.search("a@b.com") is not None
-    """
-    if len(pattern) > _REGEX_PATTERN_MAX_LENGTH:
-        raise ValueError(
-            f"regex rule pattern is {len(pattern)} characters, which exceeds the "
-            f"maximum of {_REGEX_PATTERN_MAX_LENGTH}. Refusing to compile it."
-        )
-    try:
-        return re.compile(pattern)
-    except re.error as exc:
-        raise ValueError(f"Invalid regex pattern {pattern!r}: {exc}") from exc
-
-
-def _sqlite_regexp(pattern: str, value: object) -> bool | None:
-    """Implement SQLite's ``REGEXP`` operator via Python's :mod:`re`.
-
-    Registered as the connection-wide ``REGEXP(X, Y)`` function by
-    :func:`_get_connection`. SQLite rewrites the infix expression
-    ``value REGEXP pattern`` into the function call ``REGEXP(pattern,
-    value)`` — the pattern comes first, the value second — so this
-    function's parameter order mirrors that call exactly. Getting this
-    backwards would not raise; it would silently invert every match
-    (verified empirically in
-    ``tests/unit/sql/test_rules.py::test_regexp_function_registered_on_sqlite_connection``).
-
-    Args:
-        pattern: The regex pattern (SQLite's first argument, ``X`` in
-            ``REGEXP(X, Y)``).
-        value: The column value being tested (SQLite's second argument).
-            May be any SQLite-native Python type, or ``None``.
-
-    Returns:
-        ``True`` if *value* (coerced to ``str``) matches *pattern* anywhere
-        (via :func:`re.search`); ``False`` if it does not; ``None`` if
-        *value* is SQL ``NULL`` (SQLite treats a ``NULL`` function result as
-        ``NULL``, which is falsy in a ``WHERE`` clause — callers in this
-        module additionally guard with an explicit ``IS NOT NULL``, so this
-        is defense in depth rather than the only NULL handling).
-
-    Raises:
-        ValueError: If *pattern* is invalid or too long — see
-            :func:`_compile_regex_pattern`. SQLite reports this to the
-            caller as ``sqlite3.OperationalError: user-defined function
-            raised exception``; :func:`_eval_regex` avoids that by
-            validating the pattern itself before ever issuing the query.
-
-    Example::
-
-        assert _sqlite_regexp("^a", "abc") is True
-        assert _sqlite_regexp("^a", "zzz") is False
-        assert _sqlite_regexp("^a", None) is None
-    """
-    if value is None:
-        return None
-    compiled = _compile_regex_pattern(pattern)
-    return compiled.search(str(value)) is not None
-
-
 # ---------------------------------------------------------------------------
 # Internal: DB connection helper
 # ---------------------------------------------------------------------------
-
-
-def _get_connection(config: ConnectionConfig) -> Any:
-    """Return a DBAPI connection for *config*.
-
-    Supports SQLite (``sqlite://...``) and PostgreSQL (``postgresql://...``).
-
-    When ``config.read_only`` is ``True`` (the default — see
-    :class:`~dqt.common.models.ConnectionConfig`), the returned connection
-    cannot write, enforced by the driver/database itself rather than by
-    caller discipline:
-
-    * **SQLite** — opened via the ``file:<path>?mode=ro`` URI form, so any
-      ``INSERT``/``UPDATE``/``DELETE`` raises ``sqlite3.OperationalError:
-      attempt to write a readonly database``. A path of ``":memory:"`` is a
-      documented exception: a fresh in-memory database created by this call
-      is never a persistent asset, so ``mode=ro`` would only make it
-      permanently empty and unusable. It is opened normally in that case.
-      A consequence of the URI form: unlike a plain
-      ``sqlite3.connect(path)``, this does **not** create the database file
-      if it does not already exist — it raises ``sqlite3.OperationalError``
-      instead. That is a deliberate behavior change from the pre-`DQT-03`
-      code (which always auto-created the file); it is treated here as
-      correct, since silently creating a database file you were told to
-      treat as read-only is itself a surprise.
-    * **PostgreSQL** — the session is set to
-      ``SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`` immediately
-      after connecting, so every subsequent transaction on this connection
-      is read-only at the server, not just by convention. (Untested in this
-      repository: there is no PostgreSQL driver or server available in CI —
-      see the task report's ``UNTESTED CODE PATHS``.)
-
-    This is one of two independent enforcement layers for `DQT-03`; the
-    second is :class:`~dqt.exceptions.ReadOnlyViolationError`, raised by
-    :func:`dqt.sql.cleansing.apply_cleansing` before this function is even
-    called.
-
-    Every SQLite connection returned here (regardless of *config.read_only*)
-    also has :func:`_sqlite_regexp` registered as the ``REGEXP`` function
-    (`DQT-04`), since SQLite dispatches its ``REGEXP`` operator to a
-    user-defined function rather than implementing one itself. This is the
-    single place that registration happens; nothing in this module opens a
-    second, non-conforming SQLite connection. (Note:
-    :func:`dqt.sql.schema_discovery.connect_sql` is a separate,
-    non-conforming connection-opening path elsewhere in this package — out
-    of scope for `DQT-04`, but its ``regex`` rules would not get REGEXP
-    support from this change.)
-
-    Args:
-        config: Validated connection configuration.
-
-    Returns:
-        An open DBAPI connection.
-
-    Raises:
-        ImportError: If the required driver (``psycopg2``) is not installed.
-        ValueError: If the DSN scheme is not supported.
-
-    Example::
-
-        # read_only=False because the example path need not already exist;
-        # the default (read_only=True) requires the file to exist first.
-        conn = _get_connection(
-            ConnectionConfig(id="dev", dsn="sqlite:///dev.db", read_only=False)
-        )
-        conn.close()
-    """
-    dsn = config.dsn
-    if dsn.startswith("sqlite://"):
-        import sqlite3
-
-        db_path = (
-            dsn[len("sqlite:///") :] if dsn.startswith("sqlite:///") else dsn[len("sqlite://") :]
-        )
-        if config.read_only and db_path != ":memory:":
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        else:
-            conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        # See _sqlite_regexp: SQLite has no built-in REGEXP, only the
-        # ability to dispatch it to a registered function. Registering it
-        # here, on every connection this function returns (read-only or
-        # not, file-backed or :memory:), is what makes the `regex` rule
-        # expression actually work on SQLite (`DQT-04`). Registering a
-        # function is not a write and is unaffected by mode=ro.
-        conn.create_function("REGEXP", 2, _sqlite_regexp)
-        return conn
-    if dsn.startswith("postgresql://") or dsn.startswith("postgres://"):
-        try:
-            import psycopg2
-        except ImportError as exc:
-            raise ImportError(
-                "psycopg2 is required for PostgreSQL connections. "
-                "Install with: pip install psycopg2-binary"
-            ) from exc
-        pg_conn = psycopg2.connect(dsn)
-        if config.read_only:
-            pg_cursor = pg_conn.cursor()
-            pg_cursor.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
-            pg_cursor.close()
-            pg_conn.commit()
-        return pg_conn
-    raise ValueError(
-        f"Unsupported DSN scheme in '{dsn}'. Supported: sqlite://, postgresql://, postgres://"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -358,37 +162,12 @@ def _matches_scope(
 # ---------------------------------------------------------------------------
 
 
-def _placeholder(dialect: str) -> str:
-    """Return the DBAPI bind-parameter placeholder for *dialect*.
-
-    Args:
-        dialect: ``"sqlite"``, ``"postgresql"``, or ``"postgres"``.
-
-    Returns:
-        ``"?"`` for SQLite (paramstyle ``qmark``), ``"%s"`` for PostgreSQL
-        (paramstyle ``pyformat``/``format``, as used by ``psycopg2``).
-
-    Raises:
-        ValueError: If *dialect* is not supported.
-
-    Example::
-
-        assert _placeholder("sqlite") == "?"
-        assert _placeholder("postgresql") == "%s"
-    """
-    if dialect == "sqlite":
-        return "?"
-    if dialect in ("postgresql", "postgres"):
-        return "%s"
-    raise ValueError(f"Unsupported dialect for parameter placeholders: {dialect!r}")
-
-
 def _eval_not_null(
     cursor: Any,
     schema_name: str | None,
     table_name: str,
     column_name: str,
-    dialect: str = "sqlite",
+    dialect: Dialect,
 ) -> tuple[int, int]:
     """Count total rows and NULL rows for a column.
 
@@ -406,8 +185,8 @@ def _eval_not_null(
 
         total, nulls = _eval_not_null(cursor, "public", "orders", "customer_id")
     """
-    tbl = qualified_identifier(schema_name, table_name, dialect)
-    col = quote_identifier(column_name, dialect)
+    tbl = dialect.qualified_identifier(schema_name, table_name)
+    col = dialect.quote_identifier(column_name)
     cursor.execute(f"SELECT COUNT(*), COUNT(*) - COUNT({col}) FROM {tbl}")
     row = cursor.fetchone()
     return int(row[0]), int(row[1])
@@ -418,7 +197,7 @@ def _eval_unique(
     schema_name: str | None,
     table_name: str,
     column_name: str,
-    dialect: str = "sqlite",
+    dialect: Dialect,
 ) -> tuple[int, int]:
     """Count total non-null rows and duplicate rows for a column.
 
@@ -437,8 +216,8 @@ def _eval_unique(
 
         total, dupes = _eval_unique(cursor, "public", "users", "email")
     """
-    tbl = qualified_identifier(schema_name, table_name, dialect)
-    col = quote_identifier(column_name, dialect)
+    tbl = dialect.qualified_identifier(schema_name, table_name)
+    col = dialect.quote_identifier(column_name)
     cursor.execute(f"SELECT COUNT({col}) FROM {tbl}")
     total = int(cursor.fetchone()[0])
     cursor.execute(
@@ -464,7 +243,7 @@ def _eval_range(
     column_name: str,
     min_val: float | None,
     max_val: float | None,
-    dialect: str = "sqlite",
+    dialect: Dialect,
 ) -> tuple[int, int]:
     """Count rows outside the specified [min, max] range.
 
@@ -493,12 +272,12 @@ def _eval_range(
     """
     if min_val is None and max_val is None:
         raise ValueError("range rule requires at least one of params.min or params.max.")
-    tbl = qualified_identifier(schema_name, table_name, dialect)
-    col = quote_identifier(column_name, dialect)
+    tbl = dialect.qualified_identifier(schema_name, table_name)
+    col = dialect.quote_identifier(column_name)
     cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
     total = int(cursor.fetchone()[0])
 
-    ph = _placeholder(dialect)
+    ph = dialect.parameter_placeholder
     bind_params: list[float]
     if min_val is not None and max_val is not None:
         where = f"{col} IS NOT NULL AND ({col} < {ph} OR {col} > {ph})"
@@ -522,18 +301,24 @@ def _eval_regex(
     table_name: str,
     column_name: str,
     pattern: str,
-    dialect: str,
+    dialect: Dialect,
 ) -> tuple[int, int]:
     """Count rows whose column value does not match *pattern*.
 
-    On SQLite this relies on the ``REGEXP`` function registered by
-    :func:`_get_connection` (`DQT-04`); *cursor* must come from a
-    connection opened through that function, or the query below raises
-    ``sqlite3.OperationalError: no such function: REGEXP``. PostgreSQL uses
-    the native ``~`` operator instead and needs no such registration.
+    How the match is expressed is the dialect's business, not this
+    function's: it asks
+    :meth:`~dqt.sql.dialects.base.Dialect.regex_not_matching_predicate` for a
+    predicate and binds *pattern* as a parameter. SQLite answers with its
+    registered ``REGEXP`` function (`DQT-04`), PostgreSQL with the native
+    ``~`` operator, and SQL Server refuses outright because it has no regex
+    operator to answer with.
 
-    For SQLite, *pattern* is validated (compiled) up front via
-    :func:`_compile_regex_pattern` before any query runs. This is
+    *cursor* must come from a connection opened by
+    :func:`~dqt.sql._connect.get_connection`, which is what installs SQLite's
+    ``REGEXP`` function; a connection opened any other way raises
+    ``sqlite3.OperationalError: no such function: REGEXP``.
+
+    The dialect validates *pattern* up front, before any query runs. This is
     deliberate: without it, a malformed pattern would only be discovered
     when SQLite invokes the registered function mid-query, which surfaces
     as ``sqlite3.OperationalError: user-defined function raised
@@ -550,35 +335,34 @@ def _eval_regex(
         table_name: Table name.
         column_name: Column name.
         pattern: Regular expression pattern.
-        dialect: ``"sqlite"`` or ``"postgresql"``.
+        dialect: Resolved :class:`~dqt.sql.dialects.base.Dialect`. It owns
+            the identifier quoting and the bind placeholder used below.
 
     Returns:
         Tuple of ``(total_rows, non_matching_count)``.
 
     Raises:
-        ValueError: If *dialect* is not supported, or (SQLite only) if
-            *pattern* is not a valid, length-bounded regular expression —
-            see :func:`_compile_regex_pattern`.
+        ValueError: If the dialect cannot evaluate a regular expression at
+            all, or if *pattern* is not a valid, length-bounded regular
+            expression. Which of the two applies is the dialect's decision;
+            see
+            :meth:`~dqt.sql.dialects.base.Dialect.regex_not_matching_predicate`.
 
     Example::
 
         total, bad = _eval_regex(cursor, None, "users", "email",
                                   r"^[^@]+@[^@]+$", "sqlite")
     """
-    tbl = qualified_identifier(schema_name, table_name, dialect)
-    col = quote_identifier(column_name, dialect)
+    tbl = dialect.qualified_identifier(schema_name, table_name)
+    col = dialect.quote_identifier(column_name)
     cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
     total = int(cursor.fetchone()[0])
 
-    if dialect == "sqlite":
-        _compile_regex_pattern(pattern)  # raise ValueError before querying, not during
-        not_match_sql = f"SELECT COUNT(*) FROM {tbl} WHERE {col} IS NOT NULL AND {col} NOT REGEXP ?"
-        cursor.execute(not_match_sql, (pattern,))
-    elif dialect in ("postgresql", "postgres"):
-        not_match_sql = f"SELECT COUNT(*) FROM {tbl} WHERE {col} IS NOT NULL AND NOT ({col} ~ %s)"
-        cursor.execute(not_match_sql, (pattern,))
-    else:
-        raise ValueError(f"Unsupported dialect for regex evaluation: {dialect!r}")
+    predicate = dialect.regex_not_matching_predicate(col, pattern)
+    # The predicate carries its own IS NOT NULL guard: whether a NULL can
+    # even reach the match operator is the dialect's business, so adding a
+    # second guard here would duplicate it and invite the two to drift.
+    cursor.execute(f"SELECT COUNT(*) FROM {tbl} WHERE {predicate}", (pattern,))
 
     non_matching = int(cursor.fetchone()[0])
     return total, non_matching
@@ -587,27 +371,6 @@ def _eval_regex(
 # ---------------------------------------------------------------------------
 # Internal: dialect detection
 # ---------------------------------------------------------------------------
-
-
-def _detect_dialect(dsn: str) -> str:
-    """Derive a dialect string from a DSN.
-
-    Args:
-        dsn: Database DSN string.
-
-    Returns:
-        ``"sqlite"``, ``"postgresql"``, or raises ``ValueError``.
-
-    Example::
-
-        assert _detect_dialect("sqlite:///dev.db") == "sqlite"
-        assert _detect_dialect("postgresql://u:p@host/db") == "postgresql"
-    """
-    if dsn.startswith("sqlite"):
-        return "sqlite"
-    if dsn.startswith("postgresql") or dsn.startswith("postgres"):
-        return "postgresql"
-    raise ValueError(f"Cannot detect dialect from DSN: {dsn!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -621,7 +384,7 @@ def _evaluate_rule(
     table: DiscoveredTable,
     column_name: str,
     cursor: Any,
-    dialect: str,
+    dialect: Dialect,
 ) -> list[DQIssue]:
     """Evaluate one rule against one (table, column) and return any issues.
 
@@ -631,7 +394,7 @@ def _evaluate_rule(
         table: The target table.
         column_name: The target column.
         cursor: Open DBAPI cursor.
-        dialect: Database dialect (``"sqlite"`` or ``"postgresql"``)..
+        dialect: Resolved :class:`~dqt.sql.dialects.base.Dialect`.
 
     Returns:
         List of :class:`~dqt.common.models.DQIssue` (empty if rule passes).
@@ -840,11 +603,11 @@ def apply_rules(
     if not rules or not discovered_tables or connection_config is None:
         return [], []
 
-    dialect = _detect_dialect(connection_config.dsn)
+    dialect = get_dialect_for(connection_config)
     all_issues: list[DQIssue] = []
     summaries: list[RuleRunResult] = []
 
-    db_conn = _get_connection(connection_config)
+    db_conn = get_connection(connection_config)
     try:
         cursor = db_conn.cursor()
         for rule in rules:

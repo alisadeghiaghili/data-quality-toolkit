@@ -8,7 +8,7 @@ regular-expression operator.
 
 Driver. This module uses ``psycopg`` (v3) and nothing else. Before `DQT-08`
 the codebase opened PostgreSQL connections with ``psycopg`` in one module and
-``psycopg2`` in another â€” two drivers, two read-only mechanisms, one
+``psycopg2`` in another — two drivers, two read-only mechanisms, one
 codebase. ``psycopg`` v3 is the maintained line and has a first-class
 read-only property, so it is the survivor; ``psycopg2-binary`` is gone from
 the ``postgres`` extra.
@@ -21,8 +21,10 @@ connection and introspection paths are not.
 """
 
 from __future__ import annotations
+
 from collections.abc import Sequence
 from typing import Any
+
 from dqt.common.models import ConnectionConfig
 from dqt.sql.dialects.base import (
     ColumnMetadata,
@@ -32,7 +34,14 @@ from dqt.sql.dialects.base import (
     validate_row_limit,
 )
 
-COLUMN_METADATA_SQL = "\n                SELECT table_schema, table_name, column_name, data_type, is_nullable\n                FROM information_schema.columns\n                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')\n                ORDER BY table_schema, table_name, ordinal_position\n                "
+# One query returns every user column, already ordered, so discovery costs a
+# single round trip regardless of how many tables the database holds.
+COLUMN_METADATA_SQL = """
+                SELECT table_schema, table_name, column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+                ORDER BY table_schema, table_name, ordinal_position
+                """
 
 
 class PostgresqlDialect:
@@ -45,7 +54,7 @@ class PostgresqlDialect:
     Attributes:
         name: Always ``"postgresql"``. The ``postgres://`` DSN alias resolves
             to this same name, so downstream code sees one spelling.
-        parameter_placeholder: Always ``"%s"`` â€” ``psycopg`` uses the
+        parameter_placeholder: Always ``"%s"`` — ``psycopg`` uses the
             ``pyformat`` paramstyle.
         read_only_enforcement: ``DRIVER_ENFORCED``. A read-only session
             makes the server reject writes.
@@ -93,7 +102,19 @@ class PostgresqlDialect:
             connection = PostgresqlDialect().connect(config)  # requires psycopg
             connection.close()
         """
-        raise NotImplementedError("connect is specified but not implemented yet")
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise ImportError(
+                "PostgreSQL support requires the 'psycopg' package. "
+                "Install it with: pip install 'dqt[postgres]'"
+            ) from exc
+        connection = psycopg.connect(connection_config.dsn)
+        if connection_config.read_only:
+            # psycopg v3: setting this outside a transaction makes every
+            # subsequent transaction on the session read-only at the server.
+            connection.read_only = True
+        return connection
 
     def quote_identifier(self, name: str) -> str:
         """Quote one identifier using ANSI double quotes.
@@ -108,7 +129,7 @@ class PostgresqlDialect:
         Example:
             assert PostgresqlDialect().quote_identifier('a"b') == '"a""b"'
         """
-        raise NotImplementedError("quote_identifier is specified but not implemented yet")
+        return quote_with_doubled_delimiter(name, '"')
 
     def qualified_identifier(self, schema_name: str | None, table_name: str) -> str:
         """Return a quoted, schema-qualified table reference.
@@ -131,7 +152,9 @@ class PostgresqlDialect:
             reference = PostgresqlDialect().qualified_identifier("public", "orders")
             assert reference == '"public"."orders"'
         """
-        raise NotImplementedError("qualified_identifier is specified but not implemented yet")
+        if schema_name:
+            return f"{self.quote_identifier(schema_name)}.{self.quote_identifier(table_name)}"
+        return self.quote_identifier(table_name)
 
     def fetch_column_metadata(self, connection: Any) -> list[ColumnMetadata]:
         """Read every user column from ``information_schema.columns``.
@@ -150,10 +173,25 @@ class PostgresqlDialect:
             rows = PostgresqlDialect().fetch_column_metadata(connection)
             assert all(row.schema_name != "pg_catalog" for row in rows)
         """
-        raise NotImplementedError("fetch_column_metadata is specified but not implemented yet")
+        with connection.cursor() as cursor:
+            cursor.execute(COLUMN_METADATA_SQL)
+            rows = cursor.fetchall()
+        return [
+            ColumnMetadata(
+                schema_name=schema_name,
+                table_name=table_name,
+                column_name=column_name,
+                data_type=data_type,
+                nullable=(is_nullable == "YES"),
+            )
+            for schema_name, table_name, column_name, data_type, is_nullable in rows
+        ]
 
     def select_aggregates_sql(
-        self, qualified_table: str, expressions: Sequence[str], where_clause: str | None = None
+        self,
+        qualified_table: str,
+        expressions: Sequence[str],
+        where_clause: str | None = None,
     ) -> str:
         """Build a set-based aggregate query in ANSI form.
 
@@ -172,7 +210,7 @@ class PostgresqlDialect:
             sql = PostgresqlDialect().select_aggregates_sql('"t"', ["COUNT(*)"])
             assert sql == 'SELECT COUNT(*) FROM "t"'
         """
-        raise NotImplementedError("select_aggregates_sql is specified but not implemented yet")
+        return ansi_select_aggregates_sql(qualified_table, expressions, where_clause)
 
     def limited_select_sql(
         self,
@@ -200,7 +238,11 @@ class PostgresqlDialect:
             sql = PostgresqlDialect().limited_select_sql('"t"', ["*"], limit=5)
             assert sql == 'SELECT * FROM "t" LIMIT 5'
         """
-        raise NotImplementedError("limited_select_sql is specified but not implemented yet")
+        validate_row_limit(limit)
+        statement = ansi_select_aggregates_sql(qualified_table, expressions, where_clause)
+        if limit is None:
+            return statement
+        return f"{statement} LIMIT {limit}"
 
     def regex_not_matching_predicate(self, quoted_column: str, pattern: str) -> str:
         """Build a "value does not match" predicate using the native ``~`` operator.
@@ -212,21 +254,21 @@ class PostgresqlDialect:
 
         Args:
             quoted_column: An already-quoted column reference.
-            pattern: Regular expression source. Not validated here â€” the
+            pattern: Regular expression source. Not validated here — the
                 server is the authority on POSIX regex syntax, and
                 pre-validating with Python's :mod:`re` would reject patterns
                 PostgreSQL accepts. Bound as a parameter by the caller.
 
         Returns:
-            ``<col> IS NOT NULL AND NOT (<col> ~ %s)`` â€” one ``pyformat``
+            ``<col> IS NOT NULL AND NOT (<col> ~ %s)`` — one ``pyformat``
             placeholder for the pattern.
 
         Example:
             predicate = PostgresqlDialect().regex_not_matching_predicate('"e"', "^a")
             assert predicate == '"e" IS NOT NULL AND NOT ("e" ~ %s)'
         """
-        raise NotImplementedError(
-            "regex_not_matching_predicate is specified but not implemented yet"
+        return (
+            f"{quoted_column} IS NOT NULL AND NOT ({quoted_column} ~ {self.parameter_placeholder})"
         )
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
@@ -246,10 +288,14 @@ class PostgresqlDialect:
         Example:
             assert PostgresqlDialect().approximate_distinct_expression('"c"') is None
         """
-        raise NotImplementedError(
-            "approximate_distinct_expression is specified but not implemented yet"
-        )
+        return None
 
 
+# The single PostgreSQL dialect instance; dialects are stateless.
 POSTGRESQL = PostgresqlDialect()
-__all__ = ["COLUMN_METADATA_SQL", "POSTGRESQL", "PostgresqlDialect"]
+
+__all__ = [
+    "COLUMN_METADATA_SQL",
+    "POSTGRESQL",
+    "PostgresqlDialect",
+]

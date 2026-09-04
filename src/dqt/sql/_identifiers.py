@@ -2,11 +2,27 @@
 dqt.sql._identifiers
 =====================
 
-Single quoting authority for every SQL identifier (schema, table, or column
-name) used anywhere in :mod:`dqt.sql`. Nothing else in this package should
-build a quoted identifier by hand; call :func:`quote_identifier` (or
+Single quoting *entry point* for every SQL identifier (schema, table, or
+column name) used anywhere in :mod:`dqt.sql`. Nothing else in this package
+should build a quoted identifier by hand; call :func:`quote_identifier` (or
 :func:`qualified_identifier` for a schema-qualified table reference)
 instead.
+
+Where the rules live, after `DQT-08`. This module no longer holds a
+quote-character table of its own. It resolves the dialect by name and asks it,
+because quoting is not the same shape in every database: SQLite and PostgreSQL
+use a symmetric ANSI delimiter with the embedded character doubled, while SQL
+Server uses asymmetric brackets in which only the closing one is escaped. A
+single lookup table could express the first rule and not the second. Keeping
+this module as the entry point while the dialect owns the rule means every
+call site is unchanged and there is still exactly one implementation per
+database.
+
+Prefer the dialect directly where you already hold one. A caller that has a
+:class:`~dqt.sql.dialects.base.Dialect` — everything downstream of
+:func:`dqt.sql._connect.get_connection` does — should call
+``dialect.quote_identifier(...)`` rather than routing a dialect *name* string
+through this module. This module exists for the callers that only have a name.
 
 This module intentionally does not touch literal values. Literal values
 (rule thresholds, cleansing replacement values, lookup values, ...) must
@@ -16,68 +32,66 @@ through string interpolation.
 
 from __future__ import annotations
 
-# Quote character per supported dialect. Both dialects DQT currently
-# supports use ANSI double-quoted identifiers; the table exists so a future
-# dialect with a different quote character (e.g. MySQL's backtick) is a
-# one-line addition here rather than a second quoting function elsewhere.
-_QUOTE_CHARS: dict[str, str] = {
-    "sqlite": '"',
-    "postgresql": '"',
-}
+from dqt.sql.dialects import get_dialect_by_name
 
 
 def quote_identifier(name: str, dialect: str = "sqlite") -> str:
     """Quote and escape a single SQL identifier for *dialect*.
 
-    Wraps *name* in the dialect's identifier quote character, doubling any
-    embedded occurrence of that character so the identifier cannot break out
-    of its quoting.
+    Wraps *name* in the dialect's identifier delimiters, escaping any
+    embedded delimiter so the identifier cannot break out of its quoting.
+    The escaping rule is the dialect's, not this function's.
 
     Args:
         name: Raw identifier (schema, table, or column name).
-        dialect: One of the keys registered in this module's dialect table
-            (currently ``"sqlite"`` or ``"postgresql"``).
+        dialect: One of the names registered in :mod:`dqt.sql.dialects`
+            (``"sqlite"``, ``"postgresql"``, ``"sqlserver"``; ``"postgres"``
+            is accepted as an alias).
 
     Returns:
-        The quoted identifier, e.g. ``'"orders"'``.
+        The quoted identifier, e.g. ``'"orders"'`` on SQLite and PostgreSQL
+        or ``"[orders]"`` on SQL Server.
 
     Raises:
-        ValueError: If *dialect* is not a supported dialect.
+        ValueError: If *dialect* is not a supported dialect name.
 
     Example::
 
         assert quote_identifier("orders") == '"orders"'
+        assert quote_identifier("orders", "sqlserver") == "[orders]"
         quoted = quote_identifier('a"b')
         assert quoted.count('"') == 4  # opening, doubled embedded, closing
     """
-    try:
-        quote_char = _QUOTE_CHARS[dialect]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported dialect for identifier quoting: {dialect!r}") from exc
-    escaped = name.replace(quote_char, quote_char * 2)
-    return f"{quote_char}{escaped}{quote_char}"
+    return get_dialect_by_name(dialect).quote_identifier(name)
 
 
 def qualified_identifier(schema_name: str | None, table_name: str, dialect: str = "sqlite") -> str:
     """Return a quoted, possibly schema-qualified table identifier.
 
+    Whether a schema qualifier is dropped is the dialect's decision, not this
+    function's. SQLite suppresses its implicit ``"main"``, because that is a
+    name SQLite gave itself rather than one a DBA chose; PostgreSQL and SQL
+    Server suppress nothing, because a schema named ``main`` there is real and
+    dropping it would silently retarget the query.
+
     Args:
-        schema_name: Schema name, or ``None``/``"main"`` for SQLite's
-            implicit default schema (an unqualified reference is used in
-            that case).
+        schema_name: Schema name, or ``None`` for an unqualified reference.
         table_name: Table name.
-        dialect: Target SQL dialect, forwarded to :func:`quote_identifier`.
+        dialect: Target SQL dialect name, forwarded to
+            :func:`~dqt.sql.dialects.get_dialect_by_name`.
 
     Returns:
-        ``"schema"."table"`` when *schema_name* is given and is not
-        SQLite's implicit ``"main"``; otherwise just ``"table"``, quoted.
+        A quoted ``schema.table`` reference where the dialect qualifies, and
+        a quoted bare table name where it does not.
+
+    Raises:
+        ValueError: If *dialect* is not a supported dialect name.
 
     Example::
 
         assert qualified_identifier("public", "orders", "postgresql") == '"public"."orders"'
         assert qualified_identifier(None, "orders") == '"orders"'
         assert qualified_identifier("main", "orders") == '"orders"'
+        assert qualified_identifier("dbo", "orders", "sqlserver") == "[dbo].[orders]"
     """
-    if schema_name and schema_name != "main":
-        return f"{quote_identifier(schema_name, dialect)}.{quote_identifier(table_name, dialect)}"
-    return quote_identifier(table_name, dialect)
+    return get_dialect_by_name(dialect).qualified_identifier(schema_name, table_name)

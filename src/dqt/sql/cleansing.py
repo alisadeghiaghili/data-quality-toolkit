@@ -22,7 +22,10 @@ Design invariants
    enough information to undo each change manually.
 3. No schema changes, no DDL, no masking, no compliance features.
 4. All SQL is executed through DBAPI2 connections obtained from
-   :func:`~dqt.sql.rules._get_connection` (shared helper).
+   :func:`~dqt.sql._connect.get_connection`, the single connection
+   authority (`DQT-08`). Cleansing no longer reaches into the rules
+   engine for it: both call the same module, so the read-only guard
+   cannot be enforced on one path and skipped on the other.
 5. :func:`apply_cleansing` never writes by accident: it raises
    :class:`~dqt.exceptions.ReadOnlyViolationError` if the connection is
    ``read_only`` (the default), and separately defaults to ``dry_run=True``
@@ -74,8 +77,8 @@ from typing import Any, Literal
 
 from dqt.common.models import ConnectionConfig, PipelineResult
 from dqt.exceptions import ReadOnlyViolationError
+from dqt.sql._connect import get_connection
 from dqt.sql._identifiers import qualified_identifier, quote_identifier
-from dqt.sql.rules import _get_connection
 
 # ---------------------------------------------------------------------------
 # Public data classes
@@ -616,7 +619,7 @@ def apply_cleansing(
     cleansing_result = CleansingResult(run_id=run_id, dry_run=dry_run)
     tables_modified: set[str] = set()
 
-    db_conn = _get_connection(connection_config)
+    db_conn = get_connection(connection_config)
     try:
         cursor = db_conn.cursor()
 

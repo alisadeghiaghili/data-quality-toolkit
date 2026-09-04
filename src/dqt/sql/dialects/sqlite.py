@@ -19,11 +19,13 @@ in DQT, and it is why the PostgreSQL dialect uses the native operator instead.
 """
 
 from __future__ import annotations
+
 import functools
 import re
 import sqlite3
 from collections.abc import Sequence
 from typing import Any
+
 from dqt.common.models import ConnectionConfig
 from dqt.sql.dialects.base import (
     ColumnMetadata,
@@ -33,10 +35,35 @@ from dqt.sql.dialects.base import (
     validate_row_limit,
 )
 
+# Upper bound on pattern length accepted for compilation. This is not a
+# performance-tuning knob so much as a config-sanity guard: a rule file is
+# trusted input in this project (there is no raw-SQL rule type, and rule
+# files are not accepted from untrusted users), but a many-kilobyte
+# "pattern" is never an intentional regex and is far more likely to be a
+# copy-paste accident that is cheaper to reject up front than to hand to
+# ``re.compile``.
 REGEX_PATTERN_MAX_LENGTH = 1000
+
+# Bounds the compiled-pattern cache so a rule file with many distinct (or
+# templated/generated) regex patterns cannot grow this process-lifetime
+# cache without limit.
 REGEX_CACHE_MAXSIZE = 256
+
+# SQLite has no schema concept; every user table lives in the connection's
+# implicit default schema, which SQLite itself names "main". DQT reports that
+# name so a discovered table always carries a schema, but suppresses it when
+# building a table reference, because ``"main"."t"`` is not what a DBA writes.
 IMPLICIT_SCHEMA_NAME = "main"
-TABLE_LIST_SQL = "\n            SELECT name\n            FROM sqlite_master\n            WHERE type = 'table'\n              AND name NOT LIKE 'sqlite_%'\n            ORDER BY name\n            "
+
+# Base tables only, catalogue tables excluded, ordered so discovery output is
+# deterministic across runs (ENGINEERING-STANDARDS.md §1.8).
+TABLE_LIST_SQL = """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name NOT LIKE 'sqlite_%'
+            ORDER BY name
+            """
 
 
 @functools.lru_cache(maxsize=REGEX_CACHE_MAXSIZE)
@@ -70,7 +97,15 @@ def compile_regex_pattern(pattern: str) -> re.Pattern[str]:
         compiled = compile_regex_pattern(r"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
         assert compiled.search("a@b.com") is not None
     """
-    raise NotImplementedError("compile_regex_pattern is specified but not implemented yet")
+    if len(pattern) > REGEX_PATTERN_MAX_LENGTH:
+        raise ValueError(
+            f"regex rule pattern is {len(pattern)} characters, which exceeds the "
+            f"maximum of {REGEX_PATTERN_MAX_LENGTH}. Refusing to compile it."
+        )
+    try:
+        return re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"Invalid regex pattern {pattern!r}: {exc}") from exc
 
 
 def sqlite_regexp(pattern: str, value: object) -> bool | None:
@@ -79,7 +114,7 @@ def sqlite_regexp(pattern: str, value: object) -> bool | None:
     Registered as the connection-wide ``REGEXP(X, Y)`` function by
     :meth:`SqliteDialect.connect`. SQLite rewrites the infix expression
     ``value REGEXP pattern`` into the function call ``REGEXP(pattern,
-    value)`` â€” the pattern comes first, the value second â€” so this
+    value)`` — the pattern comes first, the value second — so this
     function's parameter order mirrors that call exactly. Getting this
     backwards would not raise; it would silently invert every match.
 
@@ -95,7 +130,7 @@ def sqlite_regexp(pattern: str, value: object) -> bool | None:
         *value* is SQL ``NULL``.
 
     Raises:
-        ValueError: If *pattern* is invalid or too long â€” see
+        ValueError: If *pattern* is invalid or too long — see
             :func:`compile_regex_pattern`. SQLite reports this to the caller
             as ``sqlite3.OperationalError: user-defined function raised
             exception``; :meth:`SqliteDialect.regex_not_matching_predicate`
@@ -107,7 +142,10 @@ def sqlite_regexp(pattern: str, value: object) -> bool | None:
         assert sqlite_regexp("^a", "zzz") is False
         assert sqlite_regexp("^a", None) is None
     """
-    raise NotImplementedError("sqlite_regexp is specified but not implemented yet")
+    if value is None:
+        return None
+    compiled = compile_regex_pattern(pattern)
+    return compiled.search(str(value)) is not None
 
 
 class SqliteDialect:
@@ -120,7 +158,7 @@ class SqliteDialect:
 
     Attributes:
         name: Always ``"sqlite"``.
-        parameter_placeholder: Always ``"?"`` â€” the stdlib ``sqlite3``
+        parameter_placeholder: Always ``"?"`` — the stdlib ``sqlite3``
             driver uses the ``qmark`` paramstyle.
         read_only_enforcement: ``DRIVER_ENFORCED``. A write through a
             ``mode=ro`` connection raises ``sqlite3.OperationalError``.
@@ -147,7 +185,7 @@ class SqliteDialect:
 
         A consequence of the URI form: unlike a plain
         ``sqlite3.connect(path)``, this does **not** create the database file
-        if it does not already exist â€” it raises ``sqlite3.OperationalError``
+        if it does not already exist — it raises ``sqlite3.OperationalError``
         instead. That is deliberate (`DQT-03`): silently creating a database
         file you were told to treat as read-only is itself a surprise.
 
@@ -177,7 +215,17 @@ class SqliteDialect:
             connection = SqliteDialect().connect(config)
             connection.close()
         """
-        raise NotImplementedError("connect is specified but not implemented yet")
+        dsn = connection_config.dsn
+        database_path = (
+            dsn[len("sqlite:///") :] if dsn.startswith("sqlite:///") else dsn[len("sqlite://") :]
+        )
+        if connection_config.read_only and database_path != ":memory:":
+            connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+        else:
+            connection = sqlite3.connect(database_path)
+        connection.row_factory = sqlite3.Row
+        connection.create_function("REGEXP", 2, sqlite_regexp)
+        return connection
 
     def quote_identifier(self, name: str) -> str:
         """Quote one identifier using ANSI double quotes.
@@ -192,7 +240,7 @@ class SqliteDialect:
         Example:
             assert SqliteDialect().quote_identifier('a"b') == '"a""b"'
         """
-        raise NotImplementedError("quote_identifier is specified but not implemented yet")
+        return quote_with_doubled_delimiter(name, '"')
 
     def qualified_identifier(self, schema_name: str | None, table_name: str) -> str:
         """Return a quoted table reference, suppressing SQLite's implicit schema.
@@ -211,7 +259,9 @@ class SqliteDialect:
         Example:
             assert SqliteDialect().qualified_identifier("main", "orders") == '"orders"'
         """
-        raise NotImplementedError("qualified_identifier is specified but not implemented yet")
+        if schema_name and schema_name != IMPLICIT_SCHEMA_NAME:
+            return f"{self.quote_identifier(schema_name)}.{self.quote_identifier(table_name)}"
+        return self.quote_identifier(table_name)
 
     def fetch_column_metadata(self, connection: Any) -> list[ColumnMetadata]:
         """Read every user table's columns from ``sqlite_master`` and ``PRAGMA``.
@@ -232,10 +282,33 @@ class SqliteDialect:
             rows = SqliteDialect().fetch_column_metadata(connection)
             assert all(row.schema_name == "main" for row in rows)
         """
-        raise NotImplementedError("fetch_column_metadata is specified but not implemented yet")
+        table_names = [row[0] for row in connection.execute(TABLE_LIST_SQL).fetchall()]
+        columns: list[ColumnMetadata] = []
+        for table_name in table_names:
+            # PRAGMA does not accept a bound parameter in place of the table
+            # name -- verified empirically: sqlite3 raises OperationalError:
+            # near "?": syntax error. The name is quoted instead, through the
+            # single quoting authority.
+            pragma_rows = connection.execute(
+                f"PRAGMA table_info({self.quote_identifier(table_name)})"
+            ).fetchall()
+            columns.extend(
+                ColumnMetadata(
+                    schema_name=IMPLICIT_SCHEMA_NAME,
+                    table_name=table_name,
+                    column_name=row[1],
+                    data_type=row[2] or "UNKNOWN",
+                    nullable=(row[3] == 0),
+                )
+                for row in pragma_rows
+            )
+        return columns
 
     def select_aggregates_sql(
-        self, qualified_table: str, expressions: Sequence[str], where_clause: str | None = None
+        self,
+        qualified_table: str,
+        expressions: Sequence[str],
+        where_clause: str | None = None,
     ) -> str:
         """Build a set-based aggregate query in ANSI form.
 
@@ -254,7 +327,7 @@ class SqliteDialect:
             sql = SqliteDialect().select_aggregates_sql('"t"', ["COUNT(*)"])
             assert sql == 'SELECT COUNT(*) FROM "t"'
         """
-        raise NotImplementedError("select_aggregates_sql is specified but not implemented yet")
+        return ansi_select_aggregates_sql(qualified_table, expressions, where_clause)
 
     def limited_select_sql(
         self,
@@ -282,7 +355,11 @@ class SqliteDialect:
             sql = SqliteDialect().limited_select_sql('"t"', ["*"], limit=5)
             assert sql == 'SELECT * FROM "t" LIMIT 5'
         """
-        raise NotImplementedError("limited_select_sql is specified but not implemented yet")
+        validate_row_limit(limit)
+        statement = ansi_select_aggregates_sql(qualified_table, expressions, where_clause)
+        if limit is None:
+            return statement
+        return f"{statement} LIMIT {limit}"
 
     def regex_not_matching_predicate(self, quoted_column: str, pattern: str) -> str:
         """Build a "value does not match" predicate using SQLite's ``REGEXP``.
@@ -290,7 +367,7 @@ class SqliteDialect:
         *pattern* is compiled here, before any query runs, so that a
         malformed pattern surfaces as a configuration error rather than as
         ``sqlite3.OperationalError: user-defined function raised exception``
-        mid-scan â€” and, more importantly, so no caller ever receives a row
+        mid-scan — and, more importantly, so no caller ever receives a row
         count computed against a pattern that failed to compile.
 
         Args:
@@ -299,19 +376,21 @@ class SqliteDialect:
                 parameter by the caller, never interpolated.
 
         Returns:
-            ``<col> IS NOT NULL AND <col> NOT REGEXP ?`` â€” one ``qmark``
+            ``<col> IS NOT NULL AND <col> NOT REGEXP ?`` — one ``qmark``
             placeholder for the pattern.
 
         Raises:
             ValueError: If *pattern* is not a valid, length-bounded regular
-                expression â€” see :func:`compile_regex_pattern`.
+                expression — see :func:`compile_regex_pattern`.
 
         Example:
             predicate = SqliteDialect().regex_not_matching_predicate('"e"', "^a")
             assert predicate == '"e" IS NOT NULL AND "e" NOT REGEXP ?'
         """
-        raise NotImplementedError(
-            "regex_not_matching_predicate is specified but not implemented yet"
+        compile_regex_pattern(pattern)  # raise ValueError before querying, not during
+        return (
+            f"{quoted_column} IS NOT NULL AND {quoted_column} NOT REGEXP "
+            f"{self.parameter_placeholder}"
         )
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
@@ -328,12 +407,13 @@ class SqliteDialect:
         Example:
             assert SqliteDialect().approximate_distinct_expression('"c"') is None
         """
-        raise NotImplementedError(
-            "approximate_distinct_expression is specified but not implemented yet"
-        )
+        return None
 
 
+# The single SQLite dialect instance. Dialects are stateless, so one shared
+# instance is correct and avoids handing out objects that could drift apart.
 SQLITE = SqliteDialect()
+
 __all__ = [
     "IMPLICIT_SCHEMA_NAME",
     "REGEX_CACHE_MAXSIZE",
