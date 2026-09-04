@@ -24,7 +24,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from dqt.common.models import ConnectionConfig, RuleConfig
+from dqt.common.models import ConnectionConfig, RuleConfig, RuleScope
 from dqt.exceptions import ReadOnlyViolationError
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.cleansing import CleansingConfig, cleanse_apply, cleanse_plan
@@ -123,6 +123,14 @@ class TestReadOnlyIsActuallyEnforced:
         finally:
             connection.close()
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "NEW-M: cleansing addresses rows by SQLite's rowid, which "
+            "PostgreSQL does not have. Strict, so fixing NEW-M forces this "
+            "marker to be removed rather than left to rot."
+        ),
+    )
     def test_cleanse_apply_refuses_before_reaching_the_server(self, seeded_table: str) -> None:
         """DQT's own guard fires first, so the server is the second line.
 
@@ -193,7 +201,7 @@ class TestTheDialectWorksAgainstTheServer:
             name="email-shape",
             dimension="validity",
             severity="error",
-            scope={"tables": [seeded_table], "columns": ["email"]},
+            scope=RuleScope(table_pattern=seeded_table, column_pattern="email"),
             expression="regex",
             params={"pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"},
         )

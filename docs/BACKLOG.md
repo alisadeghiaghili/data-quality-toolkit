@@ -244,6 +244,47 @@ No CLI-level rule-file flag exists; this fix only closes the config-file path.
 
 ---
 
+### `NEW-M` · Cleansing addresses rows by SQLite's `rowid`
+
+**Severity:** high — cleansing is unusable on PostgreSQL · **Found:** 2026-09-05,
+by the first CI run that ever pointed DQT at a real PostgreSQL server
+
+`sql/cleansing.py` locates rows with `rowid`: `SELECT rowid AS dqt_row_id`,
+`UPDATE ... WHERE rowid = ?`, and `row_key={"rowid": ...}` in the log. `rowid`
+is a SQLite implementation detail. PostgreSQL raises
+
+    psycopg.errors.UndefinedColumn: column "rowid" does not exist
+
+so `cleanse_plan`, `cleanse_apply` and `revert` all fail there. `DQT-08` moved
+identifier quoting, the read-only incantation and regex matching into the
+dialects; row identity was missed because nothing exercised cleansing on a
+second dialect. It stayed invisible for the same reason the `read_only` gap
+did: PostgreSQL was declared supported and never run.
+
+**Not a one-line substitution.** Three distinct problems:
+
+1. `_standardize` and `_lookup_correct` need only a row locator, so a dialect
+   method returning `rowid` / `ctid` / `%%physloc%%` would carry them.
+2. `_deduplicate` orders by `MIN(rowid)` / `MAX(rowid)` to choose which
+   duplicate to keep. PostgreSQL has no aggregate over `tid`, so there is no
+   direct translation — the "keep first" rule has to be re-expressed, most
+   likely over the primary key.
+3. **`ctid` is not stable.** It changes when a row is updated and can move
+   under `VACUUM FULL` without the data changing at all. A `plan_id` is
+   applied and reverted in a later process, so a plan holding `ctid`s could
+   address the wrong rows. The plan fingerprint catches a data change but not
+   a physical relocation.
+
+Proposed fix: address rows by **primary key** where the table has one, which is
+stable, portable, and what an audit log should record anyway; fall back to a
+dialect-provided physical locator only for tables without one, and say plainly
+in the docs that cleansing such a table is best-effort. Refuse rather than
+generate invalid SQL where a dialect cannot express the operation at all.
+
+Tracked by an `xfail(strict=True)` in
+`tests/integration/test_postgresql.py`, so fixing this forces the marker off
+rather than leaving it to rot.
+
 ### `NEW-K` · `expression` is documented as accepting SQL, but does not
 
 **Severity:** medium — a false docstring on a public field · **Blocks:** nothing
