@@ -212,7 +212,7 @@ Every feature MUST map to at least one facet, or be rejected as out of scope.
 | Knowledge/Domain | `knowledge.py` | Reference data for validation and correction. | not started |
 | Classification | `classification.py` | Semantic typing (email, phone, IBAN, national id). | built and tested; not wired into profiling |
 | Missingness (internal) | within profiling/metrics | Null counts, ratios, co-occurrence patterns. | counts and ratios only |
-| Imputation (external) | `bridges/` | Delegated to `missingly` et al. Never reimplemented. | not started |
+| Imputation (external) | `bridges/` | Delegated to `missingly` et al. Never reimplemented. | bridge built (`B1`-`B3`); imputation itself still external by design |
 | Reports | `sql/reports.py` | HTML/PDF scorecards, bilingual EN/FA. | HTML only, untested |
 | Viz/UI | `viz.py`, `ui/` | Charts, dashboards, DBA-facing screens. | `ui/` backend skeleton; no `viz.py` |
 
@@ -323,7 +323,7 @@ table says so — see `BACKLOG.md` §1.
 | CLI | `dqt profile` only | — |
 | HTML report | Self-contained, score bars, severity badges. Untested | `NEW-C` |
 | UI backend | FastAPI skeleton over a read-only data layer. Untested, no frontend | `NEW-D` |
-| Bridges to `missingly` | Not started; `external_analyses` field unread | `NEW-E` |
+| Bridges to `missingly` | Built and unit-tested (`B1`-`B3`). `sample_table` reads a bounded sample, `run_missingly` normalises `pct_miss` to a 0-1 ratio, and the HTML report renders an attributed panel, so `external_analyses` is read. Not wired into `DQTPipeline.run()`: a bridge is called explicitly, never implicitly | `NEW-E` closed |
 | CI | Works: ruff, ruff format, mypy strict, pytest at 80%. Python 3.11/3.12 | — |
 | PostgreSQL in CI | **Absent** | no ID yet |
 | Two PostgreSQL drivers installed | Both `psycopg[binary]` and `psycopg2-binary` | `DQT-08` |
