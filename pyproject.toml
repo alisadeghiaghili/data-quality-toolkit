@@ -62,6 +62,13 @@ dqt = ["py.typed"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# tools/doc_audit.py is vendored verbatim from the Consilient engineering
+# standard (DOC-01) and must not be reformatted or "fixed" to satisfy this
+# repo's lint config -- see tools/doc_audit.py's own module docstring and the
+# DOC-01 PR description for why. CI's lint job is already scoped to
+# `src/ tests/` and never sees it; this exclusion only stops local/pre-commit
+# ruff runs (which default to all tracked Python files) from flagging it.
+extend-exclude = ["tools/doc_audit.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "TID"]
@@ -95,6 +102,15 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "dqt.ui.app"
 disallow_untyped_decorators = false
+
+# tools/doc_audit.py is vendored verbatim from the Consilient engineering
+# standard (DOC-01) and is not type-annotated to this repo's --strict bar.
+# CI's typecheck job only ever runs `mypy src/dqt/`, which never reaches this
+# file; this override exists solely so an incidental broader `mypy .` invocation
+# does not flag a file we were told to copy, not author or edit.
+[[tool.mypy.overrides]]
+module = "doc_audit"
+ignore_errors = true
 
 # ---------------------------------------------------------------------------
 # Pytest
