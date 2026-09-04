@@ -237,17 +237,19 @@ jobs:
       - name: Run PostgreSQL integration tests
         env:
           DQT_POSTGRES_TEST_DSN: postgresql://dqt:dqt@localhost:5432/dqt_test
-        run: pytest tests/integration/test_postgresql.py -v
-
-      - name: Fail if the suite skipped instead of running
-        env:
-          DQT_POSTGRES_TEST_DSN: postgresql://dqt:dqt@localhost:5432/dqt_test
-        # A skipped suite reports green and proves nothing. This job exists to
-        # produce evidence, so it must fail when it produced none.
+        # Run once, then check the summary. A skipped suite reports green and
+        # proves nothing, and this job exists to produce evidence -- so
+        # producing none has to be a failure. The check is on the captured
+        # summary rather than a second run, because running twice invites the
+        # two runs to disagree.
         run: |
-          pytest tests/integration/test_postgresql.py -q --no-header             | tee /tmp/pg.txt
-          grep -qE "[0-9]+ passed" /tmp/pg.txt
-          if grep -qE "[0-9]+ skipped" /tmp/pg.txt; then
-            echo "PostgreSQL tests skipped; the DSN did not reach them." >&2
+          set -o pipefail
+          pytest tests/integration/test_postgresql.py -v --color=no             | tee pg-results.txt
+          if ! grep -qE "[0-9]+ passed" pg-results.txt; then
+            echo "::error::No PostgreSQL test passed. The suite proved nothing." >&2
+            exit 1
+          fi
+          if grep -qE "[0-9]+ skipped" pg-results.txt; then
+            echo "::error::PostgreSQL tests skipped; the DSN did not reach them." >&2
             exit 1
           fi
