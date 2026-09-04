@@ -15,12 +15,67 @@ Example:
 
 from __future__ import annotations
 
+import importlib
 from typing import Any
 
-from dqt.bridges.base import MissingnessReport
+from dqt.bridges.base import ColumnMissingness, MissingnessReport
 from dqt.common.models import ConnectionConfig, PipelineResult
+from dqt.sql._connect import get_connection, get_dialect_for
 
 DEFAULT_SAMPLE_LIMIT = 10_000
+
+
+def _import_optional(module_name: str) -> Any:
+    """Import an optional dependency, or explain how to install it.
+
+    Args:
+        module_name: Module to import, e.g. ``"missingly"``.
+
+    Returns:
+        The imported module.
+
+    Raises:
+        ImportError: If it is not installed, naming the extra that provides it.
+
+    Example:
+        pandas = _import_optional("pandas")
+    """
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ImportError(
+            f"{module_name} is required for the missingly bridge but is not installed. "
+            f"Install it with: pip install 'dqt[bridges]'. DQT core does not need it -- "
+            "only this bridge does, and only when called."
+        ) from exc
+
+
+def _collect_diagnostics(missingly: Any, frame: Any) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Gather missingly's analyser-specific findings without interpreting them.
+
+    A diagnostic that cannot be computed is recorded as a note rather than
+    raised: the per-column figures are the bridge's primary output and are
+    still valid when, say, Little's test has too few complete cases to run.
+
+    Args:
+        missingly: The imported missingly module.
+        frame: Sampled rows.
+
+    Returns:
+        The diagnostics mapping and any notes explaining what was skipped.
+
+    Example:
+        diagnostics, notes = _collect_diagnostics(missingly, frame)
+    """
+    diagnostics: dict[str, Any] = {}
+    notes: list[str] = []
+    mcar_test = getattr(missingly, "mcar_test", None)
+    if mcar_test is not None:
+        try:
+            diagnostics["mcar_test"] = mcar_test(frame)
+        except Exception as exc:  # noqa: BLE001 - the analyser's failure, not ours
+            notes.append(f"mcar_test could not be computed on this sample: {exc}")
+    return diagnostics, tuple(notes)
 
 
 def sample_table(
@@ -47,7 +102,24 @@ def sample_table(
     Example:
         frame = sample_table(config, table_name="customers", limit=1000)
     """
-    raise NotImplementedError("sample_table is specified but not implemented")
+    pandas = _import_optional("pandas")
+    dialect = get_dialect_for(connection_config)
+    qualified = dialect.qualified_identifier(schema_name, table_name)
+    sql = dialect.limited_select_sql(qualified, ["*"], limit=limit)
+
+    connection = get_connection(connection_config)
+    try:
+        cursor = connection.execute(sql) if hasattr(connection, "execute") else None
+        if cursor is None:
+            cursor = connection.cursor()
+            cursor.execute(sql)
+        columns = [description[0] for description in cursor.description]
+        rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    # Rows arrive as driver-specific row objects; list(row) normalises them.
+    return pandas.DataFrame([list(row) for row in rows], columns=columns)
 
 
 def run_missingly(
@@ -72,7 +144,32 @@ def run_missingly(
     Example:
         report = run_missingly(frame, table_name="customers")
     """
-    raise NotImplementedError("run_missingly is specified but not implemented")
+    missingly = _import_optional("missingly")
+
+    summary = missingly.miss_var_summary(frame)
+    sampled_rows = len(frame)
+    columns = tuple(
+        ColumnMissingness(
+            column_name=str(row["variable"]),
+            missing_count=int(row["n_miss"]),
+            # miss_var_summary reports pct_miss on a 0..100 scale; DQT stores a
+            # ratio. Converting here is the entire reason this adapter exists.
+            missing_ratio=float(row["pct_miss"]) / 100.0,
+        )
+        for _, row in summary.iterrows()
+    )
+
+    diagnostics, notes = _collect_diagnostics(missingly, frame)
+
+    return MissingnessReport(
+        analyzer="missingly",
+        schema_name=schema_name,
+        table_name=table_name,
+        sampled_rows=sampled_rows,
+        columns=columns,
+        diagnostics=diagnostics,
+        notes=notes,
+    )
 
 
 def attach_missingly_result(result: PipelineResult, report: MissingnessReport) -> None:
@@ -88,7 +185,9 @@ def attach_missingly_result(result: PipelineResult, report: MissingnessReport) -
     Example:
         attach_missingly_result(result, report)
     """
-    raise NotImplementedError("attach_missingly_result is specified but not implemented")
+    result.external_analyses.setdefault(report.analyzer, {})[report.qualified_name] = (
+        report.to_dict()
+    )
 
 
 class MissinglyBridge:
@@ -123,7 +222,7 @@ class MissinglyBridge:
         Example:
             report = MissinglyBridge().analyze(frame, table_name="t")
         """
-        raise NotImplementedError("MissinglyBridge.analyze is specified but not implemented")
+        return run_missingly(frame, table_name=table_name, schema_name=schema_name)
 
 
 __all__ = [

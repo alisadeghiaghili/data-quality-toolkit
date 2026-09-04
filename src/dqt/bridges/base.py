@@ -62,7 +62,12 @@ class ColumnMissingness:
         Example:
             ColumnMissingness("a", missing_count=0, missing_ratio=0.0)
         """
-        raise NotImplementedError("ColumnMissingness validation is specified but not implemented")
+        if not 0.0 <= self.missing_ratio <= 1.0:
+            raise ValueError(
+                f"missing_ratio must be a fraction in [0, 1], got {self.missing_ratio!r} "
+                f"for column {self.column_name!r}. An analyser reporting percentages "
+                "must divide by 100 before constructing this."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +112,9 @@ class MissingnessReport:
         Example:
             assert report.qualified_name == "main.customers"
         """
-        raise NotImplementedError("qualified_name is specified but not implemented")
+        if self.schema_name is None:
+            return self.table_name
+        return f"{self.schema_name}.{self.table_name}"
 
     def to_dict(self) -> dict[str, Any]:
         """Reduce the report to the plain data ``external_analyses`` holds.
@@ -119,7 +126,22 @@ class MissingnessReport:
         Example:
             payload = report.to_dict()
         """
-        raise NotImplementedError("to_dict is specified but not implemented")
+        return {
+            "analyzer": self.analyzer,
+            "schema_name": self.schema_name,
+            "table_name": self.table_name,
+            "sampled_rows": self.sampled_rows,
+            "columns": [
+                {
+                    "column_name": column.column_name,
+                    "missing_count": column.missing_count,
+                    "missing_ratio": column.missing_ratio,
+                }
+                for column in self.columns
+            ],
+            "diagnostics": dict(self.diagnostics),
+            "notes": list(self.notes),
+        }
 
 
 @runtime_checkable
