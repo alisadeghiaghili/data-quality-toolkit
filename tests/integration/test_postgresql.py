@@ -206,7 +206,12 @@ class TestTheDialectWorksAgainstTheServer:
             params={"pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"},
         )
 
-        issues, summaries = apply_rules([rule], tables, config)
+        issues, summaries = apply_rules(
+            run_id="run-pg",
+            connection_config=config,
+            rules=[rule],
+            discovered_tables=tables,
+        )
 
         assert summaries[0].targets_failed == 1
         assert issues[0].evidence["non_matching"] == 1
