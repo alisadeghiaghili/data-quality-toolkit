@@ -56,11 +56,11 @@ def get_args_of_dq_dimension() -> set[str]:
     Example:
         assert "completeness" in get_args_of_dq_dimension()
     """
-    raise NotImplementedError("get_args_of_dq_dimension is specified but not implemented")
+    return set(get_args(DQDimension))
 
 
 # ===========================================================================
-# SECTION 1 â€” Domain Objects (dataclasses)
+# SECTION 1 — Domain Objects (dataclasses)
 # ===========================================================================
 
 
@@ -108,6 +108,33 @@ class DQMetric:
     column_name: str | None = None
     value: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Enforce the dimension/metric-name split.
+
+        Raises:
+            ValueError: If both or neither of ``dimension`` and
+                ``metric_name`` are set, or if ``dimension`` is outside the
+                closed set in ``docs/CONVENTIONS-DQT.md`` section 0.1.
+
+        Example:
+            DQMetric(run_id="r", score=1.0, metric_name="row_count")
+        """
+        if (self.dimension is None) == (self.metric_name is None):
+            raise ValueError(
+                "a DQMetric carries exactly one of dimension or metric_name: "
+                "a quality judgement or a raw measurement, never both and never "
+                f"neither. Got dimension={self.dimension!r}, "
+                f"metric_name={self.metric_name!r}."
+            )
+        if self.dimension is not None and self.dimension not in get_args_of_dq_dimension():
+            raise ValueError(
+                f"dimension {self.dimension!r} is not one of the six in "
+                f"CONVENTIONS-DQT.md section 0.1: "
+                f"{sorted(get_args_of_dq_dimension())}. Adding a seventh means "
+                "editing that section first."
+            )
+
 
 @dataclass
 class DQIssue:
@@ -350,8 +377,8 @@ class PipelineResult:
     """Complete outcome of one DQT data-quality pipeline run.
 
     ``PipelineResult`` is the top-level container produced by
-    :class:`dqt.pipeline.DQTPipeline`.  All downstream consumers â€” storage,
-    reports, UI, and bridges â€” work from this single object.
+    :class:`dqt.pipeline.DQTPipeline`.  All downstream consumers — storage,
+    reports, UI, and bridges — work from this single object.
 
     Attributes:
         run_id: Unique identifier for this run (e.g. a UUID or timestamp slug).
@@ -395,7 +422,7 @@ class PipelineResult:
 
 
 # ===========================================================================
-# SECTION 2 â€” Domain Object: Rule (references RuleScope from config section)
+# SECTION 2 — Domain Object: Rule (references RuleScope from config section)
 # ===========================================================================
 
 
@@ -442,7 +469,7 @@ class Rule:
 
 
 # ===========================================================================
-# SECTION 3 â€” Config Models (Pydantic)
+# SECTION 3 — Config Models (Pydantic)
 # ===========================================================================
 
 

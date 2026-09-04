@@ -139,7 +139,7 @@ class SqlProfiler:
             metrics.append(
                 DQMetric(
                     run_id=run_id,
-                    dimension="row_count",
+                    metric_name="row_count",
                     score=1.0,
                     schema_name=profile.schema_name,
                     table_name=profile.table_name,

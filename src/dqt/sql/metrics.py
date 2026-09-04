@@ -48,21 +48,21 @@ def compute_run_metrics(profiles: list[TableProfile], run_id: str) -> list[DQMet
     return [
         DQMetric(
             run_id=run_id,
-            dimension="table_count",
+            metric_name="table_count",
             score=1.0,
             value=float(table_count),
             metadata={},
         ),
         DQMetric(
             run_id=run_id,
-            dimension="column_count",
+            metric_name="column_count",
             score=1.0,
             value=float(column_count),
             metadata={},
         ),
         DQMetric(
             run_id=run_id,
-            dimension="average_completeness",
+            metric_name="average_completeness",
             score=average_completeness,
             value=average_completeness,
             metadata={},

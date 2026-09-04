@@ -11,10 +11,9 @@ import pytest
 from pydantic import ValidationError
 
 from dqt.common.models import (
-    DQDimension,
-    get_args_of_dq_dimension,
     ColumnResult,
     ConnectionConfig,
+    DQDimension,
     DQIssue,
     DQMetric,
     DQPipelineConfig,
@@ -27,6 +26,7 @@ from dqt.common.models import (
     SamplingConfig,
     SchemaResult,
     TableResult,
+    get_args_of_dq_dimension,
 )
 
 # ===========================================================================
