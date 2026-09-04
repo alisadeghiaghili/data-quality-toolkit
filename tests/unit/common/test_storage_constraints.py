@@ -191,9 +191,7 @@ class TestStaleStoreIsDetected:
     which tells a DBA nothing about what to do.
     """
 
-    def test_a_pre_new_a_store_is_rejected_with_an_actionable_message(
-        self, tmp_path: Path
-    ) -> None:
+    def test_a_pre_new_a_store_is_rejected_with_an_actionable_message(self, tmp_path: Path) -> None:
         """The error names the file and says to recreate it."""
         db = tmp_path / "old.db"
         connection = sqlite3.connect(str(db))
