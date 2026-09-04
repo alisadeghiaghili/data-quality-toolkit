@@ -1,0 +1,104 @@
+# Changelog
+
+All notable changes to `data-quality-toolkit` are recorded here.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
+the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+**Nothing has been released yet.** There are no git tags and no published
+package. Everything below sits under `[Unreleased]`, and the working version is
+`0.1.0.dev0`. `docs/PLAN-TDD.md`'s cut line defines v0.1 as its units 1-9; until
+those land, `0.1.0` is not claimed. Per `docs/HONESTY-GATE.md`, a version number
+is a claim like any other.
+
+Dates are the merge dates on `main`.
+
+## [Unreleased]
+
+### Added
+
+- Documentation gate (`DOC-01`, DQT slice) — `tools/doc_audit.py`, vendored
+  verbatim from the Consilient engineering standard, wired into CI as a
+  required job running in ratchet mode against `.doc_audit_baseline.json`.
+  Pre-existing debt is accepted; any new violation fails the build. `DOC-01`
+  itself remains open: the roadmap scopes it to three repositories and only the
+  DQT slice is done. (2026-09-04)
+- `docs/PROPOSAL-v1.0-roadmap.md` — a critical proposal defining what 1.0.0
+  should mean, the defensible product wedge, what to cut, and the hard gates
+  that do not exist yet. A proposal for the owner's decision, ranked below the
+  authoritative `ROADMAP.md`; nothing in it is settled. (2026-09-04)
+- `docs/PLAN-TDD.md` — the 15-unit TDD implementation plan, landed as a
+  sequencing document. (2026-08-27)
+- `--dry-run` / `--commit` flags on `dqt profile`, with `--dry-run` the default
+  (`DQT-03`). (2026-08-19)
+
+### Changed
+
+- **License: Apache-2.0 to BUSL-1.1.** Change Date 2030-09-04, Change License
+  Apache 2.0, and an Additional Use Grant limited to internal business
+  operations. BUSL-1.1 is source-available, not an OSI-approved open-source
+  licence. Versions previously distributed under Apache-2.0 remain available
+  under Apache-2.0 — a relicence cannot apply retroactively to published
+  releases. (2026-09-04)
+- Version set to `0.1.0.dev0`. It had read `0.1.0` since the beginning while
+  nothing had ever been released and the project's own v0.1 bar was unmet
+  (`NEW-M`). (2026-09-04)
+- `docs/PLAN-TDD.md` amended: unit 6 (`DQT-05`) reshaped around the settled Q2
+  decision (`cleanse_plan()` / `cleanse_apply()` keyed by `plan_id`, neither
+  reachable from `run()`), plus a new SQL Server unit and a new performance and
+  scale unit. The document's convention is to annotate in place and never
+  delete, so the superseded text remains visible. (2026-09-04)
+
+### Fixed
+
+- `regex` rules now work on SQLite (`DQT-04`). A Python `re`-backed `REGEXP`
+  function is registered on every SQLite connection, behind a 256-entry,
+  1000-character-limited compiled-pattern cache; a malformed pattern raises
+  before any query runs instead of being reported as a data failure. Note the
+  scaling limit: the callback is invoked per row, so `regex` rules on SQLite are
+  a full scan with per-row Python overhead. (2026-08-27)
+- CLI no longer silently drops `rule_files` from a `--config` file, which had
+  made `dqt profile --config <file>` run no rule checks at all (`NEW-H`).
+  (2026-08-19)
+- README no longer claims MIT while the repository shipped a different licence,
+  and no longer lists `DQT-04` as an open defect after it was fixed (`DQT-01`).
+  (2026-09-04)
+- README no longer implies DQT compares runs over time. The metrics store holds
+  the data such a comparison would read, but `monitor()` is a pass-through and
+  performs no comparison (`NEW-G`). (2026-09-04)
+- `ReadOnlyViolationError` gained the `Example` block the documentation standard
+  requires. (2026-09-04)
+- Phase 0 repository remediation: deleted a legacy pandas package and a broken
+  duplicate CI workflow, fixed a CLI that crashed on every invocation, fixed the
+  packaging entry point and undeclared dependencies, and rewrote every false
+  `[x] DONE` status marker to match verified reality. Three correctness bugs
+  were fixed in the process — SQLite rowid/`INTEGER PRIMARY KEY` aliasing that
+  silently reported zero changes, NULL-key deduplication that would delete
+  distinct rows as duplicates, and non-idempotent `run_metrics` writes that
+  duplicated every metric row on re-save. (2026-08-11)
+
+### Security
+
+- All SQL literals are bound as DBAPI parameters and identifier quoting has a
+  single authority in `sql/_identifiers.py` (`DQT-02`). The reproduced
+  pre-fix exploit — an attacker subquery executing through a range-rule bound —
+  is covered by a regression test. (2026-08-19)
+- `ConnectionConfig.read_only` is enforced rather than merely accepted
+  (`DQT-03`): SQLite connections open with `mode=ro`, and `apply_cleansing()`
+  raises `ReadOnlyViolationError` before building any mutating statement.
+  Two gaps remain and are tracked: the PostgreSQL path has never been exercised
+  because CI has no PostgreSQL service, and `sql/schema_discovery.py`'s
+  `connect_sql()` does not consult `read_only` at all (`DQT-08`). (2026-08-19)
+
+### Known limitations
+
+- SQLite and PostgreSQL only. MySQL is a permanent non-goal; SQL Server is
+  planned and blocked on a `dqt/sql/dialects/` abstraction.
+- Diagnostics cover completeness only.
+- `PipelineResult.status` is always `"success"` — there is no per-stage error
+  handling, so a failed run raises rather than recording failure (`NEW-B`).
+- Cleansing is not persisted and cannot be reverted (`DQT-05`).
+- No performance benchmarks exist, so no claim is made about behaviour on
+  large tables.
+
+[Unreleased]: https://github.com/alisadeghiaghili/data-quality-toolkit/commits/main
