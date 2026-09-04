@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -195,6 +197,40 @@ class RunStore:
             """
             CREATE INDEX IF NOT EXISTS idx_run_issues_run_id
                 ON run_issues(run_id);
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS cleansing_plans (
+                plan_id       TEXT PRIMARY KEY,
+                -- Nullable and ON DELETE SET NULL: a plan's audit value has
+                -- to outlive the run's retention window. A plan is typically
+                -- produced during a run but applied and reverted independently
+                -- of it, which is why it has its own identity (DQT-05, Q2).
+                run_id        TEXT REFERENCES runs(run_id) ON DELETE SET NULL,
+                connection_id TEXT NOT NULL,
+                configs       TEXT NOT NULL,
+                changes       TEXT NOT NULL,
+                fingerprint   TEXT NOT NULL,
+                created_at    TEXT NOT NULL,
+                applied_at    TEXT
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS cleansing_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id      TEXT NOT NULL REFERENCES cleansing_plans(plan_id),
+                operation    TEXT NOT NULL,
+                schema_name  TEXT,
+                table_name   TEXT NOT NULL,
+                column_name  TEXT,
+                row_key      TEXT NOT NULL,
+                before_value TEXT,
+                after_value  TEXT,
+                logged_at    TEXT NOT NULL
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_cleansing_log_plan_id
+                ON cleansing_log(plan_id);
             """,
         ]
         with self._connect() as conn:
@@ -405,6 +441,152 @@ class RunStore:
     # ------------------------------------------------------------------
     # Private mapping helpers
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Cleansing plans and their logs (DQT-05)
+    # ------------------------------------------------------------------
+
+    def save_cleansing_plan(self, plan: Any) -> None:
+        """Persist a cleansing plan and the change set it computed.
+
+        Args:
+            plan: The CleansingPlan to store.
+
+        Returns:
+            None.
+
+        Example:
+            store.save_cleansing_plan(plan)
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO cleansing_plans
+                    (plan_id, run_id, connection_id, configs, changes,
+                     fingerprint, created_at, applied_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    plan.plan_id,
+                    plan.run_id,
+                    plan.connection_id,
+                    json.dumps([asdict(c) for c in plan.configs]),
+                    json.dumps([asdict(c) for c in plan.changes], default=str),
+                    plan.fingerprint,
+                    plan.created_at.isoformat(),
+                    plan.applied_at.isoformat() if plan.applied_at else None,
+                ),
+            )
+
+    def load_cleansing_plan(self, plan_id: str) -> Any:
+        """Load a cleansing plan by its identifier.
+
+        Args:
+            plan_id: Plan to load.
+
+        Returns:
+            The CleansingPlan, or None if no such plan exists.
+
+        Example:
+            plan = store.load_cleansing_plan("plan-abc")
+        """
+        from dqt.sql.cleansing import CleansingConfig, CleansingLog, CleansingPlan
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM cleansing_plans WHERE plan_id = ?", (plan_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return CleansingPlan(
+            plan_id=row["plan_id"],
+            run_id=row["run_id"],
+            connection_id=row["connection_id"],
+            configs=[CleansingConfig(**c) for c in json.loads(row["configs"])],
+            changes=[CleansingLog(**c) for c in json.loads(row["changes"])],
+            fingerprint=row["fingerprint"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            applied_at=(datetime.fromisoformat(row["applied_at"]) if row["applied_at"] else None),
+        )
+
+    def save_cleansing_log(self, plan_id: str, changes: Any, applied_at: Any) -> None:
+        """Persist the per-row log written when a plan was applied.
+
+        The before-values stored here are what :func:`~dqt.sql.cleansing.revert`
+        replays. Without them the log would be an audit trail only -- the
+        distinction ``CONVENTIONS-DQT.md`` section 1 S4 insists on.
+
+        Args:
+            plan_id: Plan the log belongs to.
+            changes: CleansingLog entries that were applied.
+            applied_at: When they were applied.
+
+        Returns:
+            None.
+
+        Example:
+            store.save_cleansing_log(plan.plan_id, plan.changes, applied_at)
+        """
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO cleansing_log
+                    (plan_id, operation, schema_name, table_name, column_name,
+                     row_key, before_value, after_value, logged_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        plan_id,
+                        change.operation,
+                        change.schema_name,
+                        change.table_name,
+                        change.column_name,
+                        json.dumps(change.row_key),
+                        change.before_value,
+                        change.after_value,
+                        applied_at.isoformat(),
+                    )
+                    for change in changes
+                ],
+            )
+
+    def load_cleansing_log(self, plan_id: str) -> list[dict[str, Any]]:
+        """Load the per-row log written when a plan was applied.
+
+        Args:
+            plan_id: Plan whose log to read.
+
+        Returns:
+            One dict per changed row, oldest first.
+
+        Example:
+            entries = store.load_cleansing_log("plan-abc")
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM cleansing_log WHERE plan_id = ? ORDER BY id", (plan_id,)
+            ).fetchall()
+        return [dict(r) | {"row_key": json.loads(r["row_key"])} for r in rows]
+
+    def mark_cleansing_plan_applied(self, plan_id: str, applied_at: Any) -> None:
+        """Record that a plan has been executed.
+
+        Args:
+            plan_id: Plan that ran.
+            applied_at: When it ran.
+
+        Returns:
+            None.
+
+        Example:
+            store.mark_cleansing_plan_applied(plan.plan_id, applied_at)
+        """
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE cleansing_plans SET applied_at = ? WHERE plan_id = ?",
+                (applied_at.isoformat(), plan_id),
+            )
 
     @staticmethod
     def _metric_row(run_id: str, metric: DQMetric) -> tuple[Any, ...]:

@@ -110,7 +110,7 @@ statement is built). That is implemented and test-backed on branch `dqt-03`
 two-connection split above is a stronger proposal that has not been adopted,
 and it interacts with `DQT-08`'s driver decision.
 
-### ⚖ S2. Cleansing execution modes *(proposal — see `BACKLOG.md` §3, Q2)*
+### S2. Cleansing execution modes *(settled 2026-08-26 as Q2; implemented by `DQT-05`)*
 
 `cleansing.mode` is one of:
 
@@ -122,16 +122,22 @@ and it interacts with `DQT-08`'s driver decision.
   3. an explicit CLI opt-in (`--apply-cleansing`),
   4. a preceding `plan` run whose `plan_id` is passed in.
 
-**Status:** `DQT-03` implements `apply_cleansing(dry_run=True)` by default plus
-`--dry-run`/`--commit` flags on `dqt profile` (branch `dqt-03`, not yet merged
-to `main`). The CLI flags currently govern only whether the profiled
-connection is opened read-write; `profile` does not itself invoke cleansing
-yet (see S3 below), so they become load-bearing for an actual write once a
-future task wires `CleansingConfig` into the pipeline. The four-condition
-scheme above is a superset; whether the extra ceremony is worth it is
-undecided.
+**Status: implemented 2026-09-05 by `DQT-05`.** `cleanse_plan()` computes and
+persists a change set without mutating, `cleanse_apply(plan_id)` replays that
+stored plan, and `revert(plan_id)` replays its log backwards. A plan carries a
+fingerprint of the rows it was computed against and applying a stale plan is
+refused, because a plan approved against one state must not execute against
+another — the log would otherwise record before-values that no longer describe
+what was there. Applying twice is refused for the same reason.
 
-### ⚖ S3. `cleanse` is not part of the default pipeline *(proposal — see `BACKLOG.md` §3, Q1)*
+Of the four conditions above, 1 and 4 are enforced: an `apply` needs a
+`plan_id` from a prior `plan`, and it cannot be reached by default because
+there is no default that reaches it. Conditions 2 and 3 are subsumed — with no
+cleansing stage in `run()`, `dqt profile` cannot cleanse at all, so `--commit`
+was removed rather than made load-bearing. Its only remaining effect would have
+been to open a writable connection to a database DQT never writes to.
+
+### S3. `cleanse` is not part of the default pipeline *(settled 2026-08-26 as Q1; implemented by `DQT-05`)*
 
 `DQTPipeline.run()` MUST NOT invoke cleansing. Cleansing is a separate entry
 point (`cleanse_plan()` / `cleanse_apply()`).

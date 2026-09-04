@@ -117,23 +117,19 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Logical connection identifier stored in run history (default: cli).",
     )
-    commit_group = profile.add_mutually_exclusive_group()
-    commit_group.add_argument(
+    # --commit is deliberately absent. It used to open the connection
+    # read-write, which mattered while run() had a cleansing stage; Q1 removed
+    # that stage, so the flag's only remaining effect would be to drop a guard
+    # in exchange for nothing. --dry-run is kept as an accepted no-op because
+    # scripts pass it and its intent is now simply unconditional.
+    profile.add_argument(
         "--dry-run",
-        dest="commit",
-        action="store_false",
-        help=("Open the connection read-only and do not commit any mutating operation (default)."),
-    )
-    commit_group.add_argument(
-        "--commit",
-        dest="commit",
         action="store_true",
         help=(
-            "Open the connection read-write and allow mutating operations to "
-            "commit. Without this flag, the run is a dry run."
+            "Accepted for compatibility and has no effect: profiling always "
+            "opens the connection read-only and never mutates."
         ),
     )
-    profile.set_defaults(commit=False)
     return parser
 
 
@@ -198,12 +194,13 @@ def _build_connection_config(args: argparse.Namespace) -> ConnectionConfig:
     Example::
 
         cfg = _build_connection_config(args)
-        assert cfg.read_only is True  # unless --commit was passed
+        assert cfg.read_only is True  # always
     """
     return ConnectionConfig(
         id=args.connection_id,
         dsn=args.dsn,
-        read_only=not args.commit,
+        # Unconditional: see _build_parser on why --commit no longer exists.
+        read_only=True,
     )
 
 

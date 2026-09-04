@@ -295,29 +295,41 @@ class TestFourHashChecksumProof:
 
 
 class TestCliDryRunFlag:
+    """DQT-03 shipped --dry-run/--commit; DQT-05 removed the second half.
+
+    While run() had a cleansing stage, --commit meaningfully chose between a
+    read-only and a writable connection. Q1 removed that stage, so the flag's
+    only remaining effect would have been to drop a guard in exchange for
+    nothing. These tests moved with that decision rather than being relaxed:
+    the guarantee they check is strictly stronger than before.
+    """
+
     def _parse(self, argv: list[str]):
         parser = _build_parser()
         return parser.parse_args(argv)
 
-    def test_default_is_dry_run_read_only_true(self) -> None:
+    def test_default_is_read_only(self) -> None:
         args = self._parse(["profile", "--dsn", "sqlite:///demo.db"])
-        assert args.commit is False
-        cfg = _build_connection_config(args)
-        assert cfg.read_only is True
-
-    def test_explicit_dry_run_flag_is_read_only_true(self) -> None:
-        args = self._parse(["profile", "--dsn", "sqlite:///demo.db", "--dry-run"])
-        assert args.commit is False
         assert _build_connection_config(args).read_only is True
 
-    def test_commit_flag_is_read_only_false(self) -> None:
-        args = self._parse(["profile", "--dsn", "sqlite:///demo.db", "--commit"])
-        assert args.commit is True
-        assert _build_connection_config(args).read_only is False
+    def test_explicit_dry_run_flag_is_still_read_only(self) -> None:
+        """The flag is now a no-op, kept so existing scripts keep parsing."""
+        args = self._parse(["profile", "--dsn", "sqlite:///demo.db", "--dry-run"])
+        assert _build_connection_config(args).read_only is True
 
-    def test_dry_run_and_commit_are_mutually_exclusive(self) -> None:
+    def test_commit_flag_no_longer_exists(self) -> None:
+        """There is no way to ask profiling for a writable connection."""
         with pytest.raises(SystemExit):
-            self._parse(["profile", "--dsn", "sqlite:///demo.db", "--dry-run", "--commit"])
+            self._parse(["profile", "--dsn", "sqlite:///demo.db", "--commit"])
+
+    def test_read_only_cannot_be_switched_off_from_the_command_line(self) -> None:
+        """No flag combination yields a writable profiling connection.
+
+        A guarantee a caller can disable is not a guarantee. This is the CLI
+        end of Q1's structural requirement.
+        """
+        args = self._parse(["profile", "--dsn", "sqlite:///demo.db", "--dry-run"])
+        assert _build_connection_config(args).read_only is True
 
 
 # ---------------------------------------------------------------------------

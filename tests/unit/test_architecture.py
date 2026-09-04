@@ -171,3 +171,45 @@ class TestPackagingDeclaresOneDriverPerDatabase:
         pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         required = pyproject["project"]["dependencies"]
         assert not [name for name in required if name.startswith(("psycopg", "pyodbc", "pymssql"))]
+
+
+class TestProfilingCannotMutate:
+    """Q1, settled 2026-08-26: `run()` must be structurally incapable of writing.
+
+    Not "defaults to off", not "guarded by a flag" -- incapable. A read-only
+    guard is a single point of failure, and `ENGINEERING-STANDARDS.md` §1.4's
+    reasoning is that a profiling run pointed at production should not have a
+    write path in its call graph at all, so that no future edit, config toggle
+    or default change can open one.
+    """
+
+    def test_the_pipeline_module_does_not_import_a_cleansing_entry_point(self):
+        """`pipeline.py` cannot reach plan or apply, by import.
+
+        Import is the cheapest place to enforce this and the hardest to
+        subvert by accident: a later contributor adding a cleansing call to
+        `run()` has to add an import first, and this fails on the import.
+        """
+        source = (_SOURCE_ROOT / "sql" / "pipeline.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        imported: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("cleansing"):
+                imported += [alias.name for alias in node.names]
+
+        forbidden = {"cleanse_plan", "cleanse_apply", "apply_cleansing", "revert", "cleanse"}
+        assert not (set(imported) & forbidden), (
+            f"pipeline.py imports a cleansing entry point: {sorted(set(imported) & forbidden)}. "
+            "Q1 requires run()'s call graph to contain no path that mutates."
+        )
+
+    def test_the_pipeline_has_no_cleanse_stage(self):
+        """`DQTPipeline` exposes no cleansing method at all.
+
+        A `cleanse()` method that happens to be a no-op today is still a
+        method a caller can find, and still a place a future edit can fill in.
+        """
+        from dqt.sql.pipeline import DQTPipeline
+
+        assert not hasattr(DQTPipeline, "cleanse")

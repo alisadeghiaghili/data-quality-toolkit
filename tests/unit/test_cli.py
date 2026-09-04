@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from dqt.cli import _build_pipeline_config, main
+from dqt.cli import _build_connection_config, _build_parser, _build_pipeline_config, main
 from dqt.common.storage import RunStore
 
 
@@ -193,3 +193,52 @@ def test_profile_cli_applies_rule_files_from_config(
     assert len(rule_issues) == 1
     assert rule_issues[0]["evidence"]["null_count"] == 1
     assert rule_issues[0]["evidence"]["total_rows"] == 3
+
+
+# ---------------------------------------------------------------------------
+# DQT-05: profile can no longer write, so --commit cannot mean anything
+# ---------------------------------------------------------------------------
+
+
+def test_profile_has_no_commit_flag() -> None:
+    """`--commit` is gone, because after Q1 it could only weaken safety.
+
+    It set ``read_only=False`` on the connection the pipeline profiles. Now
+    that ``run()`` has no cleansing stage, nothing downstream of that flag
+    writes -- so its entire remaining effect was to open a writable connection
+    to a database DQT only reads from. A flag whose only consequence is to
+    remove a guard, in exchange for nothing, should not be offered.
+    """
+    parser = _build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["profile", "--dsn", "sqlite:///x.db", "--commit"])
+
+
+def test_profile_still_accepts_dry_run_as_a_no_op() -> None:
+    """`--dry-run` keeps parsing, because scripts pass it.
+
+    The behaviour it asked for is now permanent and unconditional. Removing
+    the flag as well would break existing invocations to no purpose -- the
+    caller's intent is still honoured, it just no longer needs stating.
+    """
+    parser = _build_parser()
+
+    args = parser.parse_args(["profile", "--dsn", "sqlite:///x.db", "--dry-run"])
+
+    assert args.dsn == "sqlite:///x.db"
+
+
+def test_the_profiled_connection_is_always_read_only(tmp_path: Path) -> None:
+    """Whatever the caller passes, profiling opens read-only.
+
+    This is Q1 reaching the CLI: the guarantee is that a profiling invocation
+    cannot mutate, and a guarantee that a command-line flag can switch off is
+    not one.
+    """
+    parser = _build_parser()
+    args = parser.parse_args(["profile", "--dsn", f"sqlite:///{tmp_path / 'x.db'}"])
+
+    conn_cfg = _build_connection_config(args)
+
+    assert conn_cfg.read_only is True
