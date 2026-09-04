@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "DQT \u2014 SQL Data Quality Toolkit for DBAs"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "BUSL-1.1"
 keywords = ["data-quality", "sql", "dba", "profiling", "diagnostics"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
