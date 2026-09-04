@@ -38,8 +38,8 @@ from dqt.common.models import (
     ColumnResult,
     # Config models
     ConnectionConfig,
-    DQIssue,
     DQDimension,
+    DQIssue,
     DQMetric,
     DQPipelineConfig,
     # Literal types
