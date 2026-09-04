@@ -47,7 +47,10 @@ def _metric(dimension: str, score: float, table: str, column: str | None = None)
     """
     return DQMetric(
         run_id=RUN_ID,
-        dimension=dimension,
+        # A raw measurement is not a quality dimension (NEW-A): only the six
+        # documented dimensions may travel in `dimension`.
+        dimension=dimension if dimension in {"completeness"} else None,
+        metric_name=None if dimension in {"completeness"} else dimension,
         score=score,
         schema_name="main",
         table_name=table,

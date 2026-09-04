@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -34,9 +34,33 @@ RunStatus = Literal["success", "failed", "partial"]
 IssueSeverity = Literal["info", "warning", "error", "critical"]
 RuleStatus = Literal["pass", "fail", "error"]
 
+# The closed set from docs/CONVENTIONS-DQT.md section 0.1. Adding a seventh
+# value requires editing that section first; this alias is downstream of the
+# document, not the other way round.
+DQDimension = Literal[
+    "completeness",
+    "validity",
+    "uniqueness",
+    "consistency",
+    "referential_integrity",
+    "timeliness",
+]
+
+
+def get_args_of_dq_dimension() -> set[str]:
+    """Return the closed set of data-quality dimension identifiers.
+
+    Returns:
+        Every value :data:`DQDimension` admits, as a set of strings.
+
+    Example:
+        assert "completeness" in get_args_of_dq_dimension()
+    """
+    raise NotImplementedError("get_args_of_dq_dimension is specified but not implemented")
+
 
 # ===========================================================================
-# SECTION 1 — Domain Objects (dataclasses)
+# SECTION 1 â€” Domain Objects (dataclasses)
 # ===========================================================================
 
 
@@ -76,14 +100,14 @@ class DQMetric:
     """
 
     run_id: str
-    dimension: str
     score: float
+    dimension: DQDimension | None = None
+    metric_name: str | None = None
     schema_name: str | None = None
     table_name: str | None = None
     column_name: str | None = None
     value: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-
 
 @dataclass
 class DQIssue:
@@ -326,8 +350,8 @@ class PipelineResult:
     """Complete outcome of one DQT data-quality pipeline run.
 
     ``PipelineResult`` is the top-level container produced by
-    :class:`dqt.pipeline.DQTPipeline`.  All downstream consumers — storage,
-    reports, UI, and bridges — work from this single object.
+    :class:`dqt.pipeline.DQTPipeline`.  All downstream consumers â€” storage,
+    reports, UI, and bridges â€” work from this single object.
 
     Attributes:
         run_id: Unique identifier for this run (e.g. a UUID or timestamp slug).
@@ -371,7 +395,7 @@ class PipelineResult:
 
 
 # ===========================================================================
-# SECTION 2 — Domain Object: Rule (references RuleScope from config section)
+# SECTION 2 â€” Domain Object: Rule (references RuleScope from config section)
 # ===========================================================================
 
 
@@ -418,7 +442,7 @@ class Rule:
 
 
 # ===========================================================================
-# SECTION 3 — Config Models (Pydantic)
+# SECTION 3 â€” Config Models (Pydantic)
 # ===========================================================================
 
 
