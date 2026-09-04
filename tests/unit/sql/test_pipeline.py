@@ -183,9 +183,14 @@ class TestRunReportsFailure:
         went wrong.
         """
         conn_cfg = ConnectionConfig(id="x", dsn=f"sqlite:///{tmp_path}/missing/nope.db")
-        pipeline = DQTPipeline(conn_cfg, DQPipelineConfig(connection_id="x"))
+        pipeline = DQTPipeline(
+            conn_cfg,
+            DQPipelineConfig(connection_id="x"),
+            store_path=tmp_path / "runs.db",
+            report_dir=tmp_path,
+        )
 
-        result = pipeline.run()
+        result, _ = pipeline.run()
 
         assert result.status == "failed"
         assert any("discover_schema" in error.stage for error in result.stage_errors)
@@ -203,9 +208,10 @@ class TestRunReportsFailure:
             conn_cfg,
             DQPipelineConfig(connection_id="x"),
             store_path=store_path,
+            report_dir=tmp_path,
         )
 
-        result = pipeline.run()
+        result, _ = pipeline.run()
 
         runs = RunStore(db_path=store_path).load_runs()
         assert [r["status"] for r in runs] == ["failed"]
@@ -222,19 +228,16 @@ class TestRunReportsFailure:
         was about. Today ``apply_rules`` suppresses ``FileNotFoundError``
         per file and says nothing.
         """
-        db_file = make_sqlite_db(
-            "d.db", "CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);"
-        )
+        db_file = make_sqlite_db("d.db", "CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);")
         conn_cfg = ConnectionConfig(id="x", dsn=f"sqlite:///{db_file}")
         pipeline = DQTPipeline(
             conn_cfg,
-            DQPipelineConfig(
-                connection_id="x", rule_files=[str(tmp_path / "not-there.yaml")]
-            ),
+            DQPipelineConfig(connection_id="x", rule_files=[str(tmp_path / "not-there.yaml")]),
             store_path=tmp_path / "runs.db",
+            report_dir=tmp_path,
         )
 
-        result = pipeline.run()
+        result, _ = pipeline.run()
 
         assert result.status == "partial"
         assert any("not-there.yaml" in error.message for error in result.stage_errors)
@@ -245,17 +248,16 @@ class TestRunReportsFailure:
         Error capture that also changed the meaning of a good run would be a
         worse defect than the one it fixes.
         """
-        db_file = make_sqlite_db(
-            "d.db", "CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);"
-        )
+        db_file = make_sqlite_db("d.db", "CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);")
         conn_cfg = ConnectionConfig(id="x", dsn=f"sqlite:///{db_file}")
         pipeline = DQTPipeline(
             conn_cfg,
             DQPipelineConfig(connection_id="x"),
             store_path=tmp_path / "runs.db",
+            report_dir=tmp_path,
         )
 
-        result = pipeline.run()
+        result, _ = pipeline.run()
 
         assert result.status == "success"
         assert result.stage_errors == []
