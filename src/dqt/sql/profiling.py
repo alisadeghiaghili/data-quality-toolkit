@@ -9,6 +9,15 @@ Current implementation:
 - Table row counts.
 - Column null counts.
 - Column completeness scores derived from null counts.
+
+Query cost, stated plainly. Profiling currently issues one row-count query per
+table plus one null-count query per column, so a table with N columns costs
+N + 1 round trips and N + 1 scans. That is unchanged by `DQT-08`, which only
+moved where the SQL is built: every statement now comes from
+``dialect.select_aggregates_sql``, which takes a *sequence* of expressions.
+Folding the N + 1 statements into one aggregate query per table is therefore a
+change to this module alone, needing nothing from the dialect layer. That work
+belongs to the performance unit, not here.
 """
 
 from __future__ import annotations
@@ -17,8 +26,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from dqt.common.models import ConnectionConfig, DQMetric
-from dqt.sql._identifiers import qualified_identifier, quote_identifier
-from dqt.sql.schema_discovery import DiscoveredColumn, DiscoveredTable, connect_sql
+from dqt.sql._connect import get_connection, get_dialect_for
+from dqt.sql.dialects import Dialect
+from dqt.sql.schema_discovery import DiscoveredColumn, DiscoveredTable
 
 
 @dataclass(slots=True)
@@ -91,6 +101,7 @@ class SqlProfiler:
 
     def __init__(self, connection_config: ConnectionConfig) -> None:
         self._connection_config = connection_config
+        self._dialect: Dialect = get_dialect_for(connection_config)
 
     def profile_tables(self, tables: list[DiscoveredTable]) -> list[TableProfile]:
         """Profile discovered tables with simple aggregate queries.
@@ -104,7 +115,7 @@ class SqlProfiler:
         Example:
             profiles = profiler.profile_tables(tables)
         """
-        conn = connect_sql(self._connection_config)
+        conn = get_connection(self._connection_config)
         try:
             return [self._profile_table(conn, table) for table in tables]
         finally:
@@ -171,8 +182,9 @@ class SqlProfiler:
         )
 
     def _fetch_row_count(self, conn: Any, table: DiscoveredTable) -> int:
-        table_ref = qualified_identifier(table.schema_name, table.table_name)
-        cursor = conn.execute(f"SELECT COUNT(*) FROM {table_ref}")
+        table_ref = self._dialect.qualified_identifier(table.schema_name, table.table_name)
+        statement = self._dialect.select_aggregates_sql(table_ref, ["COUNT(*)"])
+        cursor = conn.execute(statement)
         return int(cursor.fetchone()[0])
 
     def _profile_column(
@@ -182,9 +194,12 @@ class SqlProfiler:
         column: DiscoveredColumn,
         row_count: int,
     ) -> ColumnProfile:
-        table_ref = qualified_identifier(table.schema_name, table.table_name)
-        col_ref = quote_identifier(column.column_name)
-        cursor = conn.execute(f"SELECT COUNT(*) FROM {table_ref} WHERE {col_ref} IS NULL")
+        table_ref = self._dialect.qualified_identifier(table.schema_name, table.table_name)
+        col_ref = self._dialect.quote_identifier(column.column_name)
+        statement = self._dialect.select_aggregates_sql(
+            table_ref, ["COUNT(*)"], f"{col_ref} IS NULL"
+        )
+        cursor = conn.execute(statement)
         null_count = int(cursor.fetchone()[0])
         return ColumnProfile(
             schema_name=column.schema_name,

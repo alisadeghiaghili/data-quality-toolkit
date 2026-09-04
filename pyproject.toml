@@ -33,10 +33,25 @@ dev = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "types-PyYAML>=6.0",
+    # starlette's TestClient needs an HTTP client of its own. Recent starlette
+    # requires httpx2 and raises at import without it, which surfaces as a
+    # collection error in tests/unit/ui/ rather than a skip -- so it must be a
+    # declared dependency, not something a developer happens to have.
+    "httpx2>=0.1",
 ]
 postgres = [
+    # One driver per database (DQT-08). psycopg 3 is the maintained line and
+    # the one dqt.sql.dialects.postgresql imports; psycopg2-binary was removed
+    # because two drivers meant two connection behaviours to reason about
+    # while enforcing read_only, and no test covered the second one.
     "psycopg[binary]>=3.1",
-    "psycopg2-binary>=2.9",
+]
+sqlserver = [
+    # pyodbc needs a system ODBC driver ("ODBC Driver 18 for SQL Server" or
+    # similar) that pip cannot install, so this extra is necessary but not
+    # sufficient. dqt.sql.dialects.sqlserver imports it lazily and raises a
+    # DQT error naming this extra when it is absent.
+    "pyodbc>=5.0",
 ]
 ui = [
     "fastapi>=0.110",
@@ -91,10 +106,11 @@ no_implicit_reexport = true
 module = "tests.*"
 disallow_untyped_defs = false
 
-# psycopg/psycopg2/fastapi are optional extras (postgres, ui) not installed in
-# the base dev environment — treat them as untyped rather than failing import.
+# psycopg/pyodbc/fastapi are optional extras (postgres, sqlserver, ui) not
+# installed in the base dev environment — treat them as untyped rather than
+# failing import. psycopg2 is gone: DQT-08 settled on one PostgreSQL driver.
 [[tool.mypy.overrides]]
-module = ["psycopg", "psycopg2", "fastapi"]
+module = ["psycopg", "pyodbc", "fastapi"]
 ignore_missing_imports = true
 
 # Route decorators resolve to Any because fastapi itself is untyped here;

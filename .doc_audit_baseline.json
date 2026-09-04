@@ -16,7 +16,6 @@
   "src/dqt/common/storage.py::RunStore.__init__::missing-docstring",
   "src/dqt/sql/pipeline.py::DQTPipeline.__init__::missing-docstring",
   "src/dqt/sql/profiling.py::SqlProfiler.__init__::missing-docstring",
-  "src/dqt/sql/schema_discovery.py::discover_schema::missing-raises",
   "src/dqt/ui/app.py::get_issues::missing-params",
   "src/dqt/ui/app.py::get_issues::missing-returns",
   "src/dqt/ui/app.py::get_metrics::missing-params",
