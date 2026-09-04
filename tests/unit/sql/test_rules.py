@@ -15,13 +15,13 @@ import pytest
 
 from dqt.common.config_loader import load_rules
 from dqt.common.models import ConnectionConfig, RuleConfig, RuleScope
+from dqt.sql._connect import get_connection
+from dqt.sql.dialects import get_dialect, get_dialect_by_name
 from dqt.sql.rules import (
-    _detect_dialect,
     _eval_not_null,
     _eval_range,
     _eval_regex,
     _eval_unique,
-    _get_connection,
     _matches_scope,
     apply_rules,
 )
@@ -116,17 +116,17 @@ def sqlite_dsn_file(make_sqlite_db):
 
 class TestDetectDialect:
     def test_sqlite(self):
-        assert _detect_dialect("sqlite:///dev.db") == "sqlite"
+        assert get_dialect("sqlite:///dev.db").name == "sqlite"
 
     def test_postgresql(self):
-        assert _detect_dialect("postgresql://u:p@h/db") == "postgresql"
+        assert get_dialect("postgresql://u:p@h/db").name == "postgresql"
 
     def test_postgres_alias(self):
-        assert _detect_dialect("postgres://u:p@h/db") == "postgresql"
+        assert get_dialect("postgres://u:p@h/db").name == "postgresql"
 
     def test_unsupported_raises(self):
-        with pytest.raises(ValueError, match="Cannot detect dialect"):
-            _detect_dialect("mysql://u:p@h/db")
+        with pytest.raises(ValueError, match="Cannot detect a supported dialect"):
+            get_dialect("mysql://u:p@h/db")
 
 
 # ---------------------------------------------------------------------------
@@ -137,14 +137,18 @@ class TestDetectDialect:
 class TestEvalNotNull:
     def test_detects_nulls(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
-        total, null_count = _eval_not_null(cursor, None, "users", "email")
+        total, null_count = _eval_not_null(
+            cursor, None, "users", "email", dialect=get_dialect_by_name("sqlite")
+        )
         assert total == 5
         assert null_count == 1
 
     def test_no_nulls(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
         # 'age' column has no NULLs in fixture
-        total, null_count = _eval_not_null(cursor, None, "users", "age")
+        total, null_count = _eval_not_null(
+            cursor, None, "users", "age", dialect=get_dialect_by_name("sqlite")
+        )
         assert total == 5
         assert null_count == 0
 
@@ -152,39 +156,69 @@ class TestEvalNotNull:
 class TestEvalUnique:
     def test_detects_duplicates(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
-        total, dup_extra = _eval_unique(cursor, None, "users", "email")
+        total, dup_extra = _eval_unique(
+            cursor, None, "users", "email", dialect=get_dialect_by_name("sqlite")
+        )
         # alice@example.com appears twice -> 1 extra row
         assert dup_extra == 1
 
     def test_no_duplicates_when_unique(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
         # age values: 25, 30, 17, -1, 22 -> all unique
-        _, dup_extra = _eval_unique(cursor, None, "users", "age")
+        _, dup_extra = _eval_unique(
+            cursor, None, "users", "age", dialect=get_dialect_by_name("sqlite")
+        )
         assert dup_extra == 0
 
 
 class TestEvalRange:
     def test_detects_below_min(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
-        total, out = _eval_range(cursor, None, "users", "age", min_val=0, max_val=None)
+        total, out = _eval_range(
+            cursor,
+            None,
+            "users",
+            "age",
+            min_val=0,
+            max_val=None,
+            dialect=get_dialect_by_name("sqlite"),
+        )
         # age = -1 is out of range
         assert out == 1
 
     def test_detects_above_max(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
-        total, out = _eval_range(cursor, None, "users", "age", min_val=None, max_val=100)
+        total, out = _eval_range(
+            cursor,
+            None,
+            "users",
+            "age",
+            min_val=None,
+            max_val=100,
+            dialect=get_dialect_by_name("sqlite"),
+        )
         assert out == 0  # all ages <= 100
 
     def test_both_bounds(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
-        total, out = _eval_range(cursor, None, "users", "age", min_val=18, max_val=100)
+        total, out = _eval_range(
+            cursor,
+            None,
+            "users",
+            "age",
+            min_val=18,
+            max_val=100,
+            dialect=get_dialect_by_name("sqlite"),
+        )
         # age 17 and -1 are out of range -> 2
         assert out == 2
 
     def test_no_bounds_raises(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
         with pytest.raises(ValueError, match="range rule requires"):
-            _eval_range(cursor, None, "users", "age", None, None)
+            _eval_range(
+                cursor, None, "users", "age", None, None, dialect=get_dialect_by_name("sqlite")
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +547,7 @@ class TestRegexpRegistration:
         swapped-argument bug, not just the "no function registered at all"
         bug.
         """
-        conn = _get_connection(ConnectionConfig(id="t", dsn="sqlite:///:memory:"))
+        conn = get_connection(ConnectionConfig(id="t", dsn="sqlite:///:memory:"))
         try:
             cursor = conn.cursor()
             # Would raise sqlite3.OperationalError: no such function: REGEXP
@@ -536,7 +570,7 @@ class TestRegexpRegistration:
         the operator does filter out real non-matches, not just always
         return true.
         """
-        conn = _get_connection(ConnectionConfig(id="t", dsn="sqlite:///:memory:"))
+        conn = get_connection(ConnectionConfig(id="t", dsn="sqlite:///:memory:"))
         try:
             cursor = conn.cursor()
             cursor.execute("SELECT 1 WHERE 'zzz' REGEXP '^a'")
@@ -604,13 +638,13 @@ class TestEvalRegexEmailRule:
             INSERT INTO users VALUES (NULL);
             """,
         )
-        conn = _get_connection(
-            ConnectionConfig(id="t", dsn=f"sqlite:///{db_file}", read_only=False)
-        )
+        conn = get_connection(ConnectionConfig(id="t", dsn=f"sqlite:///{db_file}", read_only=False))
         try:
             cursor = conn.cursor()
 
-            total, non_matching = _eval_regex(cursor, None, "users", "email", pattern, "sqlite")
+            total, non_matching = _eval_regex(
+                cursor, None, "users", "email", pattern, dialect=get_dialect_by_name("sqlite")
+            )
             assert total == 5
             assert non_matching == 3  # hand-derived above: "", "not-an-email", "x@y"
 
@@ -660,7 +694,14 @@ class TestEvalRegexMalformedPattern:
             # _eval_regex's own pattern handling, independent of whether
             # the connection has REGEXP registered.
             with pytest.raises(ValueError):
-                _eval_regex(cursor, None, "users", "email", "(unbalanced", "sqlite")
+                _eval_regex(
+                    cursor,
+                    None,
+                    "users",
+                    "email",
+                    "(unbalanced",
+                    dialect=get_dialect_by_name("sqlite"),
+                )
 
             # The defect this guards against: total rows must never be
             # silently reported as the non-matching count for a pattern
@@ -689,7 +730,7 @@ class TestRegexPatternCacheBounded:
         the new internal cache function is imported locally (not at module
         scope) so it cannot break collection of this file pre-fix.
         """
-        conn = _get_connection(ConnectionConfig(id="t", dsn="sqlite:///:memory:"))
+        conn = get_connection(ConnectionConfig(id="t", dsn="sqlite:///:memory:"))
         try:
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE t (v TEXT)")
@@ -700,12 +741,19 @@ class TestRegexPatternCacheBounded:
                 # Each pattern is syntactically distinct (and harmless: none
                 # of them match 'sample'), forcing n_distinct_patterns
                 # separate compilations if nothing bounds the cache.
-                _eval_regex(cursor, None, "t", "v", f"^only-pattern-number-{i}$", "sqlite")
+                _eval_regex(
+                    cursor,
+                    None,
+                    "t",
+                    "v",
+                    f"^only-pattern-number-{i}$",
+                    dialect=get_dialect_by_name("sqlite"),
+                )
 
             # Reached only when the loop above succeeded, i.e. post-fix.
-            from dqt.sql.rules import _compile_regex_pattern
+            from dqt.sql.dialects.sqlite import compile_regex_pattern
 
-            info = _compile_regex_pattern.cache_info()
+            info = compile_regex_pattern.cache_info()
             assert info.maxsize is not None and info.maxsize > 0, (
                 "pattern cache must have a finite maxsize, not be unbounded"
             )
@@ -720,10 +768,10 @@ class TestRegexPatternCacheBounded:
             # generic regex-syntax error, and by it never being counted as
             # a cache entry.
             huge_pattern = "a" * 50_000  # syntactically valid regex, just absurdly long
-            misses_before = _compile_regex_pattern.cache_info().misses
+            misses_before = compile_regex_pattern.cache_info().misses
             with pytest.raises(ValueError, match="exceeds"):
-                _compile_regex_pattern(huge_pattern)
-            info_after = _compile_regex_pattern.cache_info()
+                compile_regex_pattern(huge_pattern)
+            info_after = compile_regex_pattern.cache_info()
             # A rejected pattern must not be memoized: lru_cache never
             # caches a raised exception, but this also confirms the
             # rejection happens outside of (before) any cached-compile path.

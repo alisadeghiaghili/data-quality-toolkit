@@ -30,6 +30,7 @@ from pydantic import ValidationError
 
 from dqt.common.models import RuleConfig, RuleScope
 from dqt.sql._identifiers import quote_identifier
+from dqt.sql.dialects import get_dialect_by_name
 from dqt.sql.rules import _eval_not_null, _eval_range
 
 # The exact payload reproduced in DQT-critical-review.md Sec 1.3: a
@@ -106,7 +107,15 @@ class TestParameterizationPreventsExecution:
 
     def test_review_payload_does_not_execute_as_max(self, injection_db):
         cursor = injection_db.cursor()
-        total, out_of_range = _eval_range(cursor, None, "products", "price", None, REVIEW_PAYLOAD)
+        total, out_of_range = _eval_range(
+            cursor,
+            None,
+            "products",
+            "price",
+            None,
+            REVIEW_PAYLOAD,
+            dialect=get_dialect_by_name("sqlite"),
+        )
         assert total == 3
         # Pre-fix, the interpolated payload evaluated to `2 - 1 == 1`,
         # so `"price" > 1` matched all three rows (out_of_range == 3).
@@ -122,7 +131,15 @@ class TestParameterizationPreventsExecution:
 
     def test_review_payload_does_not_execute_as_min(self, injection_db):
         cursor = injection_db.cursor()
-        total, out_of_range = _eval_range(cursor, None, "products", "price", REVIEW_PAYLOAD, None)
+        total, out_of_range = _eval_range(
+            cursor,
+            None,
+            "products",
+            "price",
+            REVIEW_PAYLOAD,
+            None,
+            dialect=get_dialect_by_name("sqlite"),
+        )
         assert total == 3
         # If the payload had executed as SQL text, "price" < 1 would match
         # zero rows (all prices are >= 10). SQLite instead compares the
@@ -170,7 +187,9 @@ class TestMaliciousTableIdentifierIsSafelyQuoted:
         conn.commit()
 
         cursor = conn.cursor()
-        total, null_count = _eval_not_null(cursor, None, MALICIOUS_TABLE_NAME, "id")
+        total, null_count = _eval_not_null(
+            cursor, None, MALICIOUS_TABLE_NAME, "id", dialect=get_dialect_by_name("sqlite")
+        )
         assert total == 2
         assert null_count == 1
 

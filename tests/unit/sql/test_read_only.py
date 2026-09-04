@@ -12,10 +12,10 @@ Covered here:
 - `apply_cleansing()` on a read_only=True connection raises
   ReadOnlyViolationError before touching the database (guard #2 in
   cleansing.py), and the file is byte-identical afterwards.
-- `_get_connection()` opens SQLite in mode=ro when read_only=True, so even a
+- `get_connection()` opens SQLite in mode=ro when read_only=True, so even a
   direct write attempt through the returned connection fails at the driver
   level (guard #1, independent of guard #2).
-- `_get_connection()` still opens a normal writable connection when
+- `get_connection()` still opens a normal writable connection when
   read_only=False.
 - `apply_cleansing()` defaults to dry_run=True: on a writable (read_only=False)
   connection, the default call changes no rows; only an explicit
@@ -43,9 +43,9 @@ from dqt.cli import _build_connection_config, _build_parser
 from dqt.common.models import ConnectionConfig, DQPipelineConfig
 from dqt.common.storage import RunStore
 from dqt.exceptions import ReadOnlyViolationError
+from dqt.sql._connect import get_connection
 from dqt.sql.cleansing import CleansingConfig, apply_cleansing
 from dqt.sql.pipeline import DQTPipeline
-from dqt.sql.rules import _get_connection
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -118,7 +118,7 @@ class TestApplyCleansingReadOnlyGuard:
 
     def test_raises_before_opening_any_connection(self, tmp_path: Path) -> None:
         """The guard fires even for a DSN pointing at a file that does not
-        exist, proving it runs before _get_connection() (which would raise a
+        exist, proving it runs before get_connection() (which would raise a
         different error for a missing file)."""
         missing = tmp_path / "does_not_exist.db"
         conn_cfg = ConnectionConfig(id="test", dsn=_dsn(missing))
@@ -149,17 +149,17 @@ class TestApplyCleansingReadOnlyGuard:
 
 
 # ---------------------------------------------------------------------------
-# Guard #1: _get_connection() enforces read-only at the driver level
+# Guard #1: get_connection() enforces read-only at the driver level
 # ---------------------------------------------------------------------------
 
 
 class TestGetConnectionEnforcesReadOnly:
     def test_read_only_connection_rejects_direct_write(self, users_db: Path) -> None:
         """Even bypassing apply_cleansing() entirely and using the raw
-        connection returned by _get_connection(), a write must fail at the
+        connection returned by get_connection(), a write must fail at the
         SQLite driver level (mode=ro), not merely by application convention."""
         conn_cfg = ConnectionConfig(id="test", dsn=_dsn(users_db))  # read_only=True
-        conn = _get_connection(conn_cfg)
+        conn = get_connection(conn_cfg)
         try:
             with pytest.raises(sqlite3.OperationalError, match="readonly"):
                 conn.execute("UPDATE users SET name = 'x' WHERE id = 1")
@@ -168,7 +168,7 @@ class TestGetConnectionEnforcesReadOnly:
 
     def test_read_only_connection_still_allows_reads(self, users_db: Path) -> None:
         conn_cfg = ConnectionConfig(id="test", dsn=_dsn(users_db))
-        conn = _get_connection(conn_cfg)
+        conn = get_connection(conn_cfg)
         try:
             count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
             assert count == 3
@@ -178,7 +178,7 @@ class TestGetConnectionEnforcesReadOnly:
     def test_writable_connection_allows_write(self, users_db: Path) -> None:
         """Contrast case: read_only=False must not be blocked by mode=ro."""
         conn_cfg = ConnectionConfig(id="test", dsn=_dsn(users_db), read_only=False)
-        conn = _get_connection(conn_cfg)
+        conn = get_connection(conn_cfg)
         try:
             conn.execute("UPDATE users SET name = 'x' WHERE id = 1")
             conn.commit()
@@ -194,7 +194,7 @@ class TestGetConnectionEnforcesReadOnly:
         missing = tmp_path / "brand_new.db"
         conn_cfg = ConnectionConfig(id="test", dsn=_dsn(missing))  # read_only=True
         with pytest.raises(sqlite3.OperationalError):
-            _get_connection(conn_cfg)
+            get_connection(conn_cfg)
         assert not missing.exists()
 
     def test_writable_nonexistent_file_still_auto_creates(self, tmp_path: Path) -> None:
@@ -203,7 +203,7 @@ class TestGetConnectionEnforcesReadOnly:
         callers who intend to write to a brand-new database."""
         new_file = tmp_path / "new_writable.db"
         conn_cfg = ConnectionConfig(id="test", dsn=_dsn(new_file), read_only=False)
-        conn = _get_connection(conn_cfg)
+        conn = get_connection(conn_cfg)
         conn.close()
         assert new_file.exists()
 
@@ -267,9 +267,9 @@ class TestFourHashChecksumProof:
         guard removed (dry_run=False on a read_only=False connection)."""
         hash_before = _sha256(users_db)
 
-        # 2. After a "read-only run" -- exercised via _get_connection reads only.
+        # 2. After a "read-only run" -- exercised via get_connection reads only.
         ro_cfg = ConnectionConfig(id="test", dsn=_dsn(users_db))
-        conn = _get_connection(ro_cfg)
+        conn = get_connection(ro_cfg)
         conn.execute("SELECT COUNT(*) FROM users").fetchone()
         conn.close()
         hash_after_read_only_run = _sha256(users_db)
