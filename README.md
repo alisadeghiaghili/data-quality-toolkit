@@ -1,5 +1,9 @@
 # data-quality-toolkit (`dqt`)
 
+[![License: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](pyproject.toml)
+[![Coverage gate](https://img.shields.io/badge/coverage%20gate-90%25-brightgreen.svg)](pyproject.toml)
+
 ## Status: pre-alpha — not for production use
 
 Version `0.1.0.dev0`. Nothing has been released: there are no git tags and no
