@@ -58,8 +58,11 @@ ui = [
     "uvicorn>=0.30",
 ]
 bridges = [
-    # optional: pip install dqt[bridges] to enable missingly bridge
-    # "missingly",
+    # dqt.bridges.missingly reads a bounded sample into a DataFrame and hands
+    # it to `missingly`. Both are optional: DQT core is SQL-first and neither
+    # is imported unless a bridge is explicitly called.
+    "pandas>=2.0",
+    "missingly>=0.1",
 ]
 
 [project.scripts]
