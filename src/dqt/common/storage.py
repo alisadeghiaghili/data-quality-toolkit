@@ -124,6 +124,7 @@ class RunStore:
                 started_at    TEXT NOT NULL,
                 ended_at      TEXT NOT NULL,
                 status        TEXT NOT NULL
+                              CHECK (status IN ('success', 'failed', 'partial'))
             );
             """,
             """
@@ -133,10 +134,23 @@ class RunStore:
                 schema_name TEXT,
                 table_name  TEXT,
                 column_name TEXT,
-                dimension   TEXT    NOT NULL,
+                -- Nullable: a raw measurement such as row_count is not a
+                -- quality dimension, and forcing it into this column is the
+                -- defect NEW-A removes. The CHECK keeps section 0.1's closed
+                -- set true in the database, not only in Python.
+                dimension   TEXT
+                            CHECK (dimension IS NULL OR dimension IN (
+                                'completeness', 'validity', 'uniqueness',
+                                'consistency', 'referential_integrity', 'timeliness'
+                            )),
+                metric_name TEXT,
                 score       REAL    NOT NULL,
                 value       REAL,
-                metadata    TEXT    DEFAULT '{}'
+                metadata    TEXT    DEFAULT '{}',
+                -- Table-level: exactly one of the two, mirroring
+                -- DQMetric.__post_init__ so direct SQL cannot store a row the
+                -- model would refuse to construct.
+                CHECK ((dimension IS NULL) <> (metric_name IS NULL))
             );
             """,
             """
@@ -150,7 +164,11 @@ class RunStore:
                     COALESCE(schema_name, ''),
                     COALESCE(table_name, ''),
                     COALESCE(column_name, ''),
-                    dimension
+                    -- Both, coalesced: SQLite treats NULLs as distinct, so
+                    -- indexing the nullable dimension alone would let two
+                    -- identical row_count metrics both be stored.
+                    COALESCE(dimension, ''),
+                    COALESCE(metric_name, '')
                 );
             """,
             """
@@ -160,8 +178,15 @@ class RunStore:
                 schema_name TEXT,
                 table_name  TEXT,
                 column_name TEXT,
-                dimension   TEXT NOT NULL,
-                severity    TEXT NOT NULL,
+                -- An issue is always a judgement, so unlike a metric this
+                -- stays NOT NULL: there is no measurement case here.
+                dimension   TEXT NOT NULL
+                            CHECK (dimension IN (
+                                'completeness', 'validity', 'uniqueness',
+                                'consistency', 'referential_integrity', 'timeliness'
+                            )),
+                severity    TEXT NOT NULL
+                            CHECK (severity IN ('info', 'warning', 'error', 'critical')),
                 message     TEXT NOT NULL,
                 evidence    TEXT DEFAULT '{}',
                 rule_name   TEXT
@@ -217,8 +242,8 @@ class RunStore:
                 """
                 INSERT OR IGNORE INTO run_metrics
                     (run_id, schema_name, table_name, column_name,
-                     dimension, score, value, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     dimension, metric_name, score, value, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [self._metric_row(result.run_id, m) for m in result.metrics],
             )
@@ -313,7 +338,7 @@ class RunStore:
             params.append(dimension)
         where = "WHERE " + " AND ".join(clauses)
         sql = f"""
-            SELECT run_id, schema_name, table_name, column_name,
+            SELECT run_id, schema_name, table_name, column_name, metric_name,
                    dimension, score, value, metadata
             FROM run_metrics
             {where}
@@ -390,6 +415,7 @@ class RunStore:
             metric.table_name,
             metric.column_name,
             metric.dimension,
+            metric.metric_name,
             metric.score,
             metric.value,
             json.dumps(metric.metadata),

@@ -107,7 +107,7 @@ def test_completeness_score_formula(make_sqlite_db: Callable[[str, str], Path]) 
 
     # The table-level row_count metric reports the count as its value and does
     # not pretend to be a quality score.
-    row_count_metric = next(m for m in metrics if m.dimension == "row_count")
+    row_count_metric = next(m for m in metrics if m.metric_name == "row_count")
     assert row_count_metric.value == 5.0
 
 

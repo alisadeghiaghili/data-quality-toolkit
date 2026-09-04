@@ -38,6 +38,7 @@ from dqt.common.models import (
     ColumnResult,
     # Config models
     ConnectionConfig,
+    DQDimension,
     DQIssue,
     DQMetric,
     DQPipelineConfig,
@@ -122,6 +123,7 @@ __all__ = [
     "ClassificationResult",
     "ColumnResult",
     "DQIssue",
+    "DQDimension",
     "DQMetric",
     "DQTPipeline",
     "PipelineResult",

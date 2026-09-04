@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -33,6 +33,30 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 RunStatus = Literal["success", "failed", "partial"]
 IssueSeverity = Literal["info", "warning", "error", "critical"]
 RuleStatus = Literal["pass", "fail", "error"]
+
+# The closed set from docs/CONVENTIONS-DQT.md section 0.1. Adding a seventh
+# value requires editing that section first; this alias is downstream of the
+# document, not the other way round.
+DQDimension = Literal[
+    "completeness",
+    "validity",
+    "uniqueness",
+    "consistency",
+    "referential_integrity",
+    "timeliness",
+]
+
+
+def get_args_of_dq_dimension() -> set[str]:
+    """Return the closed set of data-quality dimension identifiers.
+
+    Returns:
+        Every value :data:`DQDimension` admits, as a set of strings.
+
+    Example:
+        assert "completeness" in get_args_of_dq_dimension()
+    """
+    return set(get_args(DQDimension))
 
 
 # ===========================================================================
@@ -76,13 +100,40 @@ class DQMetric:
     """
 
     run_id: str
-    dimension: str
     score: float
+    dimension: DQDimension | None = None
+    metric_name: str | None = None
     schema_name: str | None = None
     table_name: str | None = None
     column_name: str | None = None
     value: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Enforce the dimension/metric-name split.
+
+        Raises:
+            ValueError: If both or neither of ``dimension`` and
+                ``metric_name`` are set, or if ``dimension`` is outside the
+                closed set in ``docs/CONVENTIONS-DQT.md`` section 0.1.
+
+        Example:
+            DQMetric(run_id="r", score=1.0, metric_name="row_count")
+        """
+        if (self.dimension is None) == (self.metric_name is None):
+            raise ValueError(
+                "a DQMetric carries exactly one of dimension or metric_name: "
+                "a quality judgement or a raw measurement, never both and never "
+                f"neither. Got dimension={self.dimension!r}, "
+                f"metric_name={self.metric_name!r}."
+            )
+        if self.dimension is not None and self.dimension not in get_args_of_dq_dimension():
+            raise ValueError(
+                f"dimension {self.dimension!r} is not one of the six in "
+                f"CONVENTIONS-DQT.md section 0.1: "
+                f"{sorted(get_args_of_dq_dimension())}. Adding a seventh means "
+                "editing that section first."
+            )
 
 
 @dataclass

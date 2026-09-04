@@ -51,7 +51,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     def metric(dimension: str, score: float, table: str, column: str | None = None) -> DQMetric:
         return DQMetric(
             run_id=RUN_ID,
-            dimension=dimension,
+            dimension=dimension if dimension in {"completeness"} else None,
+            metric_name=None if dimension in {"completeness"} else dimension,
             score=score,
             schema_name="main",
             table_name=table,

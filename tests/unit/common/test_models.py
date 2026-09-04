@@ -4,6 +4,7 @@ Covers all domain objects (dataclasses) and config models (Pydantic).
 No DB connections or I/O; pure in-memory construction and validation.
 """
 
+import typing
 from datetime import datetime
 
 import pytest
@@ -12,6 +13,7 @@ from pydantic import ValidationError
 from dqt.common.models import (
     ColumnResult,
     ConnectionConfig,
+    DQDimension,
     DQIssue,
     DQMetric,
     DQPipelineConfig,
@@ -24,6 +26,7 @@ from dqt.common.models import (
     SamplingConfig,
     SchemaResult,
     TableResult,
+    get_args_of_dq_dimension,
 )
 
 # ===========================================================================
@@ -514,3 +517,109 @@ class TestRule:
         )
         r1.params["x"] = 1
         assert "x" not in r2.params
+
+
+# ---------------------------------------------------------------------------
+# NEW-A: the dimension / metric-name split
+# ---------------------------------------------------------------------------
+
+CONVENTION_DIMENSIONS = {
+    "completeness",
+    "validity",
+    "uniqueness",
+    "consistency",
+    "referential_integrity",
+    "timeliness",
+}
+
+
+def test_dq_dimension_is_a_closed_literal() -> None:
+    """The type admits exactly the six documented dimensions.
+
+    Equality, not containment: a seventh value added to the code without
+    editing the convention doc must fail here, and so must a sixth quietly
+    dropped. A subset assertion would catch only half of that.
+    """
+    assert get_args_of_dq_dimension() == CONVENTION_DIMENSIONS
+
+
+def test_a_quality_score_carries_a_dimension_and_no_metric_name() -> None:
+    """Completeness is a dimension, so it goes in ``dimension``."""
+    metric = DQMetric(
+        run_id="run-001",
+        dimension="completeness",
+        score=0.6,
+        table_name="customers",
+        column_name="email",
+        value=2.0,
+    )
+
+    assert metric.dimension == "completeness"
+    assert metric.metric_name is None
+
+
+def test_a_raw_measurement_carries_a_metric_name_and_no_dimension() -> None:
+    """A row count is a measurement, not a judgement about quality.
+
+    ``row_count`` has no meaningful score: 1.0 is written for it today purely
+    because the field is required. Putting it in ``metric_name`` and leaving
+    ``dimension`` empty is what stops it being averaged into a completeness
+    figure by anything that groups on dimension.
+    """
+    metric = DQMetric(
+        run_id="run-001",
+        metric_name="row_count",
+        score=1.0,
+        table_name="customers",
+        value=5.0,
+    )
+
+    assert metric.metric_name == "row_count"
+    assert metric.dimension is None
+
+
+def test_setting_both_is_rejected() -> None:
+    """A metric is a dimension score or a measurement, never both.
+
+    Allowing both would recreate the ambiguity this split exists to remove:
+    a consumer would have to decide which field wins, and different consumers
+    would decide differently.
+    """
+    with pytest.raises(ValueError, match="exactly one"):
+        DQMetric(
+            run_id="run-001",
+            dimension="completeness",
+            metric_name="row_count",
+            score=1.0,
+        )
+
+
+def test_setting_neither_is_rejected() -> None:
+    """A metric that is neither a dimension nor a named measurement is nothing.
+
+    Without this guard the mutual-exclusivity rule would be satisfied by an
+    empty metric, which is the degenerate case that makes such rules useless.
+    """
+    with pytest.raises(ValueError, match="exactly one"):
+        DQMetric(run_id="run-001", score=1.0)
+
+
+def test_an_unknown_dimension_is_rejected() -> None:
+    """A value outside the closed set cannot be constructed.
+
+    This is what makes §0.1 a specification rather than a description. Today
+    ``dimension`` is a free-form ``str`` and ``"banana"`` is accepted in
+    silence.
+    """
+    with pytest.raises(ValueError, match="banana|dimension"):
+        DQMetric(run_id="run-001", dimension="banana", score=1.0)  # type: ignore[arg-type]
+
+
+def test_the_literal_is_usable_for_static_checking() -> None:
+    """``DQDimension`` is a real type, not a runtime-only tuple of strings.
+
+    ``mypy --strict`` is a gate here, so the point of a Literal is that a bad
+    dimension is caught before the code runs. If it were a plain ``str`` alias
+    the runtime guard above would be the only line of defence.
+    """
+    assert typing.get_origin(DQDimension) is typing.Literal
