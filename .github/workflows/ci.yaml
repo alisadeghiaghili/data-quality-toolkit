@@ -188,3 +188,66 @@ jobs:
       - name: Run integration tests
         run: |
           pytest tests/integration/ -v --tb=short
+
+  # --------------------------------------------------------------------------
+  # Job 6: PostgreSQL integration tests (service container)
+  # --------------------------------------------------------------------------
+  # README has listed PostgreSQL as supported since the project began while
+  # nothing exercised it, and BACKLOG recorded the sharpest consequence: the
+  # PostgreSQL side of read_only enforcement had never been executed. That is
+  # the tool's central safety promise, unrun, on the only production-grade
+  # database it claims to support. docs/PROPOSAL-v1.0-roadmap.md makes this a
+  # hard gate for 1.0.0 for exactly that reason.
+  test-postgres:
+    name: "PostgreSQL integration — Python 3.12"
+    runs-on: ubuntu-latest
+    needs: [test-unit]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dqt
+          POSTGRES_PASSWORD: dqt
+          POSTGRES_DB: dqt_test
+        ports:
+          - 5432:5432
+        # Without the health check the suite races the server's startup and
+        # fails as a connection error rather than a test result.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install with the postgres extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,ui,postgres]"
+
+      - name: Run PostgreSQL integration tests
+        env:
+          DQT_POSTGRES_TEST_DSN: postgresql://dqt:dqt@localhost:5432/dqt_test
+        run: pytest tests/integration/test_postgresql.py -v
+
+      - name: Fail if the suite skipped instead of running
+        env:
+          DQT_POSTGRES_TEST_DSN: postgresql://dqt:dqt@localhost:5432/dqt_test
+        # A skipped suite reports green and proves nothing. This job exists to
+        # produce evidence, so it must fail when it produced none.
+        run: |
+          pytest tests/integration/test_postgresql.py -q --no-header             | tee /tmp/pg.txt
+          grep -qE "[0-9]+ passed" /tmp/pg.txt
+          if grep -qE "[0-9]+ skipped" /tmp/pg.txt; then
+            echo "PostgreSQL tests skipped; the DSN did not reach them." >&2
+            exit 1
+          fi
