@@ -5,15 +5,35 @@ All notable changes to `data-quality-toolkit` are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Nothing has been released yet.** There are no git tags and no published
-package. Everything below sits under `[Unreleased]`, and the working version is
-`0.1.0.dev0`. `docs/PLAN-TDD.md`'s cut line defines v0.1 as its units 1-9; until
-those land, `0.1.0` is not claimed. Per `docs/HONESTY-GATE.md`, a version number
-is a claim like any other.
+Per `docs/HONESTY-GATE.md`, a version number is a claim like any other, so
+`0.1.0` is claimed only now that `docs/PLAN-TDD.md`'s cut line — its units 1-9 —
+has actually been met.
 
 Dates are the merge dates on `main`.
 
 ## [Unreleased]
+
+## [0.1.0] — 2026-09-05
+
+The v0.1 cut line: everything `docs/PLAN-TDD.md` judged either **silently
+wrong** or **false in a shipped docstring**.
+
+Nine units, in the plan's order: `NEW-H` (the CLI dropped the rule files it
+was given), `DQT-04` (`regex` rules never evaluated on SQLite), `DOC-01`
+(documentation gate — DQT slice; the `MSY` and `PDP` slices remain open, so
+the roadmap task itself is not closed), `NEW-C` slice 1 (profiling and
+diagnostics grounded), `NEW-A` (`dimension` carried two incompatible
+meanings), `DQT-05` (cleansing claimed to be reversible and was not),
+`NEW-B` (`run()` could not report failure), `DQT-06` (no exit-code contract,
+so the advertised CI gate did not gate), and `DQT-08` (two connection paths,
+one of which ignored `read_only`).
+
+Also landed outside that line: the `dqt.sql.dialects` abstraction with a
+SQL Server dialect, the semantic classification facet with Iranian
+identifiers, the `missingly` bridge, and the read-only HTTP surface's tests.
+
+Suite: 564 tests, 93.70% coverage against a 90% gate.
+
 
 ### Added
 
