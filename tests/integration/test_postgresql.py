@@ -214,7 +214,9 @@ class TestTheDialectWorksAgainstTheServer:
         )
 
         assert summaries[0].targets_failed == 1
-        assert issues[0].evidence["non_matching"] == 1
+        assert issues[0].evidence["non_matching_count"] == 1
+        # NULLs are excluded by the predicate, not counted as failures.
+        assert issues[0].evidence["total_rows"] == 5
 
     def test_the_resolved_dialect_is_postgresql(self) -> None:
         """The registry routes a ``postgresql://`` DSN to the right dialect."""
