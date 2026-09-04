@@ -33,4 +33,16 @@ class ReadOnlyViolationError(Exception):
     ``mode=ro`` and sets PostgreSQL sessions to
     ``TRANSACTION READ ONLY`` so a write fails at the driver level even if
     this check were ever bypassed.
+
+    Example::
+
+        from dqt.common.models import ConnectionConfig
+        from dqt.exceptions import ReadOnlyViolationError
+        from dqt.sql.cleansing import CleansingConfig, apply_cleansing
+
+        conn_cfg = ConnectionConfig(id="dev", dsn="sqlite:///dev.db", read_only=True)
+        try:
+            apply_cleansing(run_id="run-001", connection_config=conn_cfg, configs=[])
+        except ReadOnlyViolationError as exc:
+            print(exc)  # "Connection 'dev' has read_only=True; apply_cleansing() refuses ..."
     """
