@@ -180,12 +180,20 @@ Hard constraint regardless of what `DQT-03`/`DQT-05` make technically possible:
 operation should require a deliberate CLI invocation; the friction is the
 feature.
 
-### `NEW-E` · `PipelineResult.external_analyses` is written and never read
+### `NEW-E` · `PipelineResult.external_analyses` is written and never read — **fixed**
 
-**Severity:** low
+**Severity:** low · **Fixed:** 2026-09-04 on branch `bridges-b1-b3`
 
-The field exists; `reports.py` renders no panel from it. Either render the panel
-or delete the field. A field nothing reads is a promise nothing keeps.
+The field existed; `reports.py` rendered no panel from it. A field nothing
+reads is a promise nothing keeps.
+
+`reports.py::_external_section` now renders it. The panel is omitted entirely
+when no bridge ran rather than rendered empty, because an empty "Missing Data"
+heading reads as "we looked and found nothing", which is a different claim
+from not having looked. It names the analyser and the sampled row count: a
+figure computed by a sibling package carries a different warranty from one DQT
+computed, and a ratio shown without its sample size presents an estimate as a
+census.
 
 ### `NEW-F` · No retention policy for `RunStore`
 

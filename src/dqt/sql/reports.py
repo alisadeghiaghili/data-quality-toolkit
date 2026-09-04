@@ -168,6 +168,70 @@ def _metric_lookup(
     return None
 
 
+def _external_section(result: PipelineResult) -> str:
+    """Render findings contributed by sibling analysers, or nothing.
+
+    ``PipelineResult.external_analyses`` is written only by
+    :mod:`dqt.bridges`; DQT core never populates it. When no bridge ran the
+    section is omitted entirely rather than rendered empty, because an empty
+    "Missing Data" heading would read as "we looked and found nothing", which
+    is a different claim from not having looked.
+
+    Every value here originates outside DQT -- column names come from the
+    user's database and the payload has passed through a third-party package
+    -- and the output is a file a DBA opens in a browser, so all of it is
+    escaped.
+
+    Args:
+        result: Pipeline result whose external analyses to render.
+
+    Returns:
+        An HTML section, or an empty string when there are none.
+
+    Example:
+        section = _external_section(result)
+    """
+    if not result.external_analyses:
+        return ""
+
+    blocks: list[str] = []
+    for analyzer, tables in sorted(result.external_analyses.items()):
+        rows = ""
+        for qualified_name, payload in sorted(tables.items()):
+            sampled = payload.get("sampled_rows", "n/a")
+            for column in payload.get("columns", []):
+                ratio = column.get("missing_ratio")
+                pct = f"{ratio * 100:.0f}%" if isinstance(ratio, int | float) else "n/a"
+                rows += (
+                    "<tr>"
+                    f"<td>{html.escape(str(qualified_name))}</td>"
+                    f"<td>{html.escape(str(column.get('column_name', '')))}</td>"
+                    f"<td>{html.escape(str(column.get('missing_count', 'n/a')))}</td>"
+                    f"<td>{html.escape(pct)}</td>"
+                    f"<td>{html.escape(str(sampled))}</td>"
+                    "</tr>"
+                )
+            for note in payload.get("notes", []):
+                rows += f'<tr><td colspan="5">{html.escape(str(note))}</td></tr>'
+
+        if not rows:
+            continue
+        header = (
+            "<tr><th>Table</th><th>Column</th><th>Missing</th>"
+            "<th>Missing %</th><th>Rows sampled</th></tr>"
+        )
+        blocks.append(
+            f"<h3>{html.escape(analyzer)}</h3>"
+            '<p class="meta">Computed by an external analyser, not by DQT. '
+            "Figures describe the sampled rows only.</p>"
+            f"<table>{header}{rows}</table>"
+        )
+
+    if not blocks:
+        return ""
+    return "<h2>Missing Data (sibling package)</h2>" + "".join(blocks)
+
+
 def _render(result: PipelineResult) -> str:
     started_str = (
         result.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") if result.started_at else "n/a"
@@ -297,6 +361,8 @@ def _render(result: PipelineResult) -> str:
         else "<h2>Issues</h2><p>No issues detected.</p>"
     )
 
+    external_section = _external_section(result)
+
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     run_id_escaped = html.escape(result.run_id)
     meta_line = f"Generated {generated_at} &nbsp;|&nbsp; Run: {run_id_escaped}"
@@ -317,6 +383,7 @@ def _render(result: PipelineResult) -> str:
 {table_section}
 {col_section}
 {issue_section}
+{external_section}
 </body>
 </html>
 """
