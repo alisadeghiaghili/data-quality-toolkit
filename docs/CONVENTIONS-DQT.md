@@ -203,8 +203,8 @@ Every feature MUST map to at least one facet, or be rejected as out of scope.
 
 | Facet | Module | Responsibility | State |
 |---|---|---|---|
-| Profiling | `sql/profiling.py` | SQL-level column/table statistics. | partial, untested |
-| Diagnostics | `sql/diagnostics.py` | Map statistics to `DQIssue` per dimension. | `completeness` only, untested |
+| Profiling | `sql/profiling.py` | SQL-level column/table statistics. | row/null counts only; unit-tested (`NEW-C` slice 1) |
+| Diagnostics | `sql/diagnostics.py` | Map statistics to `DQIssue` per dimension. | `completeness` only; unit-tested (`NEW-C` slice 1) |
 | Rules | `sql/rules.py` | Declarative constraints, column and table level. | column scope only; `regex` dead on SQLite |
 | Cleansing | `sql/cleansing.py` | Plan/apply repair with undo statements. | primitives exist, unsafe |
 | Metrics | `sql/metrics.py` | Quantitative scores per table/column/dimension. | 3 global metrics, untested |
@@ -313,8 +313,8 @@ table says so — see `BACKLOG.md` §1.
 | Pipeline error handling | **Absent**; status always `success` | `NEW-B` |
 | Exit-code contract | **Absent** — the CI-gate use case is impossible | `DQT-06` |
 | Exception hierarchy | **Absent** | `DQT-09` |
-| Profiling | Row/null counts, completeness. No min/max/mean/distinct/patterns. Untested | `NEW-C` |
-| Diagnostics | `completeness` only. Untested | `NEW-C` |
+| Profiling | Row/null counts, completeness. No min/max/mean/distinct/patterns. Unit-tested since `NEW-C` slice 1 | `NEW-C` |
+| Diagnostics | `completeness` only. Unit-tested since `NEW-C` slice 1 | `NEW-C` |
 | Dimension vocabulary | **Not enforceable** — field carries two meanings | `NEW-A` |
 | Metrics | 3 global metrics. Untested | `NEW-A`, `NEW-C` |
 | Monitoring | Stub — returns input unchanged | `NEW-G` |

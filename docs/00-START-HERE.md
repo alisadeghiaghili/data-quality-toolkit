@@ -126,8 +126,15 @@ fix was verified.
 
 ### 3.2 Exists, works, but has no tests
 
-- `profiling.py`, `diagnostics.py`, `metrics.py`, `monitoring.py`,
-  `schema_discovery.py`, `reports.py` — **six modules, zero unit tests.**
+- `metrics.py`, `monitoring.py`, `schema_discovery.py`, `reports.py` —
+  **four modules, zero unit tests.**
+- `profiling.py`, `diagnostics.py` — **no longer on this list.** Grounded by
+  `tests/unit/sql/test_profiling.py` and `tests/unit/sql/test_diagnostics.py`
+  (`NEW-C` slice 1, 2026-09-04): row and null counts checked against a
+  hand-counted literal `INSERT` list, the completeness formula checked as
+  closed-form arithmetic on it, the empty-table boundary locked at `1.0`, and
+  the `>= 0.5` severity cut bracketed by 0.49 and 0.50 fixtures. Both modules
+  now report 100% line coverage.
 - `src/dqt/ui/` — a FastAPI skeleton (`app.py`) over a read-only data-access
   layer (`api.py`) exposing `/runs`, `/runs/{id}`, `/runs/{id}/tables`,
   `/runs/{id}/metrics`, `/runs/{id}/issues`, `/health`. **No tests, no
