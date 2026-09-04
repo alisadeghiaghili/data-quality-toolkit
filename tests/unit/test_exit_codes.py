@@ -105,10 +105,7 @@ class TestFindingsDecideTheCode:
 
     def test_the_worst_severity_wins(self) -> None:
         """A run with both reports the error, not the warning."""
-        assert (
-            decide_exit_code(_result(severities=("warning", "error")))
-            == ExitCode.ERROR_FINDINGS
-        )
+        assert decide_exit_code(_result(severities=("warning", "error"))) == ExitCode.ERROR_FINDINGS
 
     def test_info_is_not_a_finding_to_gate_on(self) -> None:
         """``info`` is descriptive, and gating on it would make the gate useless."""
@@ -127,15 +124,13 @@ class TestFailOnRaisesOrLowersTheBar:
     def test_fail_on_error_lets_warnings_pass(self) -> None:
         """The default: warnings are reported, not fatal."""
         assert (
-            decide_exit_code(_result(severities=("warning",)), fail_on="error")
-            == ExitCode.SUCCESS
+            decide_exit_code(_result(severities=("warning",)), fail_on="error") == ExitCode.SUCCESS
         )
 
     def test_fail_on_none_never_gates_on_findings(self) -> None:
         """For a run that should report without gating -- a scheduled scan."""
         assert (
-            decide_exit_code(_result(severities=("critical",)), fail_on="none")
-            == ExitCode.SUCCESS
+            decide_exit_code(_result(severities=("critical",)), fail_on="none") == ExitCode.SUCCESS
         )
 
     def test_fail_on_none_still_reports_a_broken_run(self) -> None:

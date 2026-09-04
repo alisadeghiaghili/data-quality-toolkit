@@ -91,7 +91,28 @@ def decide_exit_code(result: PipelineResult, fail_on: str = "error") -> ExitCode
     Example:
         code = decide_exit_code(result, fail_on="warning")
     """
-    raise NotImplementedError("decide_exit_code is specified but not implemented")
+    if fail_on not in FAIL_ON_CHOICES:
+        raise ValueError(
+            f"fail_on must be one of {FAIL_ON_CHOICES}, got {fail_on!r}. "
+            "An unrecognised threshold is rejected rather than defaulted, "
+            "because the permissive default would silently disable the gate."
+        )
+
+    if result.status == "failed":
+        broke_before_connecting = any(
+            error.stage in _CONFIGURATION_STAGES for error in result.stage_errors
+        )
+        return ExitCode.CONFIGURATION_ERROR if broke_before_connecting else ExitCode.INTERNAL_ERROR
+
+    if fail_on == "none":
+        return ExitCode.SUCCESS
+
+    severities = {issue.severity for issue in result.issues}
+    if severities & _ERROR_SEVERITIES:
+        return ExitCode.ERROR_FINDINGS
+    if fail_on == "warning" and "warning" in severities:
+        return ExitCode.WARNING_FINDINGS
+    return ExitCode.SUCCESS
 
 
 __all__ = ["FAIL_ON_CHOICES", "ExitCode", "decide_exit_code"]
