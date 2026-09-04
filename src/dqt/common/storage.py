@@ -99,6 +99,44 @@ class RunStore:
     # Schema management
     # ------------------------------------------------------------------
 
+    def _assert_store_is_current(self) -> None:
+        """Refuse a store written by an older DQT rather than half-using it.
+
+        The DDL is ``CREATE TABLE IF NOT EXISTS``, so an existing file is left
+        exactly as it was and columns added since never appear. The store is a
+        local artifact meant to be recreated rather than migrated
+        (``CONVENTIONS-DQT.md``), and this is what makes that decision
+        survivable: without it the first symptom is an OperationalError thrown
+        from the middle of a run that has already done its work.
+
+        Raises:
+            RuntimeError: If the file exists with a pre-``NEW-A`` schema.
+
+        Example:
+            store._assert_store_is_current()
+        """
+        if not self._db_path.exists():
+            return
+        with self._connect() as conn:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            if "run_metrics" not in tables:
+                return
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(run_metrics)")}
+
+        if "metric_name" not in columns:
+            raise RuntimeError(
+                f"The run store at {self._db_path} is out of date: run_metrics has no "
+                "metric_name column, so it predates NEW-A. DQT recreates this store "
+                "rather than migrating it, because it holds run history rather than "
+                "source data. Delete the file and re-run; past runs in it are lost, "
+                "which is why it is not the place to keep anything you need."
+            )
+
     def init_schema(self) -> None:
         """Create the DQT storage tables if they do not already exist.
 
@@ -117,6 +155,7 @@ class RunStore:
             store = RunStore()
             store.init_schema()  # idempotent
         """
+        self._assert_store_is_current()
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         ddl = [
             """

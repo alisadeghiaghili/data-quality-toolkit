@@ -31,7 +31,6 @@ in isolation for testing, scripting, or incremental pipelines.
 
 from __future__ import annotations
 
-import contextlib
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -46,6 +45,7 @@ from dqt.common.models import (
     PipelineResult,
     RuleRunResult,
     SchemaResult,
+    StageError,
     TableResult,
 )
 from dqt.common.storage import RunStore
@@ -104,6 +104,7 @@ class DQTPipeline:
         self._pipeline_config = pipeline_config
         self._store_path = Path(store_path) if store_path else Path.cwd() / "dqt_runs.db"
         self._report_dir = Path(report_dir) if report_dir else Path.cwd()
+        self._rule_file_errors: list[StageError] = []
 
     # ------------------------------------------------------------------
     # Primary entry point
@@ -139,15 +140,42 @@ class DQTPipeline:
         """
         run_id = f"run-{uuid4().hex[:8]}"
         started_at = datetime.now(UTC)
+        stage_errors: list[StageError] = []
+        self._rule_file_errors = []
 
-        # Stage 1: schema discovery
-        discovered_tables = self.discover_schema()
+        # Stages 1-3 depend on one another, so a failure here ends the run:
+        # profiling nothing is not a smaller answer, it is a different and
+        # misleading one. Each is caught separately so stage_errors names the
+        # one that actually broke rather than the first in the chain.
+        discovered_tables: list[DiscoveredTable] = []
+        profiled_tables: list[TableProfile] = []
+        diagnostic_issues: list[DQIssue] = []
+        fatal = False
 
-        # Stage 2: profiling
-        profiled_tables = self.profile_data(discovered_tables)
+        def _record(stage: str, exc: Exception) -> None:
+            stage_errors.append(
+                StageError(stage=stage, message=str(exc), exception_type=type(exc).__name__)
+            )
 
-        # Stage 3: diagnostics
-        diagnostic_issues = self.run_diagnostics(profiled_tables, run_id=run_id)
+        try:
+            discovered_tables = self.discover_schema()
+        except Exception as exc:  # noqa: BLE001 - the failure is the report
+            _record("discover_schema", exc)
+            fatal = True
+
+        if not fatal:
+            try:
+                profiled_tables = self.profile_data(discovered_tables)
+            except Exception as exc:  # noqa: BLE001
+                _record("profile_data", exc)
+                fatal = True
+
+        if not fatal:
+            try:
+                diagnostic_issues = self.run_diagnostics(profiled_tables, run_id=run_id)
+            except Exception as exc:  # noqa: BLE001
+                _record("run_diagnostics", exc)
+                fatal = True
 
         # Stage 4: rule evaluation
         rule_issues, rule_runs = self.apply_rules(
@@ -176,7 +204,17 @@ class DQTPipeline:
         result.metrics = self.monitor(result.metrics + run_metrics)
 
         result.ended_at = datetime.now(UTC)
-        result.status = "success"
+        stage_errors.extend(self._rule_file_errors)
+        result.stage_errors = stage_errors
+        # A stage that could not run at all fails the run; a stage that ran
+        # but skipped part of its input degrades it. Reporting both as
+        # "success" is what NEW-B exists to stop.
+        if fatal:
+            result.status = "failed"
+        elif stage_errors:
+            result.status = "partial"
+        else:
+            result.status = "success"
 
         # Stage 8: persist
         self._persist(result)
@@ -289,11 +327,22 @@ class DQTPipeline:
         # Load and merge rules from all configured files
         all_rules = []
         for rule_file in rule_files:
-            # Missing rule file is a warning, not a fatal error; the DBA may be
-            # running from a different working directory. A proper logging call
-            # would go here once logging is wired.
-            with contextlib.suppress(FileNotFoundError):
+            # A missing rule file is not fatal -- the DBA may be running from a
+            # different working directory -- but it is not nothing either. It
+            # used to be suppressed in silence, so a run that checked none of
+            # its rules still reported success, which is the false clean bill
+            # of health NEW-H was about. Settled 2026-08-19: report it, and let
+            # run() downgrade the status to "partial".
+            try:
                 all_rules.extend(load_rules(rule_file))
+            except FileNotFoundError:
+                self._rule_file_errors.append(
+                    StageError(
+                        stage="apply_rules",
+                        message=f"rule file not found: {rule_file}",
+                        exception_type="missing_input",
+                    )
+                )
 
         if not all_rules:
             return [], []

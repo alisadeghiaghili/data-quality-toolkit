@@ -65,6 +65,29 @@ def get_args_of_dq_dimension() -> set[str]:
 
 
 @dataclass
+class StageError:
+    """One pipeline stage that did not complete.
+
+    Attributes:
+        stage: Name of the stage, e.g. ``"discover_schema"``.
+        message: What went wrong, in terms a DBA can act on.
+        exception_type: Class name of the underlying exception, or
+            ``"missing_input"`` where nothing was raised.
+
+    Example:
+        error = StageError(
+            stage="discover_schema",
+            message="unable to open database file",
+            exception_type="OperationalError",
+        )
+    """
+
+    stage: str
+    message: str
+    exception_type: str
+
+
+@dataclass
 class DQMetric:
     """A single data-quality metric measurement.
 
@@ -393,6 +416,9 @@ class PipelineResult:
         metrics: Global cross-table metrics for this run.
         issues: Global list of all issues across every schema/table/column.
         rules_run: One :class:`RuleRunResult` per rule evaluated during the run.
+        stage_errors: Stages that did not complete. Empty on a clean run;
+            non-empty is what makes ``status`` other than ``"success"``
+            explainable rather than merely reported.
         external_analyses: Results from optional external analyzers, keyed by
             tool name (e.g. ``{"missingly": {"public.customers": <report>}}``).
             DQT core never populates this; only bridge modules write here.
@@ -419,6 +445,7 @@ class PipelineResult:
     issues: list[DQIssue] = field(default_factory=list)
     rules_run: list[RuleRunResult] = field(default_factory=list)
     external_analyses: dict[str, dict[str, Any]] = field(default_factory=dict)
+    stage_errors: list[StageError] = field(default_factory=list)
 
 
 # ===========================================================================
