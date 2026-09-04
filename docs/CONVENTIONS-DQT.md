@@ -210,7 +210,7 @@ Every feature MUST map to at least one facet, or be rejected as out of scope.
 | Metrics | `sql/metrics.py` | Quantitative scores per table/column/dimension. | 3 global metrics, untested |
 | Monitoring | `sql/monitoring.py` | Trends and drift of DQ metrics over time. | stub, untested |
 | Knowledge/Domain | `knowledge.py` | Reference data for validation and correction. | not started |
-| Classification | `classification.py` | Semantic typing (email, phone, IBAN, national id). | not started |
+| Classification | `classification.py` | Semantic typing (email, phone, IBAN, national id). | built and tested; not wired into profiling |
 | Missingness (internal) | within profiling/metrics | Null counts, ratios, co-occurrence patterns. | counts and ratios only |
 | Imputation (external) | `bridges/` | Delegated to `missingly` et al. Never reimplemented. | not started |
 | Reports | `sql/reports.py` | HTML/PDF scorecards, bilingual EN/FA. | HTML only, untested |
@@ -339,10 +339,20 @@ table says so — see `BACKLOG.md` §1.
 `RuleScope`, `SamplingConfig`, `ConnectionConfig`, `DQPipelineConfig`,
 `IssueSeverity`, `RuleStatus`, `RunStatus`, `from_dsn`, `from_yaml_config`,
 `load_connection`, `load_pipeline`, `load_rules`, `load_rules_from_files`,
+`ClassificationResult`, `SemanticType`, `classify_column`,
+`classify_column_name`, `classify_value`, `normalize_persian_text`,
 `__version__`.
 
 To add when the backing types exist, and not before: `DQDimension` (`NEW-A`),
-`RuleSet` (table-scope rules (no ID yet)), `DomainConfig`, `ClassificationResult`.
+`RuleSet` (table-scope rules (no ID yet)), `DomainConfig`.
+
+`ClassificationResult` moved out of that list on 2026-09-04: `classification.py`
+now exists with a passing test suite behind every symbol above. The individual
+detectors (`is_valid_iranian_national_id`, `is_valid_sheba`, `is_valid_iban`,
+`is_iranian_mobile_number`, `is_iranian_landline_number`, `is_shamsi_date`,
+`is_email_address`) are public on `dqt.classification` but deliberately **not**
+re-exported at top level — they are the facet's own vocabulary, and promoting
+them is a decision to take when something outside the facet needs them.
 
 **Standing rule:** never export a name with no real type behind it. A public API
 that lies is worse than a small one.

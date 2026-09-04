@@ -17,6 +17,27 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **Classification facet** — `src/dqt/classification.py`, the first code behind
+  the facet `docs/CONVENTIONS-DQT.md` §2 had listed as "not started". Pure
+  domain logic, no database access, exercised by 132 unit tests.
+  - Checksum-**validated**: Iranian national ID (weighted sum modulo 11),
+    Iranian Sheba and generic IBAN (ISO 13616 / ISO 7064 MOD 97-10). Expected
+    values in the tests are hand-derived from the published algorithms and
+    written out as arithmetic in comments.
+  - Shape-**recognised** only, and named `is_*` rather than `is_valid_*` to say
+    so: Iranian mobile and landline numbers, Shamsi (Jalali) dates, e-mail
+    addresses.
+  - Persian text normalization (`normalize_persian_text`) as a separate,
+    opt-in operation: Persian and Arabic-Indic digits to ASCII, Arabic yeh,
+    alef maksura and kaf to their Persian forms, ZWNJ and ZWJ removed. It
+    changes values, so it never runs implicitly inside classification.
+  - Public API gains `ClassificationResult`, `SemanticType`, `classify_column`,
+    `classify_column_name`, `classify_value` and `normalize_persian_text`.
+  - **Not** included, deliberately: Shamsi-to-Gregorian conversion (so the
+    Esfand leap rule is not applied and 30 Esfand is accepted in every year),
+    IBAN per-country length rules, Iranian area-code and mobile-operator
+    allocation lists, and any wiring into profiling — `ColumnResult.semantic_type`
+    is still `None` in every run. (2026-09-04)
 - Documentation gate (`DOC-01`, DQT slice) — `tools/doc_audit.py`, vendored
   verbatim from the Consilient engineering standard, wired into CI as a
   required job running in ratchet mode against `.doc_audit_baseline.json`.

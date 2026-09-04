@@ -19,6 +19,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dqt.classification import (
+    ClassificationResult,
+    SemanticType,
+    classify_column,
+    classify_column_name,
+    classify_value,
+    normalize_persian_text,
+)
 from dqt.common.config_loader import (
     load_connection,
     load_pipeline,
@@ -109,7 +117,9 @@ __all__ = [
     "IssueSeverity",
     "RuleStatus",
     "RunStatus",
+    "SemanticType",
     # Domain objects
+    "ClassificationResult",
     "ColumnResult",
     "DQIssue",
     "DQMetric",
@@ -126,6 +136,11 @@ __all__ = [
     # Config models
     "ConnectionConfig",
     "DQPipelineConfig",
+    # Classification facet
+    "classify_column",
+    "classify_column_name",
+    "classify_value",
+    "normalize_persian_text",
     # Helper constructors
     "from_dsn",
     "from_yaml_config",
