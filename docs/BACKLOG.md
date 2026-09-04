@@ -277,6 +277,25 @@ baseline. The tool is vendored verbatim from the engineering standard and the
 roadmap says not to rewrite it, so this must be fixed upstream in the standard's
 copy and re-vendored — not patched here.
 
+### `NEW-M` · The declared version claimed a release that never happened
+
+**Severity:** low — a false claim, not a runtime fault · **Found:** 2026-09-04
+
+`pyproject.toml` and `src/dqt/__init__.py` both declared `0.1.0` from the
+beginning, while `git tag -l` is empty, no package has been published, and
+`docs/PLAN-TDD.md`'s own cut line defines v0.1 as its units 1-9 — of which
+three have landed. The number asserted a release that does not exist and a
+maturity the project had not reached.
+
+A version string is a claim, and `docs/HONESTY-GATE.md` governs claims. Fixed
+by setting `0.1.0.dev0`, which states the intent without asserting the
+release. `0.1.0` becomes true when units 1-9 land and the tag is cut.
+
+Remaining gap: there is still no release process — no tagging convention, no
+deprecation policy, and until now no `CHANGELOG.md`. `CHANGELOG.md` is added
+alongside this fix; the other two are listed as hard gates for 1.0.0 in
+`docs/PROPOSAL-v1.0-roadmap.md` and need an owner decision.
+
 ## 3. Open design questions — owner decisions, not agent decisions
 
 Each of these is a place where the conventions in this doc set propose something

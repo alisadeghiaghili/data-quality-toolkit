@@ -2,6 +2,11 @@
 
 ## Status: pre-alpha — not for production use
 
+Version `0.1.0.dev0`. Nothing has been released: there are no git tags and no
+published package. `0.1.0` is not claimed yet — `docs/PLAN-TDD.md`'s cut line
+defines v0.1 as its units 1-9, of which 3 have landed. See
+[`CHANGELOG.md`](CHANGELOG.md).
+
 DQT connects to databases and can issue UPDATE and DELETE statements. Known open defects:
 
 - Cleansing operations are not persisted and cannot be reverted (DQT-05)
@@ -23,7 +28,9 @@ computed with SQL, against the live database, without extracting the data.
 - **Rules** — declarative `NOT NULL`, `UNIQUE`, `RANGE`, and `REGEX` checks from
   YAML or JSON. See the status block above regarding `REGEX`.
 - **Metrics and storage** — persist per-run metrics and issues to a local SQLite
-  store, so runs can be compared over time.
+  store, which is what a comparison across runs would read. DQT does not
+  perform that comparison itself: `monitor()` is a pass-through today, so
+  trend and drift detection are not implemented (`NEW-G`).
 - **Reporting** — a self-contained HTML report with score bars and severity
   badges.
 - **Read-only HTTP API** — an optional FastAPI surface over the stored results.
