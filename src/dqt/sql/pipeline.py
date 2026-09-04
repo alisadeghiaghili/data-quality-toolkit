@@ -11,10 +11,17 @@ together all DQT stages into a single ``run()`` call:
 2. **profile_data** — compute per-column statistics (min/max, nulls, distinct counts).
 3. **run_diagnostics** — derive :class:`~dqt.common.models.DQIssue` objects from profiles.
 4. **apply_rules** — evaluate declarative YAML/JSON rules via SQL and collect additional issues.
-5. **cleanse** — apply reversible cleansing primitives (implemented in
-   :mod:`dqt.sql.cleansing`).
-6. **compute_metrics** — aggregate run-level :class:`~dqt.common.models.DQMetric` objects.
-7. **monitor** — pass metrics through the monitoring stage (stub; drift detection in future).
+5. **compute_metrics** — aggregate run-level :class:`~dqt.common.models.DQMetric` objects.
+6. **monitor** — pass metrics through the monitoring stage (stub; drift detection in future).
+
+There is deliberately no cleansing stage. Q1, settled 2026-08-26, requires a
+profiling run to be structurally incapable of mutating what it profiles, so
+``run()``'s call graph contains no path to cleansing at all -- not behind a
+flag, not behind a config toggle, not as a no-op method a later edit could
+fill in. Cleansing is invoked deliberately through
+:func:`~dqt.sql.cleansing.cleanse_plan` and
+:func:`~dqt.sql.cleansing.cleanse_apply`, and
+``tests/unit/test_architecture.py`` fails if this module imports either.
 8. **persist** — write run, metrics, and issues to :class:`~dqt.common.storage.RunStore`.
 9. **generate_report** — produce a self-contained HTML report.
 
@@ -42,7 +49,6 @@ from dqt.common.models import (
     TableResult,
 )
 from dqt.common.storage import RunStore
-from dqt.sql.cleansing import cleanse
 from dqt.sql.diagnostics import DQDiagnostics
 from dqt.sql.metrics import compute_run_metrics
 from dqt.sql.monitoring import monitor
@@ -114,11 +120,13 @@ class DQTPipeline:
         4. :meth:`apply_rules` — loads rule files from
            :attr:`~dqt.common.models.DQPipelineConfig.rule_files` and runs SQL
            evaluation; issues are merged into the global issue list.
-        5. :meth:`cleanse` (stub)
-        6. :meth:`compute_metrics`
-        7. :meth:`monitor` (stub)
-        8. Persist to :class:`~dqt.common.storage.RunStore`.
-        9. Write HTML report.
+        5. :meth:`compute_metrics`
+        6. :meth:`monitor` (stub)
+        7. Persist to :class:`~dqt.common.storage.RunStore`.
+        8. Write HTML report.
+
+        No stage mutates the profiled database. See the module docstring for
+        why that is structural rather than a default.
 
         Returns:
             A ``(PipelineResult, Path)`` tuple.  ``Path`` points to the
@@ -160,7 +168,6 @@ class DQTPipeline:
         )
 
         # Stage 5: cleansing (stub)
-        result = self.cleanse(result)
 
         # Stage 6: compute run-level metrics
         run_metrics = self.compute_metrics(profiled_tables, run_id=run_id)
@@ -297,25 +304,6 @@ class DQTPipeline:
             rules=all_rules,
             discovered_tables=discovered_tables,
         )
-
-    def cleanse(self, result: PipelineResult) -> PipelineResult:
-        """Apply reversible cleansing primitives (stub).
-
-        The cleansing stage is currently a pass-through.  Full implementation
-        is tracked in :mod:`dqt.sql.cleansing`.
-
-        Args:
-            result: :class:`~dqt.common.models.PipelineResult` assembled from
-                earlier stages.
-
-        Returns:
-            Unchanged :class:`~dqt.common.models.PipelineResult`.
-
-        Example::
-
-            result = pipeline.cleanse(result)
-        """
-        return cleanse(result)
 
     def compute_metrics(
         self,

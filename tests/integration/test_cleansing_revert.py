@@ -101,7 +101,7 @@ def scenario(
             table_name="customers",
             column_name="email",
             operation="standardize",
-            params={"trim": True, "lowercase": True},
+            params={"trim": True, "case": "lower"},
         )
     ]
     return config, store, configs, db_file

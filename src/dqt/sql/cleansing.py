@@ -2,7 +2,16 @@
 dqt.sql.cleansing
 =================
 
-Reversible, auditable SQL cleansing primitives for DQT.
+Reversible, auditable SQL cleansing for DQT.
+
+Reversibility is a property of the ``cleanse_plan`` / ``cleanse_apply`` /
+``revert`` triple, not of every function here. ``apply_cleansing`` is the
+legacy one-shot path: it writes a log to memory and returns it, so a caller
+who drops the return value has lost the before-values permanently. Prefer the
+triple. ``CONVENTIONS-DQT.md`` section 1 S4 draws exactly this line -- a log a
+human could replay by hand is an audit trail; automated undo is
+reversibility -- and this module used to claim the second while providing
+only the first.
 
 All operations in this module are **data-quality cleansing only**:
 
@@ -18,8 +27,11 @@ Design invariants
 
 1. Every change is recorded in a :class:`CleansingLog` entry
    (before value, after value, row identifier, column, operation).
-2. Operations are **reversible** in the sense that the log contains
-   enough information to undo each change manually.
+2. A plan applied through :func:`cleanse_apply` is **automatically
+   reversible**: its log is persisted against the ``plan_id`` and
+   :func:`revert` replays it backwards. Changes made through the legacy
+   :func:`apply_cleansing` are reversible only by hand, and only while the
+   caller still holds the returned log.
 3. No schema changes, no DDL, no masking, no compliance features.
 4. All SQL is executed through DBAPI2 connections obtained from
    :func:`~dqt.sql._connect.get_connection`, the single connection
@@ -72,7 +84,10 @@ Example::
 
 from __future__ import annotations
 
+import hashlib
+import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from dqt.common.models import ConnectionConfig, PipelineResult
@@ -714,6 +729,98 @@ def cleanse(result: PipelineResult) -> PipelineResult:
     return result
 
 
+def _compute_changes(
+    cursor: Any,
+    run_id: str,
+    configs: list[CleansingConfig],
+    dry_run: bool,
+) -> list[CleansingLog]:
+    """Run every enabled config and collect the rows it would change.
+
+    Args:
+        cursor: Open DBAPI cursor.
+        run_id: Run the logs are attributed to.
+        configs: Cleansing operations to evaluate.
+        dry_run: When True, compute without issuing any mutation.
+
+    Returns:
+        One :class:`CleansingLog` per row that changed or would change.
+
+    Raises:
+        ValueError: If a config omits a column the operation requires.
+
+    Example:
+        logs = _compute_changes(cursor, "run-1", configs, dry_run=True)
+    """
+    collected: list[CleansingLog] = []
+    for cfg in configs:
+        if not cfg.enabled:
+            continue
+        if cfg.operation == "standardize":
+            if not cfg.column_name:
+                raise ValueError("standardize requires column_name.")
+            collected += _standardize(
+                cursor,
+                run_id,
+                cfg.schema_name,
+                cfg.table_name,
+                cfg.column_name,
+                cfg.params,
+                dry_run,
+            )
+        elif cfg.operation == "deduplicate":
+            collected += _deduplicate(
+                cursor,
+                run_id,
+                cfg.schema_name,
+                cfg.table_name,
+                cfg.params,
+                dry_run,
+            )
+        elif cfg.operation == "lookup_correct":
+            if not cfg.column_name:
+                raise ValueError("lookup_correct requires column_name.")
+            collected += _lookup_correct(
+                cursor,
+                run_id,
+                cfg.schema_name,
+                cfg.table_name,
+                cfg.column_name,
+                cfg.params,
+                dry_run,
+            )
+        else:
+            raise ValueError(f"Unknown cleansing operation: {cfg.operation!r}")
+    return collected
+
+
+def _fingerprint(changes: list[CleansingLog]) -> str:
+    """Digest the rows a plan targets, as they were when it was computed.
+
+    Covers the row identity and the value found there, so the check catches
+    both a row that moved and a value edited underneath the plan.
+
+    Args:
+        changes: The planned changes.
+
+    Returns:
+        A hex digest.
+
+    Example:
+        fingerprint = _fingerprint(plan.changes)
+    """
+    digest = hashlib.sha256()
+    for change in sorted(
+        changes, key=lambda c: (c.table_name, str(c.column_name), repr(c.row_key))
+    ):
+        digest.update(
+            repr(
+                (change.table_name, change.column_name, change.row_key, change.before_value)
+            ).encode("utf-8")
+        )
+    return digest.hexdigest()
+
+
 @dataclass
 class CleansingPlan:
     """What a cleansing run would change, computed and stored before it runs.
@@ -768,7 +875,27 @@ def cleanse_plan(
     Example:
         plan = cleanse_plan(config, configs, store=store)
     """
-    raise NotImplementedError("cleanse_plan is specified but not implemented")
+    connection = get_connection(connection_config)
+    try:
+        cursor = connection.cursor()
+        # dry_run=True: planning is a read, which is why it works against a
+        # read-only connection and why producing a plan from production needs
+        # no write authority.
+        changes = _compute_changes(cursor, run_id or "", configs, dry_run=True)
+    finally:
+        connection.close()
+
+    plan = CleansingPlan(
+        plan_id=f"plan-{uuid.uuid4().hex[:12]}",
+        connection_id=connection_config.id,
+        configs=configs,
+        created_at=datetime.now(UTC),
+        changes=changes,
+        fingerprint=_fingerprint(changes),
+        run_id=run_id,
+    )
+    store.save_cleansing_plan(plan)
+    return plan
 
 
 def cleanse_apply(
@@ -795,7 +922,60 @@ def cleanse_apply(
     Example:
         result = cleanse_apply(plan.plan_id, config, store=store)
     """
-    raise NotImplementedError("cleanse_apply is specified but not implemented")
+    plan = store.load_cleansing_plan(plan_id)
+    if plan is None:
+        raise ValueError(f"No cleansing plan with id {plan_id!r}.")
+    if plan.applied_at is not None:
+        raise ValueError(
+            f"Plan {plan_id!r} was already applied at {plan.applied_at.isoformat()}. "
+            "A plan is a one-shot authorisation: re-running it would write a second "
+            "log for the same intent, and the two would disagree about the original "
+            "values, making the revert chain ambiguous."
+        )
+    if connection_config.read_only:
+        raise ReadOnlyViolationError(
+            f"Connection {connection_config.id!r} has read_only=True; cleanse_apply "
+            "refuses to build a mutating statement. Planning is a read and needs no "
+            "write authority; applying does."
+        )
+
+    connection = get_connection(connection_config)
+    result = CleansingResult(run_id=plan.run_id or "", dry_run=False)
+    try:
+        cursor = connection.cursor()
+        current = _compute_changes(cursor, plan.run_id or "", plan.configs, dry_run=True)
+        if _fingerprint(current) != plan.fingerprint:
+            raise ValueError(
+                f"The data changed since plan {plan_id!r} was computed. Applying it "
+                "would record before-values that no longer describe what is there, so "
+                "the log would lie and a revert built on it would corrupt rather than "
+                "restore. Re-plan against the current state."
+            )
+
+        # Replay the reviewed plan rather than recomputing: what was approved
+        # is what executes.
+        for change in plan.changes:
+            table = qualified_identifier(change.schema_name, change.table_name)
+            column = quote_identifier(str(change.column_name))
+            cursor.execute(
+                f"UPDATE {table} SET {column} = ? WHERE rowid = ?",
+                (change.after_value, change.row_key["rowid"]),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+    applied_at = datetime.now(UTC)
+    store.save_cleansing_log(plan_id, plan.changes, applied_at)
+    store.mark_cleansing_plan_applied(plan_id, applied_at)
+
+    result.log = list(plan.changes)
+    result.total_changes = len(plan.changes)
+    result.tables_affected = len({c.table_name for c in plan.changes})
+    return result
 
 
 def revert(
@@ -821,4 +1001,37 @@ def revert(
     Example:
         revert(plan.plan_id, config, store=store)
     """
-    raise NotImplementedError("revert is specified but not implemented")
+    plan = store.load_cleansing_plan(plan_id)
+    if plan is None:
+        raise ValueError(f"No cleansing plan with id {plan_id!r}.")
+    if plan.applied_at is None:
+        raise ValueError(f"Plan {plan_id!r} has not been applied, so there is nothing to undo.")
+    if connection_config.read_only:
+        raise ReadOnlyViolationError(
+            f"Connection {connection_config.id!r} has read_only=True; revert writes."
+        )
+
+    entries = store.load_cleansing_log(plan_id)
+    connection = get_connection(connection_config)
+    result = CleansingResult(run_id=plan.run_id or "", dry_run=False)
+    try:
+        cursor = connection.cursor()
+        # Backwards: the last change made is the first undone, so overlapping
+        # edits to one row unwind in the order they were applied.
+        for entry in reversed(entries):
+            table = qualified_identifier(entry["schema_name"], entry["table_name"])
+            column = quote_identifier(str(entry["column_name"]))
+            cursor.execute(
+                f"UPDATE {table} SET {column} = ? WHERE rowid = ?",
+                (entry["before_value"], entry["row_key"]["rowid"]),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+    result.total_changes = len(entries)
+    result.tables_affected = len({e["table_name"] for e in entries})
+    return result
