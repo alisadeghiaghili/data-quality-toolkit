@@ -164,6 +164,7 @@ echo "exit=$?"
 | [`docs/00-START-HERE.md`](docs/00-START-HERE.md) | Entry point: source-of-truth hierarchy and verified state of the code. |
 | [`docs/CONVENTIONS-DQT.md`](docs/CONVENTIONS-DQT.md) | Scope, vocabulary, safety model, supported dialects. |
 | [`docs/CONVENTIONS-DQT-data-model.md`](docs/CONVENTIONS-DQT-data-model.md) | Classes, aggregation contract, storage schema. |
+| [`docs/API-STABILITY.md`](docs/API-STABILITY.md) | What the public API promises, and how a name leaves it. |
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | Defects with no task ID yet, and open design questions. |
 | [`AGENTS.md`](AGENTS.md) | Enforceable working rules for contributors. |
 | [`DQT-critical-review.md`](DQT-critical-review.md) | The 2026-08-11 execution-based audit. |

@@ -206,3 +206,55 @@ class TestTheResultTypesAreReachable:
         from dqt import ReadOnlyViolationError
 
         assert issubclass(ReadOnlyViolationError, Exception)
+
+
+class TestDeprecationIsEnforcedNotOnlyDocumented:
+    """A policy that lives only in a document is a wish.
+
+    ``docs/API-STABILITY.md`` says a name leaves the surface by warning for a
+    full minor cycle first. These tests are what make that a mechanism: a
+    caller finds out from their own test suite, not from reading a changelog
+    they had no reason to open.
+    """
+
+    def test_apply_cleansing_warns_that_it_is_superseded(self) -> None:
+        """The legacy path is reversible only by hand, and says so on use.
+
+        ``DQT-05`` replaced it with ``cleanse_plan`` / ``cleanse_apply`` /
+        ``revert``, which persist the log and can undo automatically. Drop
+        ``apply_cleansing``'s return value and the before-values are gone --
+        the exact defect that unit existed to fix. Anyone still calling it
+        should know there is now something better.
+        """
+        from dqt.common.models import ConnectionConfig
+        from dqt.sql.cleansing import apply_cleansing
+
+        config = ConnectionConfig(id="t", dsn="sqlite:///:memory:", read_only=True)
+
+        # It raises for being read-only, and the warning has to come first --
+        # a caller whose call fails for another reason would never see it.
+        with (
+            pytest.warns(DeprecationWarning, match="cleanse_plan"),
+            pytest.raises(Exception),  # noqa: B017
+        ):
+            apply_cleansing(run_id="r", connection_config=config, configs=[])
+
+    def test_the_replacement_does_not_warn(self) -> None:
+        """The supported path stays quiet, or the warning means nothing.
+
+        A codebase that warns on its own recommended API trains people to
+        filter warnings, which is how the next real one gets missed.
+        """
+        import warnings
+
+        from dqt.common.models import ConnectionConfig
+        from dqt.sql.cleansing import cleanse_plan
+
+        config = ConnectionConfig(id="t", dsn="sqlite:///:memory:", read_only=True)
+
+        with (
+            warnings.catch_warnings(),
+            pytest.raises(Exception),  # noqa: B017
+        ):
+            warnings.simplefilter("error", DeprecationWarning)
+            cleanse_plan(config, [], store=None)

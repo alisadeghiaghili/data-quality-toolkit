@@ -46,3 +46,6 @@ class ReadOnlyViolationError(Exception):
         except ReadOnlyViolationError as exc:
             print(exc)  # "Connection 'dev' has read_only=True; apply_cleansing() refuses ..."
     """
+
+
+__all__ = ["ReadOnlyViolationError"]
