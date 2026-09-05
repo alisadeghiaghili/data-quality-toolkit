@@ -30,6 +30,15 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **The rules screen (`VIZ-6`).** `GET /ui/runs/{id}/rules` lists what each
+  rule did, and `GET /ui/rules/{name}` follows one rule across runs. The
+  screen exists for the zero: a rule whose scope matches nothing reports no
+  failures, which everywhere else reads exactly like a rule that passes, so
+  those rules are named **in words above the table** — and only when there
+  are any. Failed and errored stay separate columns: a rule that failed found
+  a problem, a rule that errored found nothing. History charts oldest-first,
+  since the store returns newest-first and plotting it as given would draw
+  every improving rule as though it were getting worse.
 - **Accessibility is measured, not intended (`VIZ-5`).** `dqt/_theme.py` names
   the palette once and declares which pairs meet on screen; CI computes every
   WCAG 2.1 contrast ratio and fails the build on one that falls short. Doing

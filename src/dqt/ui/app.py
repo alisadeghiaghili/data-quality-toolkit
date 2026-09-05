@@ -65,13 +65,22 @@ from dqt.ui.api import (
     get_dimension_scores,
     get_issue_counts_by_dimension,
     get_issue_counts_by_severity,
+    get_rule_history,
     get_run_issues,
     get_run_metrics,
+    get_run_rule_results,
     get_run_summary,
     list_runs,
     list_tables_for_run,
 )
-from dqt.ui.pages import ISSUE_PAGE_SIZE, issues_page, overview_page, run_page
+from dqt.ui.pages import (
+    ISSUE_PAGE_SIZE,
+    issues_page,
+    overview_page,
+    rule_history_page,
+    rules_page,
+    run_page,
+)
 
 _DEFAULT_STORE = Path(os.environ.get("DQT_STORE_PATH", "dqt_runs.db"))
 
@@ -353,3 +362,56 @@ def _require_run(store: Path, run_id: str) -> dict[str, Any]:
     if not summary or summary.get("run_id") is None:
         raise HTTPException(status_code=404, detail=f"Unknown run: {run_id}")
     return summary
+
+
+@app.get("/ui/runs/{run_id}/rules", tags=["screens"], response_class=HTMLResponse)
+def screen_rules(run_id: str) -> str:
+    """Render what each rule did in one run.
+
+    Args:
+        run_id: The run to show.
+
+    Returns:
+        The page HTML.
+
+    Raises:
+        HTTPException: 404 if the run is unknown, consistent with the other
+            run-scoped screens.
+
+    Example::
+
+        GET /ui/runs/run-001/rules
+    """
+    store = _store_path()
+    return rules_page(
+        run=_require_run(store, run_id),
+        results=get_run_rule_results(store, run_id),
+    )
+
+
+@app.get("/ui/rules/{rule_name}", tags=["screens"], response_class=HTMLResponse)
+def screen_rule_history(rule_name: str) -> str:
+    """Render one rule's results across runs.
+
+    Not scoped to a run: history is the question that spans them.
+
+    A rule with no history is a page rather than a 404. "Never ran" is an
+    answer, and a different one from "does not exist" -- a 404 would tell a
+    DBA their rule name was wrong when the truth may be that the rule has
+    never matched anything, which is exactly what this screen exists to
+    surface.
+
+    Args:
+        rule_name: The rule to follow.
+
+    Returns:
+        The page HTML.
+
+    Example::
+
+        GET /ui/rules/not-null-email
+    """
+    return rule_history_page(
+        rule_name=rule_name,
+        history=get_rule_history(_store_path(), rule_name),
+    )
