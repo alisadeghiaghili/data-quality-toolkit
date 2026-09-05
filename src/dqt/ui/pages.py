@@ -31,6 +31,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from dqt._html import Raw, document, element, table
+from dqt._theme import STYLESHEET
 from dqt.common.models import get_args_of_dq_dimension
 from dqt.fonts import embedded_font_face
 from dqt.i18n import Language, ltr_span, translate
@@ -64,43 +65,6 @@ TRANSLATABLE = frozenset(
 
 #: How each run status is rendered. The word is the part that always works.
 _STATUS_CLASSES = {"success": "ok", "partial": "warn", "failed": "err"}
-
-_CSS = """
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-    font-family: 'Segoe UI', Arial, sans-serif;
-    background: #f4f6f9; color: #1a1a2e; padding: 24px;
-}
-h1 { font-size: 1.5rem; color: #0f3460; margin-bottom: 4px; }
-h2 { font-size: 1.05rem; color: #0f3460; margin: 20px 0 8px; }
-a { color: #0f3460; }
-nav { font-size: 0.85rem; margin-bottom: 12px; }
-table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 0.88rem; }
-th { background: #0f3460; color: #fff; padding: 8px 12px; text-align: left; }
-td { padding: 7px 12px; border-bottom: 1px solid #e4e4e4; }
-tr:nth-child(even) td { background: #f9f9f9; }
-.badge {
-    display: inline-block; padding: 2px 8px; border-radius: 12px;
-    font-size: 0.78rem; font-weight: 600;
-}
-.ok { background: #d4edda; color: #155724; }
-.warn { background: #fff3cd; color: #856404; }
-.err { background: #f8d7da; color: #721c24; }
-.meta { font-size: 0.82rem; color: #4a4a5e; margin-bottom: 8px; }
-.empty { font-size: 0.9rem; color: #4a4a5e; padding: 8px 0; }
-.dqt-track { fill: #e0e0e0; }
-.dqt-fill, .dqt-bar { fill: #0f3460; }
-.dqt-unmeasured { display: none; }
-.dqt-bar-label, .dqt-bar-value { font-size: 11px; fill: #1a1a2e; }
-.dqt-figure { margin: 0 0 12px 0; }
-.dqt-chart-text { font-size: 0.78rem; color: #4a4a5e; margin-top: 2px; }
-.dqt-cards { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px; }
-.dqt-severity { vertical-align: middle; margin-right: 4px; }
-.dqt-severity-info { fill: #17a2b8; }
-.dqt-severity-warning { fill: #ffc107; }
-.dqt-severity-error { fill: #dc3545; }
-.dqt-severity-critical { fill: #721c24; }
-"""
 
 
 def _status_badge(status: str, language: Language) -> Raw:
@@ -275,7 +239,7 @@ def _page(title: str, language: Language, *sections: object) -> str:
     return document(
         title=f"DQT - {title}",
         body=element("div", *sections),
-        css=embedded_font_face(language) + _CSS,
+        css=embedded_font_face(language) + STYLESHEET,
         language=language,
     )
 

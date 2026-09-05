@@ -41,10 +41,14 @@ PALETTE: dict[str, str] = {
     "warn_ink": "#856404",
     "err_bg": "#f8d7da",
     "err_ink": "#721c24",
-    # Severity marks, as VIZ-2 and VIZ-3 wrote them.
-    "sev_info": "#17a2b8",
-    "sev_warning": "#ffc107",
-    "sev_error": "#dc3545",
+    # Severity marks. Darker than the conventional bootstrap-ish palette on
+    # purpose: those are tuned to look right, and several of them do not
+    # reach 3:1 against a near-white page, which is what WCAG 1.4.11 asks of
+    # a graphical object. The word beside each mark carries the meaning
+    # either way, but a mark nobody can see is not worth drawing.
+    "sev_info": "#0e6c7d",
+    "sev_warning": "#8a6100",
+    "sev_error": "#c62828",
     "sev_critical": "#721c24",
 }
 
@@ -100,7 +104,10 @@ a:focus-visible, [tabindex]:focus-visible {{
 }}
 nav {{ font-size: 0.85rem; margin-bottom: 12px; }}
 table {{ width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 0.88rem; }}
-th {{ background: {colour["brand"]}; color: {colour["on_brand"]}; padding: 8px 12px; text-align: start; }}
+th {{
+    background: {colour["brand"]}; color: {colour["on_brand"]};
+    padding: 8px 12px; text-align: start;
+}}
 td {{ padding: 7px 12px; border-bottom: 1px solid {colour["rule"]}; }}
 tr:nth-child(even) td {{ background: {colour["stripe"]}; }}
 .badge {{
@@ -132,7 +139,10 @@ tr:nth-child(even) td {{ background: {colour["stripe"]}; }}
 .dqt-severity-critical {{ fill: {colour["sev_critical"]}; }}
 @media print {{
     body {{ background: {colour["on_brand"]}; padding: 0; }}
-    th {{ background: {colour["on_brand"]}; color: {colour["ink"]}; border-bottom: 2px solid {colour["ink"]}; }}
+    th {{
+        background: {colour["on_brand"]}; color: {colour["ink"]};
+        border-bottom: 2px solid {colour["ink"]};
+    }}
 }}
 """
 
