@@ -41,14 +41,23 @@ def _docstring() -> str:
 class TestTheDocumentedWayToRunItIsLocalOnly:
     """The copyable example is the configuration most people will run."""
 
-    def test_it_does_not_tell_anyone_to_bind_every_interface(self) -> None:
+    def test_no_example_binds_every_interface(self) -> None:
         """``0.0.0.0`` on an unauthenticated app is the whole problem.
 
-        Asserted as an absence rather than by checking the replacement alone,
-        so a future edit that adds a second example alongside the old one
-        still fails.
+        Scoped to the lines that start a server rather than to the whole
+        docstring. The first version of this test forbade the string
+        anywhere, which the fix itself then failed: the clearest way to warn
+        someone off ``0.0.0.0`` is to name it. Banning the word banned the
+        warning too.
+
+        Checked per line, so a second example added beside a corrected one
+        still fails -- which is what the blunt version was protecting.
         """
-        assert "0.0.0.0" not in _docstring()
+        offending = [
+            line for line in _docstring().splitlines() if "uvicorn" in line and "0.0.0.0" in line
+        ]
+
+        assert offending == [], offending
 
     def test_it_binds_the_loopback_address(self) -> None:
         """``127.0.0.1`` reaches only the machine the server runs on."""
