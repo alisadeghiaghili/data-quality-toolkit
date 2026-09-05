@@ -244,6 +244,30 @@ No CLI-level rule-file flag exists; this fix only closes the config-file path.
 
 ---
 
+### `NEW-T` · `RunStore` never closes its connections
+
+Every method opens one with `with self._connect() as conn:`. In `sqlite3` that
+context manager is a **transaction**, not a close — it commits or rolls back
+and leaves the connection open, so each call leaks one until garbage
+collection. `pytest` shows it as a stream of
+`ResourceWarning: unclosed database` under `--cov`, where collection timing
+differs enough to surface it.
+
+Long-standing, not introduced by `NEW-S` — the warning count is unchanged
+across that unit (29 either side). Found while reading the module for it.
+
+Not fixed there because the fix is not a one-liner: wrapping the same
+connection in `closing()` as well as the transaction manager changes the
+nesting order of commit and close, and that is a change to when data is
+durable. It deserves its own unit with its own tests rather than a drive-by
+edit inside a schema change.
+
+Cost today is bounded — the store is a local SQLite file and the process is
+short-lived — but a long-running consumer of `dqt.ui.api` (which is exactly
+what the dashboard in `docs/PLAN-VIZ-UI.md` will be) opens one per request.
+
+---
+
 ### Update 2026-09-05 — all three dialects run against live servers
 
 `DQT-08`'s one admitted gap is closed. Its own PR said no assertion touched a

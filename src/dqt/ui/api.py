@@ -233,7 +233,7 @@ def get_run_rule_results(store_path: str | Path, run_id: str) -> list[dict[str, 
     Example:
         results = get_run_rule_results("dqt_runs.db", run_id="run-001")
     """
-    raise NotImplementedError
+    return _store(store_path).load_rule_results(run_id)
 
 
 def get_rule_history(
@@ -252,4 +252,4 @@ def get_rule_history(
     Example:
         history = get_rule_history("dqt_runs.db", rule_name="not-null-email")
     """
-    raise NotImplementedError
+    return _store(store_path).load_rule_history(rule_name, limit=limit)

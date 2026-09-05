@@ -56,6 +56,21 @@ Dates are the merge dates on `main`.
 
 ### Changed
 
+- **The run store records what each rule did (`NEW-S`).** `save_run` was
+  dropping `PipelineResult.rules_run` on every run, so the count that says a
+  rule matched **zero targets** — the usual way a rule set rots unnoticed —
+  was computed and thrown away. There is now a `run_rule_results` table, and
+  `load_rule_results` / `load_rule_history` read it back through
+  `dqt.ui.api`.
+- **Runs record which DQT produced them.** Scores are only comparable within
+  a version line; the pipeline stamps the running version onto the result and
+  the store keeps it. A result that does not state one is stored as unknown
+  rather than guessed at save time.
+- **The store's schema version is `PRAGMA user_version`**, replacing a probe
+  for one column added by `NEW-A`. A store from an older *or newer* DQT is
+  refused by name — reading forwards is no safer than reading backwards.
+  **Existing `dqt_runs.db` files must be deleted and recreated**; DQT does not
+  migrate this file, by design.
 - **Rules on the same table share one scan.** Each check compiles to
   aggregate expressions rather than to a statement, and the checks over a
   table run as a single `SELECT` — what `CLAUDE.md` §3 asks for. Twenty rules
