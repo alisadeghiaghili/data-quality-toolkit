@@ -27,7 +27,23 @@ Or from Python::
 
     import uvicorn
     from dqt.ui.app import app
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)
+
+Bind the loopback address, not ``0.0.0.0``
+------------------------------------------
+
+Both examples above reach only the machine the server runs on, and that is
+deliberate. **This application has no authentication.** Read-only does not
+mean harmless: what these endpoints return is schema names, table names,
+column names and issue messages read out of whatever database DQT was
+pointed at — a map of a production schema together with a list of where its
+data is weakest.
+
+Serving that on ``0.0.0.0`` publishes it to every network the host can reach.
+If it needs to be reachable from elsewhere, put it behind something that
+authenticates — a reverse proxy with access control, or an SSH tunnel — and
+make that a deliberate decision rather than a default inherited from an
+example.
 """
 
 from __future__ import annotations

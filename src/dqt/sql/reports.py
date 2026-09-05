@@ -46,6 +46,10 @@ def generate_html_report(result: PipelineResult, output_path: Path | str | None 
     if output_path is None:
         output_path = Path.cwd() / f"dqt_report_{result.run_id}.html"
     output_path = Path(output_path)
+    # Create the directory rather than raising FileNotFoundError from
+    # write_text. RunStore already does this for its own file, and a caller
+    # who names a path is asking for the file to be there.
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     html_content = _render(result)
     output_path.write_text(html_content, encoding="utf-8")
@@ -131,6 +135,33 @@ def _score_badge(score: float) -> str:
         f'style="width:{bar_w}px"></span></span> '
         f'<span class="badge {cls}">{pct}%</span>'
     )
+
+
+#: How each run status is rendered: CSS class, and the word the reader sees.
+#:
+#: The word matters more than the colour. A report that renders a failed run
+#: as a healthy one is worse than no report, and the three statuses have to
+#: stay three -- "something went wrong" and "everything went wrong" lead to
+#: different decisions.
+_STATUS_CLASSES: dict[str, str] = {"success": "ok", "partial": "warn", "failed": "err"}
+
+
+def _status_badge(status: str) -> str:
+    """Render a run's status as a labelled badge.
+
+    Args:
+        status: One of ``"success"``, ``"partial"`` or ``"failed"``. An
+            unrecognised value is rendered as an error rather than silently
+            styled as healthy.
+
+    Returns:
+        An HTML span carrying the status word as text, so the meaning does
+        not depend on the colour.
+
+    Example:
+        assert "failed" in _status_badge("failed")
+    """
+    return f'<span class="badge {_STATUS_CLASSES.get(status, "err")}">{html.escape(status)}</span>'
 
 
 def _severity_badge(severity: str) -> str:
@@ -232,15 +263,53 @@ def _external_section(result: PipelineResult) -> str:
     return "<h2>Missing Data (sibling package)</h2>" + "".join(blocks)
 
 
+def _stage_error_section(result: PipelineResult) -> str:
+    """Render the stages that failed, or nothing at all.
+
+    ``NEW-B`` gave a run the ability to report failure; this is where it
+    reaches a person. A ``partial`` status with no explanation tells a DBA
+    that something is wrong and nothing about what, and ``StageError.message``
+    is written to be actionable, so dropping it wastes the part of a failure
+    designed to be read.
+
+    Returns nothing when there is nothing to say. An empty panel implies
+    something is missing or broken -- the same rule the missingness panel
+    follows.
+
+    Args:
+        result: The completed run.
+
+    Returns:
+        An HTML section, or the empty string when no stage failed.
+
+    Example:
+        assert _stage_error_section(clean_result) == ""
+    """
+    if not result.stage_errors:
+        return ""
+
+    rows = "".join(
+        f"<tr><td>{html.escape(error.stage)}</td>"
+        f"<td>{html.escape(error.exception_type)}</td>"
+        f"<td>{html.escape(error.message)}</td></tr>"
+        for error in result.stage_errors
+    )
+    return (
+        "<h2>Stage Errors</h2>"
+        "<p>These stages did not complete. Numbers below are computed from "
+        "whatever did.</p>"
+        "<table><tr><th>Stage</th><th>Error</th><th>Message</th></tr>"
+        f"{rows}</table>"
+    )
+
+
 def _render(result: PipelineResult) -> str:
     started_str = (
         result.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") if result.started_at else "n/a"
     )
     ended_str = result.ended_at.strftime("%Y-%m-%d %H:%M:%S UTC") if result.ended_at else "n/a"
     duration = _duration(result.started_at, result.ended_at)
-    status_badge = (
-        _severity_badge("info") if result.status == "success" else _severity_badge("warning")
-    )
+    status_badge = _status_badge(result.status)
 
     # ---- run summary -------------------------------------------------------
     summary_rows = [
@@ -361,6 +430,7 @@ def _render(result: PipelineResult) -> str:
         else "<h2>Issues</h2><p>No issues detected.</p>"
     )
 
+    stage_error_section = _stage_error_section(result)
     external_section = _external_section(result)
 
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -380,6 +450,7 @@ def _render(result: PipelineResult) -> str:
 <p class="meta">{meta_line}</p>
 <h2>Run Summary</h2>
 {summary_html}
+{stage_error_section}
 {table_section}
 {col_section}
 {issue_section}

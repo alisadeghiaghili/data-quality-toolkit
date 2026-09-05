@@ -90,6 +90,20 @@ Dates are the merge dates on `main`.
 
 ### Fixed
 
+- **The HTML report never stated the run's status (`VIZ-0`).** It rendered a
+  severity badge reading "info" for a success and "warning" for everything
+  else, so `partial` and `failed` were indistinguishable and neither word
+  appeared. It now names the status.
+- **The HTML report dropped `stage_errors`.** `NEW-B` added them so a run
+  could report failure; a degraded run showed an unexplained badge and
+  nothing actionable. Failed stages are now listed with what went wrong, and
+  a clean run shows no section at all rather than an empty panel.
+- **`generate_html_report` raised `FileNotFoundError`** for an output path
+  whose directory did not exist, where `RunStore` creates it.
+- **`dqt.ui.app`'s docstring told people to bind `0.0.0.0`** — every
+  interface, on an app with no authentication, serving schema and table names
+  read from a production database. It now binds loopback and says what would
+  be exposed.
 - **`regex` rules cost two queries**, a bare row count followed by the match.
   The query-budget test never parametrised `regex`, so the pass that removed
   exactly that shape from `RANGE` and `UNIQUE` walked past it.

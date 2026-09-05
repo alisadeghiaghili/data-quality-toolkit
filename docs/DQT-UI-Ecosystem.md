@@ -68,12 +68,15 @@ assumed, and it is worth being precise about, because the gap is narrower than
   `/runs/{run_id}`, `/runs/{run_id}/tables`, `/runs/{run_id}/metrics`,
   `/runs/{run_id}/issues`, `/health`. Behind the `ui` extra
   (`fastapi`, `uvicorn`).
-- Neither module has any tests.
+- Both modules are now tested (`tests/unit/ui/`), including a test that the
+  documented way to run the server binds loopback rather than every
+  interface — the app has no authentication, and what it serves is a map of
+  a production schema (`VIZ-0`, 2026-09-05).
 - There is no frontend of any kind, so every `-` in the `current` row above is
   still accurate as a *user-facing* assessment.
 
-So the honest position is: the backend contract for a UI largely exists and is
-untested; the UI does not. Two of the target row's columns are closer than the
+So the honest position is: the backend contract for a UI exists and is now
+tested; the UI does not. `docs/PLAN-VIZ-UI.md` decides how it gets built. Two of the target row's columns are closer than the
 matrix implies, and none of them are reachable by a user yet.
 
 ---
