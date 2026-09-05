@@ -247,6 +247,25 @@ class TestPersianFoldingHappensInSql:
 
         assert join_condition.count("REPLACE(") == 2 * len(PERSIAN_FOLD_RULES)
 
+    def test_an_inline_list_is_folded_in_python_not_in_sql(self) -> None:
+        """The allowed values are already known here, so SQL need not fold them.
+
+        Wrapping each placeholder in twenty-odd ``REPLACE`` calls would ask
+        the database to compute a constant, once per row. The column still
+        folds in SQL, because its values are the ones DQT has not seen.
+        """
+        sql, binds = unmatched_count_query(
+            SQLITE,
+            None,
+            "people",
+            "city",
+            ReferenceList(values=("شيراز",)),
+            normalize_persian=True,
+        )
+
+        assert binds == ("شیراز",)
+        assert sql.count("REPLACE(") == len(PERSIAN_FOLD_RULES)
+
     def test_folding_is_off_unless_asked(self) -> None:
         """Changing values silently is not a data-quality tool's job.
 
@@ -385,6 +404,19 @@ class TestTheRuleRunsAgainstADatabase:
     ) -> None:
         """Only ``Tehran`` allowed, so the other three non-NULL rows fail."""
         issues = run_rule(_reference_rule(values=["Tehran"]))
+
+        assert issues[0].evidence["unmatched_count"] == 3
+        assert issues[0].evidence["checked_rows"] == 4
+
+    def test_an_inline_list_folds_too(
+        self, run_rule: Callable[[RuleConfig], list[DQIssue]]
+    ) -> None:
+        """The seeded ``شيراز`` has an Arabic yeh; the rule writes a Persian one.
+
+        Ground truth: four non-NULL cities, one of them Shiraz. With folding
+        the rule's single allowed value matches it, so the other three fail.
+        """
+        issues = run_rule(_reference_rule(values=["شیراز"], normalize_persian=True))
 
         assert issues[0].evidence["unmatched_count"] == 3
         assert issues[0].evidence["checked_rows"] == 4

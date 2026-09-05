@@ -101,10 +101,14 @@ DQT is `0.x`. Under semver that is *no* stability promise at all, and this
 page describes the shape the promise will take rather than one already in
 force. Two things have to be true before `1.0.0` claims it:
 
-- **The four facet modules are decided.** `knowledge.py` and `viz.py` do not
-  exist. Freezing a surface with named gaps in it means either adding to a
-  frozen API later or admitting the facets model overstated what DQT does.
+- **The facet modules are decided.** `sql/knowledge.py` now exists and is
+  tested (`NEW-K`); `viz.py` still does not. Freezing a surface with a named
+  gap in it means either adding to a frozen API later or admitting the facets
+  model overstated what DQT does.
 - **The performance work is finished enough to have shaped the interfaces.**
-  Set-based rules grouped per table and an approximate-distinct option both
-  touch signatures. Freezing before them would mean deprecating a
-  just-frozen API.
+  The approximate-distinct option has landed and did touch a signature.
+  **Rules grouped per table has not**: each rule still issues its own query,
+  so the table is scanned once per rule rather than once per table, which is
+  what `CLAUDE.md` §3 asks for. That work will change how a rule is
+  evaluated, and freezing before it would mean deprecating a just-frozen
+  API.

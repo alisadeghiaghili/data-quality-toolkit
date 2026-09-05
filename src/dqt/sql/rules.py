@@ -74,6 +74,7 @@ from dqt.common.models import (
 )
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.dialects.base import Dialect
+from dqt.sql.knowledge import reference_set_from_params, unmatched_count_query
 from dqt.sql.schema_discovery import DiscoveredTable
 
 # ---------------------------------------------------------------------------
@@ -390,6 +391,59 @@ def _eval_regex(
     return total, non_matching
 
 
+def _eval_reference(
+    cursor: Any,
+    schema_name: str | None,
+    table_name: str,
+    column_name: str,
+    dialect: Dialect,
+    params: dict[str, Any],
+) -> tuple[int, int, bool]:
+    """Count values absent from the rule's reference set.
+
+    One query, like every other rule: the number of non-NULL values checked
+    and the number not found come from the same pass. See
+    :mod:`dqt.sql.knowledge` for what a reference set is and why a table
+    reference compiles to a join rather than to ``NOT IN (SELECT ...)``.
+
+    Args:
+        cursor: Open DBAPI cursor.
+        schema_name: Schema name.
+        table_name: Table name.
+        column_name: Column name.
+        dialect: Resolved :class:`~dqt.sql.dialects.base.Dialect`.
+        params: The rule's parameters, naming the reference set.
+
+    Returns:
+        Tuple of ``(checked_rows, unmatched_count, normalized)``.
+
+    Raises:
+        ValueError: If the parameters do not describe exactly one usable
+            reference set. Refusing is the point: a REFERENCE rule that
+            cannot find its reference must not report a clean column.
+
+    Example::
+
+        checked, bad, folded = _eval_reference(
+            cursor, None, "people", "city", dialect, {"values": ["Tehran"]}
+        )
+    """
+    reference = reference_set_from_params(params)
+    normalized = bool(params.get("normalize_persian", False))
+
+    statement, binds = unmatched_count_query(
+        dialect,
+        schema_name,
+        table_name,
+        column_name,
+        reference,
+        normalize_persian=normalized,
+    )
+    cursor.execute(statement, binds)
+    row = cursor.fetchone()
+    return int(row[0]), int(row[1] or 0), normalized
+
+
 # ---------------------------------------------------------------------------
 # Internal: dialect detection
 # ---------------------------------------------------------------------------
@@ -539,6 +593,37 @@ def _evaluate_rule(
                             "non_matching_count": non_matching,
                             "total_rows": total,
                             "pattern": pattern,
+                        },
+                        schema_name=schema,
+                        table_name=tname,
+                        column_name=column_name,
+                        rule_name=rule.name,
+                    )
+                )
+
+        elif expr == "REFERENCE":
+            checked_rows, unmatched_count, normalized = _eval_reference(
+                cursor, schema, tname, column_name, dialect, rule.params
+            )
+            if unmatched_count > 0:
+                issues.append(
+                    DQIssue(
+                        issue_id=str(uuid.uuid4()),
+                        run_id=run_id,
+                        dimension=rule.dimension,
+                        severity=rule.severity,
+                        message=(
+                            f"Column '{column_name}' in '{tname}' has "
+                            f"{unmatched_count} value(s) absent from its reference "
+                            f"set, out of {checked_rows} non-NULL value(s) checked."
+                        ),
+                        evidence={
+                            "unmatched_count": unmatched_count,
+                            "checked_rows": checked_rows,
+                            # Present whether or not folding was asked for, so
+                            # a reader never has to guess whether two spellings
+                            # of one word were treated as one value.
+                            "normalized": normalized,
                         },
                         schema_name=schema,
                         table_name=tname,

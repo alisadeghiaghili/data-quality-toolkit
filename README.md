@@ -143,8 +143,41 @@ without a stable row locator. The refusal names the fix: give the table a key.
 ## Rules
 
 Rules are declarative, defined in YAML or JSON, and compile to set-based SQL —
-one query per rule, never a row-by-row loop. Four expressions:
-`NOT NULL`, `UNIQUE`, `RANGE`, `REGEX`.
+one query per rule, never a row-by-row loop. Five expressions:
+`NOT NULL`, `UNIQUE`, `RANGE`, `REGEX`, `REFERENCE`.
+
+### `REFERENCE` — values must come from a known set
+
+The validity check neither `REGEX` nor `RANGE` can express: membership of a
+set that lives in the data rather than in a pattern.
+
+```yaml
+- name: city-is-known
+  dimension: validity
+  severity: error
+  expression: REFERENCE
+  scope: { table_pattern: customers, column_pattern: city }
+  params:
+    reference_table: ref_cities
+    reference_column: name
+    normalize_persian: true      # optional; off by default
+```
+
+A reference **table** compiles to an anti-join, so matching a large table
+against its reference is the query planner's work rather than Python's. For a
+vocabulary small enough to read in the rule file, use `params: {values: [...]}`
+instead — those are bound as parameters, never interpolated.
+
+`normalize_persian` folds Persian and Arabic letter and digit variants on
+**both** sides before comparing, in SQL. `شيراز` written with an Arabic yeh is
+the same city as `شیراز` with a Persian one, and a check that calls them
+different values reports a problem that does not exist. It is off unless
+asked: changing values silently is not a data-quality tool's job.
+
+**DQT ships no reference data.** A tool that carries its own country list is
+one stale release away from reporting correct data as invalid, and a false
+positive on a clean table costs more trust than the convenience is worth. DQT
+provides the mechanism; you provide the authority.
 
 `UNIQUE` counts duplicates with `COUNT(DISTINCT ...)`, which has to hold every
 distinct value it sees. On a high-cardinality column of a very large table

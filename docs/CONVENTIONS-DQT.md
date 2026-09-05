@@ -215,7 +215,7 @@ Every feature MUST map to at least one facet, or be rejected as out of scope.
 | Cleansing | `sql/cleansing.py` | Plan/apply repair with undo statements. | primitives exist, unsafe |
 | Metrics | `sql/metrics.py` | Quantitative scores per table/column/dimension. | 3 global metrics, untested |
 | Monitoring | `sql/monitoring.py` | Trends and drift of DQ metrics over time. | stub, untested |
-| Knowledge/Domain | `knowledge.py` | Reference data for validation and correction. | not started |
+| Knowledge/Domain | `sql/knowledge.py` | Reference data for validation and correction. | built and tested (`NEW-K`): `REFERENCE` rule over a reference table (anti-join) or an inline list, with opt-in Persian folding. DQT ships no reference *data* — see the module docstring for why. Lives under `sql/` with the other facets that compile SQL. |
 | Classification | `classification.py` | Semantic typing (email, phone, IBAN, national id). | built and tested; not wired into profiling |
 | Missingness (internal) | within profiling/metrics | Null counts, ratios, co-occurrence patterns. | counts and ratios only |
 | Imputation (external) | `bridges/` | Delegated to `missingly` et al. Never reimplemented. | bridge built (`B1`-`B3`); imputation itself still external by design |

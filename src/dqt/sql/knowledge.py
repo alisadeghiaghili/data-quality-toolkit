@@ -39,6 +39,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from dqt.classification import PERSIAN_FOLD_RULES
+from dqt.sql._identifiers import qualified_identifier, quote_identifier
 from dqt.sql.dialects.base import Dialect
 
 __all__ = [
@@ -108,7 +110,44 @@ def reference_set_from_params(params: dict[str, Any]) -> ReferenceSet:
     Example:
         reference = reference_set_from_params({"values": ["OPEN"]})
     """
-    raise NotImplementedError
+    values = params.get("values")
+    table_name = params.get("reference_table")
+
+    if values is not None and table_name is not None:
+        raise ValueError(
+            "A REFERENCE rule names both 'values' and 'reference_table'. Only "
+            "one can be the authority on what a column is allowed to hold, and "
+            "DQT will not choose. Remove whichever is not intended."
+        )
+    if values is None and table_name is None:
+        raise ValueError(
+            "A REFERENCE rule needs somewhere to look: give it 'values' (an "
+            "inline list) or 'reference_table' with 'reference_column' (a "
+            "table in the same database). Without one, the rule would report "
+            "a clean column it never actually checked."
+        )
+
+    if table_name is not None:
+        column_name = params.get("reference_column")
+        if not column_name:
+            raise ValueError(
+                f"A REFERENCE rule names reference_table {table_name!r} but no "
+                "'reference_column'. A table is not a set of values until one "
+                "of its columns is named."
+            )
+        return ReferenceTable(
+            table_name=str(table_name),
+            column_name=str(column_name),
+            schema_name=params.get("reference_schema"),
+        )
+
+    if not values:
+        raise ValueError(
+            "A REFERENCE rule's 'values' list is empty, which would make every "
+            "non-NULL value a violation. That is far more likely to be a "
+            "configuration that failed to load than a deliberate rule."
+        )
+    return ReferenceList(values=tuple(str(value) for value in values))
 
 
 def persian_fold_expression(quoted_expression: str) -> str:
@@ -128,7 +167,10 @@ def persian_fold_expression(quoted_expression: str) -> str:
     Example:
         assert persian_fold_expression('"c"').startswith("REPLACE(")
     """
-    raise NotImplementedError
+    folded = quoted_expression
+    for source, replacement in PERSIAN_FOLD_RULES:
+        folded = f"REPLACE({folded}, '{source}', '{replacement}')"
+    return folded
 
 
 def unmatched_count_query(
@@ -163,4 +205,65 @@ def unmatched_count_query(
     Example:
         sql, binds = unmatched_count_query(dialect, None, "t", "c", reference)
     """
-    raise NotImplementedError
+    table = qualified_identifier(schema_name, table_name)
+    column = f"{table}.{quote_identifier(column_name)}"
+    compared_column = persian_fold_expression(column) if normalize_persian else column
+
+    if isinstance(reference, ReferenceList):
+        placeholders = ", ".join([dialect.parameter_placeholder] * len(reference.values))
+        # The values are folded in Python rather than in SQL: they are known
+        # here, so wrapping each placeholder in twenty-odd REPLACE calls would
+        # ask the database to compute a constant.
+        binds = tuple(
+            _folded_in_python(value) if normalize_persian else value for value in reference.values
+        )
+        return (
+            dialect.select_aggregates_sql(
+                table,
+                [
+                    f"COUNT({column})",
+                    f"SUM(CASE WHEN {compared_column} NOT IN ({placeholders}) THEN 1 ELSE 0 END)",
+                ],
+                f"{column} IS NOT NULL",
+            ),
+            binds,
+        )
+
+    reference_table = qualified_identifier(reference.schema_name, reference.table_name)
+    reference_column = f"{reference_table}.{quote_identifier(reference.column_name)}"
+    compared_reference = (
+        persian_fold_expression(reference_column) if normalize_persian else reference_column
+    )
+    # The join is expressed as the table reference so the whole statement stays
+    # one call to the dialect: an already-quoted FROM clause is what
+    # select_aggregates_sql takes, and a join is a table reference.
+    joined = f"{table} LEFT JOIN {reference_table} ON {compared_column} = {compared_reference}"
+    return (
+        dialect.select_aggregates_sql(
+            joined,
+            [
+                f"COUNT({column})",
+                f"SUM(CASE WHEN {reference_column} IS NULL THEN 1 ELSE 0 END)",
+            ],
+            f"{column} IS NOT NULL",
+        ),
+        (),
+    )
+
+
+def _folded_in_python(value: str) -> str:
+    """Apply the Persian fold to a value already known to DQT.
+
+    Args:
+        value: The reference value as written in the rule file.
+
+    Returns:
+        The folded value.
+
+    Example:
+        assert _folded_in_python("شيراز") == "شیراز"
+    """
+    folded = value
+    for source, replacement in PERSIAN_FOLD_RULES:
+        folded = folded.replace(source, replacement)
+    return folded
