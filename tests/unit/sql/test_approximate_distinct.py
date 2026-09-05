@@ -25,6 +25,7 @@ rather than to a sentence.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -87,8 +88,13 @@ def run_rule(
         issues = run_rule(_unique_rule())
     """
 
+    counter = itertools.count()
+
     def _run(rule: RuleConfig) -> Any:
-        db_file = make_sqlite_db("approx.db", SEEDED)
+        # A fresh file per call: this fixture is used more than once in a
+        # single test, and re-running CREATE TABLE against the first database
+        # would fail for a reason that has nothing to do with the assertion.
+        db_file = make_sqlite_db(f"approx{next(counter)}.db", SEEDED)
         config = ConnectionConfig(id="approx", dsn=f"sqlite:///{db_file}")
         issues, _ = apply_rules(
             run_id="run-approx",
@@ -159,7 +165,11 @@ class TestAskingIsOptionalAndPerRule:
         renders them identically asserts a precision it does not have --
         the honesty gate applied to a number rather than to a sentence.
         """
-        for rule in (_unique_rule(), _unique_rule(approximate=False), _unique_rule(approximate=True)):
+        for rule in (
+            _unique_rule(),
+            _unique_rule(approximate=False),
+            _unique_rule(approximate=True),
+        ):
             issues = run_rule(rule)
 
             assert "approximate" in issues[0].evidence
@@ -178,7 +188,7 @@ class TestTheSqlSaysWhatWasAsked:
         dialect = get_dialect_by_name("sqlserver")
 
         approximate = dialect.approximate_distinct_expression('"email"')
-        exact = f'COUNT(DISTINCT {"email"!r})'
+        exact = f"COUNT(DISTINCT {'email'!r})"
 
         assert approximate is not None
         assert approximate != exact

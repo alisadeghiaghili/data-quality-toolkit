@@ -177,6 +177,10 @@ def _eval_not_null(
         table_name: Table name.
         column_name: Column name to check.
         dialect: Target SQL dialect, used for identifier quoting.
+        approximate: When True, use the dialect's estimating distinct count if
+            it has one. Dialects without one answer exactly, and the third
+            return value says which happened -- an estimate and an exact count
+            are different claims, and a report must not render them alike.
 
     Returns:
         Tuple of ``(total_rows, null_count)``.
@@ -198,7 +202,8 @@ def _eval_unique(
     table_name: str,
     column_name: str,
     dialect: Dialect,
-) -> tuple[int, int]:
+    approximate: bool = False,
+) -> tuple[int, int, bool]:
     """Count total non-null rows and duplicate rows for a column.
 
     Args:
@@ -209,12 +214,15 @@ def _eval_unique(
         dialect: Target SQL dialect, used for identifier quoting.
 
     Returns:
-        Tuple of ``(total_rows, duplicate_count)`` where ``duplicate_count``
+        Tuple of ``(total_rows, duplicate_count, used_approximation)`` where
+        ``duplicate_count``
         is the number of rows that share a value with at least one other row.
 
     Example::
 
-        total, dupes = _eval_unique(cursor, "public", "users", "email")
+        total, dupes, approx = _eval_unique(
+            cursor, "public", "users", "email", dialect
+        )
     """
     tbl = dialect.qualified_identifier(schema_name, table_name)
     col = dialect.quote_identifier(column_name)
@@ -226,12 +234,23 @@ def _eval_unique(
     # COUNT(DISTINCT ...) is expensive at scale; an approximate-distinct path
     # is a separate scope item of this unit, and the dialect protocol already
     # carries approximate_distinct_expression() for it.
+    # COUNT(DISTINCT ...) has to hold every distinct value it has seen, so on
+    # a high-cardinality column it is the one operation here that can cost
+    # real memory on the server. A caller may opt into an estimate per rule --
+    # whether that is acceptable is a property of the check, not of the run.
+    distinct_expression = None
+    if approximate:
+        distinct_expression = dialect.approximate_distinct_expression(col)
+    used_approximation = distinct_expression is not None
+    if distinct_expression is None:
+        distinct_expression = f"COUNT(DISTINCT {col})"
+
     statement = dialect.select_aggregates_sql(
-        tbl, [f"COUNT({col})", f"COUNT({col}) - COUNT(DISTINCT {col})"]
+        tbl, [f"COUNT({col})", f"COUNT({col}) - {distinct_expression}"]
     )
     cursor.execute(statement)
     row = cursor.fetchone()
-    return int(row[0]), int(row[1] or 0)
+    return int(row[0]), int(row[1] or 0), used_approximation
 
 
 def _eval_range(
@@ -434,7 +453,14 @@ def _evaluate_rule(
                 )
 
         elif expr == "UNIQUE":
-            total, duplicate_extra = _eval_unique(cursor, schema, tname, column_name, dialect)
+            total, duplicate_extra, used_approximation = _eval_unique(
+                cursor,
+                schema,
+                tname,
+                column_name,
+                dialect,
+                approximate=bool(rule.params.get("approximate", False)),
+            )
             if duplicate_extra > 0:
                 issues.append(
                     DQIssue(
@@ -446,7 +472,14 @@ def _evaluate_rule(
                             f"Column '{column_name}' in '{tname}' has {duplicate_extra} "
                             f"extra duplicate value(s) (violates uniqueness)."
                         ),
-                        evidence={"duplicate_extra_rows": duplicate_extra, "total_rows": total},
+                        evidence={
+                            "duplicate_extra_rows": duplicate_extra,
+                            "total_rows": total,
+                            # Present whether or not the caller asked, so a
+                            # reader never has to guess which kind of number
+                            # they are looking at.
+                            "approximate": used_approximation,
+                        },
                         schema_name=schema,
                         table_name=tname,
                         column_name=column_name,

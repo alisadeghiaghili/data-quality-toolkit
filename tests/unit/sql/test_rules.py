@@ -156,7 +156,11 @@ class TestEvalNotNull:
 class TestEvalUnique:
     def test_detects_duplicates(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
-        total, dup_extra = _eval_unique(
+        # Third value: whether an approximate distinct was used. Exact here,
+
+        # because SQLite has no estimating form (see test_approximate_distinct).
+
+        total, dup_extra, approximate = _eval_unique(
             cursor, None, "users", "email", dialect=get_dialect_by_name("sqlite")
         )
         # alice@example.com appears twice -> 1 extra row
@@ -165,7 +169,7 @@ class TestEvalUnique:
     def test_no_duplicates_when_unique(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
         # age values: 25, 30, 17, -1, 22 -> all unique
-        _, dup_extra = _eval_unique(
+        _, dup_extra, _ = _eval_unique(
             cursor, None, "users", "age", dialect=get_dialect_by_name("sqlite")
         )
         assert dup_extra == 0
