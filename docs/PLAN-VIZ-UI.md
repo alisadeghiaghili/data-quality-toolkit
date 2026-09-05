@@ -87,11 +87,20 @@ No plotting library, no JavaScript, no image files.
   accessibility requirement is structural rather than remembered.
 - Zero new runtime dependencies.
 
-**Templates: Jinja2, shared by both delivery modes.** `reports.py` currently
-escapes correctly, but it does so through twenty-odd separate `html.escape`
+**Templates: an escape-by-default builder, shared by both delivery modes.**
+`reports.py` escapes correctly, but through twenty-odd separate `html.escape`
 calls — correctness by per-line discipline, where one omission is silent.
-Autoescaping makes it the default. Jinja2 is already how FastAPI serves HTML, so
-one template layer serves both outputs.
+
+> **Reversed 2026-09-05, during `VIZ-2`.** This section first said Jinja2.
+> `docs/BACKLOG.md` §4 rules out new **hard** dependencies, and the Reports
+> facet has to work with no extras installed — so Jinja2 would either become
+> DQT's fourth required dependency or force two renderers, and two renderers
+> is the one thing this plan exists to avoid.
+>
+> `dqt/_html.py` is the same property without the dependency: one rule, *text
+> is escaped, markup is explicit*, and it costs about as much code as the
+> `html.escape` calls it replaces. The plan's actual requirement — one
+> renderer for both delivery modes — is unchanged.
 
 **Pages: server-rendered by the existing FastAPI app.** No new service, no new
 process model.
