@@ -386,6 +386,53 @@ class RunStore:
                 ],
             )
 
+    def count_issues_by_severity(self, run_id: str) -> dict[str, int]:
+        """Count a run's issues by severity, grouped in the database.
+
+        Args:
+            run_id: The run to count.
+
+        Returns:
+            Severity to count. A severity with no issues is absent rather
+            than zero -- whether to show a zero is the caller's decision, and
+            this layer does not own the vocabulary.
+
+        Example:
+            counts = store.count_issues_by_severity("run-001")
+        """
+        raise NotImplementedError
+
+    def count_issues_by_dimension(self, run_id: str) -> dict[str, int]:
+        """Count a run's issues by dimension, grouped in the database.
+
+        Args:
+            run_id: The run to count.
+
+        Returns:
+            Dimension to count, absent where there are none.
+
+        Example:
+            counts = store.count_issues_by_dimension("run-001")
+        """
+        raise NotImplementedError
+
+    def average_score_by_dimension(self, run_id: str) -> dict[str, float]:
+        """Average a run's metric scores per dimension.
+
+        Args:
+            run_id: The run to read.
+
+        Returns:
+            Dimension to mean score. A dimension nothing measured is absent
+            rather than zero: absent means "nothing measured this" and zero
+            means "it scored zero", and collapsing the two is the mistake the
+            scorecards exist to avoid.
+
+        Example:
+            scores = store.average_score_by_dimension("run-001")
+        """
+        raise NotImplementedError
+
     def load_rule_results(self, run_id: str) -> list[dict[str, Any]]:
         """Return one summary per rule evaluated in *run_id*.
 
