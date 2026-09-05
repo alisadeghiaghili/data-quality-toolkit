@@ -17,11 +17,13 @@ from pathlib import Path
 
 import pytest
 
-from dqt.common.models import DQIssue, DQMetric, PipelineResult
+from dqt.common.models import DQIssue, DQMetric, PipelineResult, RuleRunResult
 from dqt.common.storage import RunStore
 from dqt.ui.api import (
+    get_rule_history,
     get_run_issues,
     get_run_metrics,
+    get_run_rule_results,
     get_run_summary,
     list_runs,
     list_tables_for_run,
@@ -93,8 +95,9 @@ def store_path(tmp_path: Path) -> Path:
     """Seed a RunStore with one run whose contents are known by hand.
 
     The fixture holds four metrics -- three ``completeness`` with scores
-    1.0, 0.5 and 0.0, plus one ``row_count`` -- and two issues, spread over
-    tables ``orders`` and ``customers``.
+    1.0, 0.5 and 0.0, plus one ``row_count`` -- two issues over tables
+    ``orders`` and ``customers``, and two rule summaries, one of which
+    matched nothing (`NEW-S`).
 
     Args:
         tmp_path: pytest temporary directory.
@@ -124,6 +127,24 @@ def store_path(tmp_path: Path) -> Path:
             issues=[
                 _issue("warning", "orders", "email"),
                 _issue("error", "customers", "phone"),
+            ],
+            rules_run=[
+                RuleRunResult(
+                    run_id=RUN_ID,
+                    rule_name="not-null-email",
+                    targets_checked=2,
+                    targets_failed=1,
+                    targets_error=0,
+                ),
+                # Matched nothing: the signal a rule set has rotted, and the
+                # one a screen must be able to surface.
+                RuleRunResult(
+                    run_id=RUN_ID,
+                    rule_name="orphan-rule",
+                    targets_checked=0,
+                    targets_failed=0,
+                    targets_error=0,
+                ),
             ],
         )
     )
@@ -202,3 +223,56 @@ def test_list_tables_is_sorted_and_deduplicated(store_path: Path) -> None:
     with ``orders`` appearing once rather than three times.
     """
     assert list_tables_for_run(store_path, run_id=RUN_ID) == ["customers", "orders"]
+
+
+# ---------------------------------------------------------------------------
+# Rule results (NEW-S)
+# ---------------------------------------------------------------------------
+#
+# The Rules screen in docs/PLAN-VIZ-UI.md reads through this layer like every
+# other consumer. These pass through to RunStore, so what is asserted here is
+# the boundary contract -- plain dicts, no domain model -- rather than the
+# arithmetic, which tests/unit/common/test_store_rule_results.py owns.
+
+
+def test_rule_results_come_back_as_plain_dicts(store_path: Path) -> None:
+    """No domain model crosses this boundary, for rules as for everything else.
+
+    A ``RuleRunResult`` reaching a template would couple the UI to an internal
+    dataclass, which is the coupling this module exists to prevent.
+    """
+    results = get_run_rule_results(store_path, run_id=RUN_ID)
+
+    assert results == [
+        {
+            "run_id": RUN_ID,
+            "rule_name": "not-null-email",
+            "targets_checked": 2,
+            "targets_failed": 1,
+            "targets_error": 0,
+        },
+        {
+            "run_id": RUN_ID,
+            "rule_name": "orphan-rule",
+            "targets_checked": 0,
+            "targets_failed": 0,
+            "targets_error": 0,
+        },
+    ]
+
+
+def test_rule_history_is_readable_through_the_same_layer(store_path: Path) -> None:
+    """One run in the fixture, so one entry, carrying the run's timestamp."""
+    history = get_rule_history(store_path, rule_name="not-null-email")
+
+    assert len(history) == 1
+    assert history[0]["run_id"] == RUN_ID
+    assert history[0]["targets_failed"] == 1
+    assert "started_at" in history[0]
+
+
+def test_an_unknown_run_yields_no_rule_results_rather_than_raising(
+    store_path: Path,
+) -> None:
+    """Consistent with the rest of this layer: absence is an answer."""
+    assert get_run_rule_results(store_path, run_id="no-such-run") == []

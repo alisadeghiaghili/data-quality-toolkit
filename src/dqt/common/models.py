@@ -444,6 +444,7 @@ class PipelineResult:
     metrics: list[DQMetric] = field(default_factory=list)
     issues: list[DQIssue] = field(default_factory=list)
     rules_run: list[RuleRunResult] = field(default_factory=list)
+    dqt_version: str = ""
     external_analyses: dict[str, dict[str, Any]] = field(default_factory=dict)
     stage_errors: list[StageError] = field(default_factory=list)
 

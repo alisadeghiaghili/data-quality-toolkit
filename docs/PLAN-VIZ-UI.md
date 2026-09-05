@@ -205,7 +205,7 @@ Each unit is one PR, roughly a week of human work, red-then-green.
 | **VIZ-3** | Screens 1–3 served by the FastAPI app from the same templates | VIZ-2 |
 | **VIZ-4** | Bilingual EN/FA, RTL, font embedding, glossary | VIZ-3 |
 | **VIZ-5** | Accessibility audit against §4 with tests, and the ecosystem matrix's `current` row filled in honestly | VIZ-4 |
-| **VIZ-6** | Screen 4 (Rules) — **blocked**, see §7 | storage work |
+| **VIZ-6** | Screen 4 (Rules) — unblocked by `NEW-S` | VIZ-5 |
 
 ---
 
@@ -214,18 +214,17 @@ Each unit is one PR, roughly a week of human work, red-then-green.
 These are places where the UI specification assumes data DQT does not have.
 Building a screen over an absence produces a screen that lies.
 
-1. **No `run_rule_results` table.** `RunStore` has `runs`, `run_metrics`,
-   `run_issues`, `cleansing_plans`, `cleansing_log`. "Rule history over time"
-   and "last result" have nothing to read. This needs a storage unit first, and
-   `RunStore.init_schema` refuses a store written by an older DQT rather than
-   half-using it — so it is a schema change with a recreate story, not a
-   migration. **VIZ-6 cannot start until that lands.**
+1. ~~**No `run_rule_results` table.**~~ **Cleared by `NEW-S`** (2026-09-05).
+   The table exists, `save_run` writes it — it was silently dropping
+   `PipelineResult.rules_run` on every run — and `RunStore.load_rule_results` /
+   `load_rule_history` read it back, reachable through `dqt.ui.api`. Existing
+   store files must be deleted and recreated; the schema version guard refuses
+   them by name rather than half-using them.
 
-2. **No `dqt_version` on `runs`.** The trend chart is supposed to warn when a
-   comparison spans versions, because scores are only comparable within a
-   version line. There is no column to read. Either add one, or the trend chart
-   ships without the warning and says so — silently comparing across versions is
-   the option that is not available.
+2. ~~**No `dqt_version` on `runs`.**~~ **Cleared by `NEW-S`.** The pipeline
+   stamps the running version onto the result and the store records it. A
+   result that does not state one is stored as unknown rather than guessed
+   from whatever is installed at save time.
 
 3. **There is no evidence sample to suppress.** The UI spec describes an
    `EvidenceConfig` and a "samples suppressed by configuration" state. Neither

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dqt._version import __version__
 from dqt.classification import (
     ClassificationResult,
     SemanticType,
@@ -60,8 +61,6 @@ from dqt.common.models import (
 from dqt.exceptions import ReadOnlyViolationError
 from dqt.exit_codes import FAIL_ON_CHOICES, ExitCode, decide_exit_code
 from dqt.sql.pipeline import DQTPipeline
-
-__version__ = "0.1.0"
 
 
 def from_dsn(

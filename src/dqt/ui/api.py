@@ -218,3 +218,38 @@ __all__ = [
     "get_run_issues",
     "list_tables_for_run",
 ]
+
+
+def get_run_rule_results(store_path: str | Path, run_id: str) -> list[dict[str, Any]]:
+    """Return the rule summaries for one run.
+
+    Args:
+        store_path: Path to the RunStore SQLite file.
+        run_id: The run to read.
+
+    Returns:
+        One plain dict per rule evaluated, in rule-name order.
+
+    Example:
+        results = get_run_rule_results("dqt_runs.db", run_id="run-001")
+    """
+    return _store(store_path).load_rule_results(run_id)
+
+
+def get_rule_history(
+    store_path: str | Path, rule_name: str, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Return one rule's results across runs, newest first.
+
+    Args:
+        store_path: Path to the RunStore SQLite file.
+        rule_name: The rule to follow.
+        limit: Maximum entries returned.
+
+    Returns:
+        Plain dicts carrying the rule's counts and the run's timestamp.
+
+    Example:
+        history = get_rule_history("dqt_runs.db", rule_name="not-null-email")
+    """
+    return _store(store_path).load_rule_history(rule_name, limit=limit)

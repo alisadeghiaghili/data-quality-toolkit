@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from dqt._version import __version__
 from dqt.common.config_loader import load_rules
 from dqt.common.models import (
     ColumnResult,
@@ -546,4 +547,5 @@ class DQTPipeline:
             issues=issues,
             rules_run=rule_runs,
             external_analyses={},
+            dqt_version=__version__,
         )

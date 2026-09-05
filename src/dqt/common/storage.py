@@ -46,6 +46,15 @@ from dqt.common.models import DQIssue, DQMetric, PipelineResult
 _DEFAULT_DB_PATH: Path = Path("dqt_runs.db")
 
 
+#: Schema version written to ``PRAGMA user_version`` and required on open.
+#:
+#: One integer, rather than a growing chain of "does this column exist yet"
+#: probes: each of those only ever detects the specific past it was taught
+#: about. Bump it whenever the DDL below changes -- the store is a local
+#: artifact meant to be recreated rather than migrated.
+SCHEMA_VERSION = 2
+
+
 class RunStore:
     """SQLite-backed store for DQT pipeline run results.
 
@@ -100,42 +109,43 @@ class RunStore:
     # ------------------------------------------------------------------
 
     def _assert_store_is_current(self) -> None:
-        """Refuse a store written by an older DQT rather than half-using it.
+        """Refuse a store whose schema is not the one this DQT writes.
 
         The DDL is ``CREATE TABLE IF NOT EXISTS``, so an existing file is left
-        exactly as it was and columns added since never appear. The store is a
-        local artifact meant to be recreated rather than migrated
+        exactly as it was and anything added since never appears. The store is
+        a local artifact meant to be recreated rather than migrated
         (``CONVENTIONS-DQT.md``), and this is what makes that decision
-        survivable: without it the first symptom is an OperationalError thrown
-        from the middle of a run that has already done its work.
+        survivable: without it the first symptom is an ``OperationalError``
+        thrown from the middle of a run that has already done its work.
+
+        Both directions are refused. An older store is missing columns this
+        DQT writes; a newer one has columns this DQT would silently ignore,
+        which is how a run reports numbers computed from a schema it only
+        half understands.
 
         Raises:
-            RuntimeError: If the file exists with a pre-``NEW-A`` schema.
+            RuntimeError: If the file exists with a different
+                :data:`SCHEMA_VERSION`.
 
         Example:
             store._assert_store_is_current()
         """
         if not self._db_path.exists():
             return
-        with self._connect() as conn:
-            tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                ).fetchall()
-            }
-            if "run_metrics" not in tables:
-                return
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(run_metrics)")}
 
-        if "metric_name" not in columns:
-            raise RuntimeError(
-                f"The run store at {self._db_path} is out of date: run_metrics has no "
-                "metric_name column, so it predates NEW-A. DQT recreates this store "
-                "rather than migrating it, because it holds run history rather than "
-                "source data. Delete the file and re-run; past runs in it are lost, "
-                "which is why it is not the place to keep anything you need."
-            )
+        with self._connect() as conn:
+            found = int(conn.execute("PRAGMA user_version").fetchone()[0])
+
+        if found == SCHEMA_VERSION:
+            return
+
+        direction = "older" if found < SCHEMA_VERSION else "newer"
+        raise RuntimeError(
+            f"The run store at {self._db_path} was written by a {direction} DQT: "
+            f"its schema version is {found}, and this DQT writes {SCHEMA_VERSION}. "
+            "DQT does not migrate this file -- it is a local artifact meant to be "
+            "recreated. Delete it and re-run, or point --store at a new path."
+        )
 
     def init_schema(self) -> None:
         """Create the DQT storage tables if they do not already exist.
@@ -165,7 +175,12 @@ class RunStore:
                 started_at    TEXT NOT NULL,
                 ended_at      TEXT NOT NULL,
                 status        TEXT NOT NULL
-                              CHECK (status IN ('success', 'failed', 'partial'))
+                              CHECK (status IN ('success', 'failed', 'partial')),
+                -- Which DQT produced this run. Scores are only comparable
+                -- within a version line, so a trend spanning two versions has
+                -- to be able to say so. Empty means the result did not state
+                -- one; it is never guessed from what happens to be installed.
+                dqt_version   TEXT NOT NULL DEFAULT ''
             );
             """,
             """
@@ -238,6 +253,23 @@ class RunStore:
                 ON run_issues(run_id);
             """,
             """
+            CREATE TABLE IF NOT EXISTS run_rule_results (
+                run_id          TEXT    NOT NULL REFERENCES runs(run_id),
+                rule_name       TEXT    NOT NULL,
+                -- Zero is the value this table exists for: a rule whose scope
+                -- matches nothing reports no failures, which reads exactly
+                -- like a rule that passes.
+                targets_checked INTEGER NOT NULL CHECK (targets_checked >= 0),
+                targets_failed  INTEGER NOT NULL CHECK (targets_failed >= 0),
+                targets_error   INTEGER NOT NULL CHECK (targets_error >= 0),
+                PRIMARY KEY (run_id, rule_name)
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_run_rule_results_rule_name
+                ON run_rule_results(rule_name);
+            """,
+            """
             CREATE TABLE IF NOT EXISTS cleansing_plans (
                 plan_id       TEXT PRIMARY KEY,
                 -- Nullable and ON DELETE SET NULL: a plan's audit value has
@@ -275,6 +307,10 @@ class RunStore:
         with self._connect() as conn:
             for stmt in ddl:
                 conn.execute(stmt)
+            # Stamped last, so a file only claims this version once every
+            # statement above has actually run. A crash midway leaves a store
+            # the guard will refuse rather than one it will half-trust.
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     # ------------------------------------------------------------------
     # Write
@@ -302,8 +338,8 @@ class RunStore:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO runs
-                    (run_id, connection_id, started_at, ended_at, status)
-                VALUES (?, ?, ?, ?, ?)
+                    (run_id, connection_id, started_at, ended_at, status, dqt_version)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     result.run_id,
@@ -311,6 +347,7 @@ class RunStore:
                     result.started_at.isoformat(),
                     result.ended_at.isoformat(),
                     result.status,
+                    result.dqt_version,
                 ),
             )
             conn.executemany(
@@ -331,6 +368,78 @@ class RunStore:
                 """,
                 [self._issue_row(i) for i in result.issues],
             )
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO run_rule_results
+                    (run_id, rule_name, targets_checked, targets_failed, targets_error)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        result.run_id,
+                        summary.rule_name,
+                        summary.targets_checked,
+                        summary.targets_failed,
+                        summary.targets_error,
+                    )
+                    for summary in result.rules_run
+                ],
+            )
+
+    def load_rule_results(self, run_id: str) -> list[dict[str, Any]]:
+        """Return one summary per rule evaluated in *run_id*.
+
+        Args:
+            run_id: The run to read.
+
+        Returns:
+            Plain dicts in rule-name order, each carrying ``run_id``,
+            ``rule_name``, ``targets_checked``, ``targets_failed`` and
+            ``targets_error``.
+
+        Example:
+            summaries = store.load_rule_results("run-001")
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT run_id, rule_name, targets_checked, targets_failed, targets_error
+                FROM run_rule_results
+                WHERE run_id = ?
+                ORDER BY rule_name
+                """,
+                (run_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def load_rule_history(self, rule_name: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Return one rule's results across runs, newest first.
+
+        Args:
+            rule_name: The rule to follow.
+            limit: Maximum entries returned.
+
+        Returns:
+            Plain dicts carrying the rule's counts plus the run's
+            ``started_at``, newest first.
+
+        Example:
+            history = store.load_rule_history("not-null-email")
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT r.run_id, r.rule_name, r.targets_checked, r.targets_failed,
+                       r.targets_error, runs.started_at
+                FROM run_rule_results AS r
+                JOIN runs ON runs.run_id = r.run_id
+                WHERE r.rule_name = ?
+                ORDER BY runs.started_at DESC, r.run_id DESC
+                LIMIT ?
+                """,
+                (rule_name, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Read
@@ -369,7 +478,7 @@ class RunStore:
             params.append(status)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
-            SELECT run_id, connection_id, started_at, ended_at, status
+            SELECT run_id, connection_id, started_at, ended_at, status, dqt_version
             FROM runs
             {where}
             ORDER BY started_at DESC
