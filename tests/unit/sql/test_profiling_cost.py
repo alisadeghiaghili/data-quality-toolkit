@@ -23,6 +23,7 @@ assertion.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -188,15 +189,22 @@ def profile_and_count(
         statements, profiles = profile_and_count(script)
     """
 
+    import dqt.sql.profiling as profiling_module
+
+    counter = itertools.count()
+    # Captured once, before any patching: on a second call the module
+    # attribute is already a wrapper, and re-reading it would chain wrappers
+    # so the first call's log collected the second call's statements too.
+    real_connect = profiling_module.get_connection
+
     def _run(script: str) -> tuple[list[str], Any]:
-        db_file = make_sqlite_db("perf.db", script)
+        # A fresh file per call: a test that profiles two schemas would
+        # otherwise re-run CREATE TABLE against the first one's database.
+        db_file = make_sqlite_db(f"perf{next(counter)}.db", script)
         config = ConnectionConfig(id="perf", dsn=f"sqlite:///{db_file}")
         tables = discover_schema(config)
 
         seen: list[str] = []
-        import dqt.sql.profiling as profiling_module
-
-        real_connect = profiling_module.get_connection
 
         def counting_connect(connection_config: ConnectionConfig) -> Any:
             wrapper = CountingConnection(real_connect(connection_config))
@@ -226,8 +234,7 @@ class TestProfilingIsSinglePass:
         statements, _ = profile_and_count(_wide_table(20))
 
         assert len(statements) == 1, (
-            f"profiling one table should cost one query, ran {len(statements)}: "
-            f"{statements}"
+            f"profiling one table should cost one query, ran {len(statements)}: {statements}"
         )
 
     def test_the_cost_does_not_grow_with_column_count(

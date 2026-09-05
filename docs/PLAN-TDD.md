@@ -1315,6 +1315,24 @@ re-measure before estimating precisely.
 
 ---
 
+> **Status update — 2026-09-05: single-pass profiling landed.** The first
+> scope item is done. `_profile_table` now issues one aggregate query per
+> table whatever its width, using `COUNT(*)` and `COUNT(col)` so the NULL
+> count is their difference rather than a predicate per column. Measured on
+> 50,000 rows: 20 columns 0.227s → 0.052s, 40 columns 0.745s → 0.092s. The
+> gap doubles when the column count doubles, which is the point — the old
+> shape scaled with schema width.
+>
+> The cost property is gated by query count rather than wall time
+> (`tests/unit/sql/test_profiling_cost.py`). A clock budget in CI is a flaky
+> test wearing a performance costume; a query count is deterministic and is
+> also the thing that actually scaled badly. `benchmarks/profile_benchmark.py`
+> reports the timings and is deliberately not a gate.
+>
+> Still open in this unit: set-based rules grouped per table, bounded
+> evidence, chunked reads, connection reuse across rules, and the
+> approximate-distinct option.
+
 ### 16. New unit, added 2026-09-04 — Performance and scale
 
 **Depends on:** nothing to start; cross-references unit 14 (`ARC-01`) below.

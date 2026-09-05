@@ -28,7 +28,7 @@ from typing import Any
 from dqt.common.models import ConnectionConfig, DQMetric
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.dialects import Dialect
-from dqt.sql.schema_discovery import DiscoveredColumn, DiscoveredTable
+from dqt.sql.schema_discovery import DiscoveredTable
 
 
 @dataclass(slots=True)
@@ -170,41 +170,51 @@ class SqlProfiler:
         return metrics
 
     def _profile_table(self, conn: Any, table: DiscoveredTable) -> TableProfile:
-        row_count = self._fetch_row_count(conn, table)
-        column_profiles = [
-            self._profile_column(conn, table, column, row_count) for column in table.columns
+        """Profile one table with a single aggregate query.
+
+        The row count and every column's NULL count come back from one scan.
+        This used to be one query per column plus a row count, so a
+        hundred-column table cost a hundred and one full scans to produce what
+        one pass can.
+
+        ``COUNT(*)`` counts rows and ``COUNT(col)`` counts non-NULL values, so
+        the NULL count is their difference -- no per-column predicate, and no
+        second look at the table.
+
+        Args:
+            conn: Open connection to the profiled database.
+            table: The table to profile.
+
+        Returns:
+            Its :class:`TableProfile`.
+
+        Example:
+            profile = profiler._profile_table(conn, table)
+        """
+        table_ref = self._dialect.qualified_identifier(table.schema_name, table.table_name)
+        expressions = ["COUNT(*)"] + [
+            f"COUNT({self._dialect.quote_identifier(column.column_name)})"
+            for column in table.columns
+        ]
+        statement = self._dialect.select_aggregates_sql(table_ref, expressions)
+        row = conn.execute(statement).fetchone()
+
+        # An aggregate over an empty table returns one row of zeros rather
+        # than no rows; reading it as "no result" would make row_count wrong.
+        row_count = int(row[0])
+        columns = [
+            ColumnProfile(
+                schema_name=column.schema_name,
+                table_name=column.table_name,
+                column_name=column.column_name,
+                null_count=row_count - int(row[position]),
+                row_count=row_count,
+            )
+            for position, column in enumerate(table.columns, start=1)
         ]
         return TableProfile(
             schema_name=table.schema_name,
             table_name=table.table_name,
             row_count=row_count,
-            columns=column_profiles,
-        )
-
-    def _fetch_row_count(self, conn: Any, table: DiscoveredTable) -> int:
-        table_ref = self._dialect.qualified_identifier(table.schema_name, table.table_name)
-        statement = self._dialect.select_aggregates_sql(table_ref, ["COUNT(*)"])
-        cursor = conn.execute(statement)
-        return int(cursor.fetchone()[0])
-
-    def _profile_column(
-        self,
-        conn: Any,
-        table: DiscoveredTable,
-        column: DiscoveredColumn,
-        row_count: int,
-    ) -> ColumnProfile:
-        table_ref = self._dialect.qualified_identifier(table.schema_name, table.table_name)
-        col_ref = self._dialect.quote_identifier(column.column_name)
-        statement = self._dialect.select_aggregates_sql(
-            table_ref, ["COUNT(*)"], f"{col_ref} IS NULL"
-        )
-        cursor = conn.execute(statement)
-        null_count = int(cursor.fetchone()[0])
-        return ColumnProfile(
-            schema_name=column.schema_name,
-            table_name=column.table_name,
-            column_name=column.column_name,
-            null_count=null_count,
-            row_count=row_count,
+            columns=columns,
         )
