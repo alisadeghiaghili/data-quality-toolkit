@@ -30,6 +30,14 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **Persian, and right-to-left layout (`VIZ-4`).** `dqt.i18n` holds a fixed
+  English↔Persian glossary — a closed table, proved complete by a test, so a
+  missing translation fails CI instead of shipping an English word into a
+  Persian page. The screens render in either language, and **identifiers, SQL
+  and numbers keep their own direction**: inside an RTL block a browser
+  reorders bare Latin text, so `orders.customer_id` would still be present
+  but no longer correct. Charts do not mirror — a bar chart is a measurement.
+  CLI output and code stay English-only, unchanged.
 - **The first three screens (`VIZ-3`).** `GET /ui`, `/ui/runs/{id}` and
   `/ui/runs/{id}/issues` — server-rendered HTML from the same `dqt._html`
   builder and `dqt.viz` charts the report uses, added *beside* the JSON API

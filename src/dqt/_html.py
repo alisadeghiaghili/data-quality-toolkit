@@ -150,7 +150,7 @@ def table(headers: Sequence[str], rows: Iterable[Sequence[object]]) -> Raw:
     return element("table", header_row, *body)
 
 
-def document(*, title: str, body: Raw, css: str) -> Raw:
+def document(*, title: str, body: Raw, css: str, language: str = "en") -> Raw:
     """Wrap a body in a self-contained HTML document.
 
     Self-contained is the property that makes the report worth more to a DBA
@@ -162,6 +162,14 @@ def document(*, title: str, body: Raw, css: str) -> Raw:
         title: Document title, escaped.
         body: The assembled page content.
         css: Stylesheet text, inlined.
+        language: BCP 47 tag for the document. Persian is laid out
+            right-to-left; a browser left to infer direction from the
+            characters it sees first gets it wrong on a page that mixes
+            Persian prose with Latin identifiers, which is every page here.
+        language: BCP 47 tag for the document. Persian is laid out
+            right-to-left; a browser left to infer direction from the
+            characters it sees first gets it wrong on a page that mixes
+            Persian prose with Latin identifiers, which is every page here.
 
     Returns:
         The complete document.
@@ -169,9 +177,10 @@ def document(*, title: str, body: Raw, css: str) -> Raw:
     Example:
         page = document(title="Report", body=Raw("<h1>hi</h1>"), css="")
     """
+    direction = ' dir="rtl"' if language == "fa" else ""
     return Raw(
         "<!DOCTYPE html>\n"
-        '<html lang="en">\n'
+        f'<html lang="{html.escape(language)}"{direction}>\n'
         "<head>\n"
         '<meta charset="UTF-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'

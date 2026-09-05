@@ -32,6 +32,7 @@ from typing import Any
 
 from dqt._html import Raw, document, element, table
 from dqt.common.models import get_args_of_dq_dimension
+from dqt.i18n import Language, ltr_span, translate
 from dqt.viz import Chart, bar_chart, scorecard, severity_indicator
 
 __all__ = ["issues_page", "overview_page", "run_page"]
@@ -39,6 +40,26 @@ __all__ = ["issues_page", "overview_page", "run_page"]
 #: How many issues a page shows. The size of a response must not depend on
 #: how bad the data is -- the rule DQIssue evidence already follows.
 ISSUE_PAGE_SIZE = 50
+
+#: Keys the glossary can translate when they appear as chart labels.
+#:
+#: Severities and dimensions are vocabulary; a table name is not, and passing
+#: one to the glossary would raise on data rather than on a programming
+#: mistake.
+TRANSLATABLE = frozenset(
+    {
+        "completeness",
+        "validity",
+        "uniqueness",
+        "consistency",
+        "referential_integrity",
+        "timeliness",
+        "info",
+        "warning",
+        "error",
+        "critical",
+    }
+)
 
 #: How each run status is rendered. The word is the part that always works.
 _STATUS_CLASSES = {"success": "ok", "partial": "warn", "failed": "err"}
@@ -81,7 +102,7 @@ tr:nth-child(even) td { background: #f9f9f9; }
 """
 
 
-def _status_badge(status: str) -> Raw:
+def _status_badge(status: str, language: Language) -> Raw:
     """Render a run status as a labelled badge.
 
     Args:
@@ -94,7 +115,8 @@ def _status_badge(status: str) -> Raw:
     Example:
         assert "failed" in _status_badge("failed")
     """
-    return element("span", status, attrs={"class": f"badge {_STATUS_CLASSES.get(status, 'err')}"})
+    label = translate(status, language) if status in _STATUS_CLASSES else status
+    return element("span", label, attrs={"class": f"badge {_STATUS_CLASSES.get(status, 'err')}"})
 
 
 def _chart_block(chart: Chart) -> Raw:
@@ -120,7 +142,7 @@ def _chart_block(chart: Chart) -> Raw:
     )
 
 
-def _run_header(run: Mapping[str, Any]) -> Raw:
+def _run_header(run: Mapping[str, Any], language: Language) -> Raw:
     """Render the run's identity and status, above everything else.
 
     Position is part of the contract. A status badge below three tables is a
@@ -139,22 +161,28 @@ def _run_header(run: Mapping[str, Any]) -> Raw:
     version = run.get("dqt_version") or "unknown"
     return element(
         "div",
-        element("h1", f"Run {run['run_id']}"),
+        element(
+            "h1",
+            f"{translate('run', language)} ",
+            Raw(ltr_span(run["run_id"])),
+        ),
         element(
             "p",
-            _status_badge(str(run.get("status", ""))),
+            _status_badge(str(run.get("status", "")), language),
             Raw(" &middot; "),
-            f"connection {run.get('connection_id', '')}",
+            f"{translate('connection', language)} ",
+            Raw(ltr_span(run.get("connection_id", ""))),
             Raw(" &middot; "),
-            f"started {run.get('started_at', '')}",
-            Raw(" &middot; "),
-            f"DQT {version}",
+            f"{translate('started', language)} ",
+            Raw(ltr_span(run.get("started_at", ""))),
+            Raw(" &middot; DQT "),
+            Raw(ltr_span(version)),
             attrs={"class": "meta"},
         ),
     )
 
 
-def _dimension_cards(scores: Mapping[str, float | None]) -> Raw:
+def _dimension_cards(scores: Mapping[str, float | None], language: Language) -> Raw:
     """Render one scorecard per dimension, measured or not.
 
     Every dimension in the vocabulary appears, including the ones nothing
@@ -172,17 +200,17 @@ def _dimension_cards(scores: Mapping[str, float | None]) -> Raw:
         cards = _dimension_cards({"completeness": 0.5})
     """
     cards = [
-        _chart_block(scorecard(dimension, score=scores.get(dimension)))
+        _chart_block(scorecard(translate(dimension, language), score=scores.get(dimension)))
         for dimension in sorted(get_args_of_dq_dimension())
     ]
     return element(
         "section",
-        element("h2", "Quality by dimension"),
+        element("h2", translate("quality_by_dimension", language)),
         element("div", *cards, attrs={"class": "dqt-cards"}),
     )
 
 
-def _counts_chart(counts: Mapping[str, int], *, title: str) -> Raw:
+def _counts_chart(counts: Mapping[str, int], *, title: str, language: Language) -> Raw:
     """Chart a mapping of counts.
 
     Args:
@@ -196,7 +224,11 @@ def _counts_chart(counts: Mapping[str, int], *, title: str) -> Raw:
         section = _counts_chart({"error": 2}, title="Issues by severity")
     """
     chart = bar_chart(
-        [(label, float(count)) for label, count in sorted(counts.items())], title=title
+        [
+            (translate(label, language) if label in TRANSLATABLE else label, float(count))
+            for label, count in sorted(counts.items())
+        ],
+        title=title,
     )
     return element("section", element("h2", title), _chart_block(chart))
 
@@ -224,7 +256,7 @@ def _breadcrumbs(*trail: tuple[str, str | None]) -> Raw:
     return element("nav", *parts)
 
 
-def _page(title: str, *sections: object) -> str:
+def _page(title: str, language: Language, *sections: object) -> str:
     """Wrap sections in a complete, self-contained document.
 
     Args:
@@ -237,7 +269,12 @@ def _page(title: str, *sections: object) -> str:
     Example:
         html = _page("Overview", element("h1", "hi"))
     """
-    return document(title=f"DQT - {title}", body=element("div", *sections), css=_CSS)
+    return document(
+        title=f"DQT - {title}",
+        body=element("div", *sections),
+        css=_CSS,
+        language=language,
+    )
 
 
 def overview_page(
@@ -247,6 +284,7 @@ def overview_page(
     dimension_scores: Mapping[str, float | None],
     issues_by_severity: Mapping[str, int],
     issues_by_dimension: Mapping[str, int],
+    language: Language = "en",
 ) -> str:
     """Render the overview: how is this run, and where do I look first.
 
@@ -256,6 +294,10 @@ def overview_page(
         dimension_scores: Score per dimension; absent means not measured.
         issues_by_severity: Issue counts by severity.
         issues_by_dimension: Issue counts by dimension.
+        language: Which language to render in. Persian lays the page out
+            right-to-left, but identifiers and numbers keep their own
+            direction -- a reordered table name is wrong while still looking
+            like data.
 
     Returns:
         The page HTML.
@@ -268,33 +310,52 @@ def overview_page(
     """
     if run is None:
         return _page(
-            "Overview",
-            _breadcrumbs(("Overview", None)),
+            translate("overview", language),
+            language,
+            _breadcrumbs((translate("overview", language), None)),
             element("h1", "DQT"),
-            element("p", "No runs recorded yet.", attrs={"class": "empty"}),
+            element("p", translate("no_runs", language), attrs={"class": "empty"}),
         )
 
     recent = table(
-        ["Run", "Status", "Started", "Connection"],
+        [
+            translate("run", language),
+            translate("status", language),
+            translate("started", language),
+            translate("connection", language),
+        ],
         [
             [
-                element("a", str(entry["run_id"]), attrs={"href": f"/ui/runs/{entry['run_id']}"}),
-                _status_badge(str(entry.get("status", ""))),
-                entry.get("started_at", ""),
-                entry.get("connection_id", ""),
+                element(
+                    "a",
+                    Raw(ltr_span(entry["run_id"])),
+                    attrs={"href": f"/ui/runs/{entry['run_id']}"},
+                ),
+                _status_badge(str(entry.get("status", "")), language),
+                Raw(ltr_span(entry.get("started_at", ""))),
+                Raw(ltr_span(entry.get("connection_id", ""))),
             ]
             for entry in runs
         ],
     )
 
     return _page(
-        "Overview",
-        _breadcrumbs(("Overview", None)),
-        _run_header(run),
-        _dimension_cards(dimension_scores),
-        _counts_chart(issues_by_dimension, title="Issues by dimension"),
-        _counts_chart(issues_by_severity, title="Issues by severity"),
-        element("h2", "Recent runs"),
+        translate("overview", language),
+        language,
+        _breadcrumbs((translate("overview", language), None)),
+        _run_header(run, language),
+        _dimension_cards(dimension_scores, language),
+        _counts_chart(
+            issues_by_dimension,
+            title=translate("issues_by_dimension", language),
+            language=language,
+        ),
+        _counts_chart(
+            issues_by_severity,
+            title=translate("issues_by_severity", language),
+            language=language,
+        ),
+        element("h2", translate("recent_runs", language)),
         recent,
     )
 
@@ -305,6 +366,7 @@ def run_page(
     tables: Sequence[Mapping[str, Any]],
     dimension_scores: Mapping[str, float | None],
     issues_by_severity: Mapping[str, int],
+    language: Language = "en",
 ) -> str:
     """Render the explorer: which table is worst.
 
@@ -313,6 +375,7 @@ def run_page(
         tables: Table summaries, each with at least ``table_name``.
         dimension_scores: Score per dimension; absent means not measured.
         issues_by_severity: Issue counts by severity.
+        language: Which language to render in.
 
     Returns:
         The page HTML.
@@ -322,31 +385,48 @@ def run_page(
             run=run, tables=[], dimension_scores={}, issues_by_severity={}
         )
     """
-    rows = [
+    rows: list[list[object]] = [
         [
-            entry.get("schema_name") or "",
-            entry.get("table_name") or "",
+            Raw(ltr_span(entry.get("schema_name") or "")),
+            Raw(ltr_span(entry.get("table_name") or "")),
             entry.get("issue_count", 0),
         ]
         for entry in tables
     ]
     body = (
-        table(["Schema", "Table", "Issues"], rows)
+        table(
+            [
+                translate("schema", language),
+                translate("table", language),
+                translate("issues", language),
+            ],
+            rows,
+        )
         if rows
-        else element("p", "No tables were profiled in this run.", attrs={"class": "empty"})
+        else element("p", translate("no_tables", language), attrs={"class": "empty"})
     )
+    heading = f"{translate('run', language)} {run['run_id']}"
 
     return _page(
-        f"Run {run['run_id']}",
-        _breadcrumbs(("Overview", "/ui"), (f"Run {run['run_id']}", None)),
-        _run_header(run),
-        _dimension_cards(dimension_scores),
-        _counts_chart(issues_by_severity, title="Issues by severity"),
-        element("h2", "Tables"),
+        heading,
+        language,
+        _breadcrumbs((translate("overview", language), "/ui"), (heading, None)),
+        _run_header(run, language),
+        _dimension_cards(dimension_scores, language),
+        _counts_chart(
+            issues_by_severity,
+            title=translate("issues_by_severity", language),
+            language=language,
+        ),
+        element("h2", translate("tables", language)),
         body,
         element(
             "p",
-            element("a", "View issues", attrs={"href": f"/ui/runs/{run['run_id']}/issues"}),
+            element(
+                "a",
+                translate("view_issues", language),
+                attrs={"href": f"/ui/runs/{run['run_id']}/issues"},
+            ),
         ),
     )
 
@@ -356,6 +436,7 @@ def issues_page(
     run: Mapping[str, Any],
     issues: Sequence[Mapping[str, Any]],
     total: int,
+    language: Language = "en",
 ) -> str:
     """Render the issue list: what is wrong, and enough context to act.
 
@@ -367,6 +448,7 @@ def issues_page(
         run: The run the issues belong to.
         issues: The page of issues to show.
         total: How many issues the run has in all.
+        language: Which language to render in.
 
     Returns:
         The page HTML.
@@ -374,43 +456,79 @@ def issues_page(
     Example:
         html = issues_page(run=run, issues=[], total=0)
     """
-    rows = [
+    rows: list[list[object]] = [
         [
-            _severity_cell(str(issue.get("severity", ""))),
-            issue.get("dimension", ""),
-            issue.get("table_name") or "",
-            issue.get("column_name") or "",
+            _severity_cell(str(issue.get("severity", "")), language),
+            _translated_or_raw(str(issue.get("dimension", "")), language),
+            Raw(ltr_span(issue.get("table_name") or "")),
+            Raw(ltr_span(issue.get("column_name") or "")),
             issue.get("message", ""),
         ]
         for issue in issues
     ]
     body = (
-        table(["Severity", "Dimension", "Table", "Column", "Message"], rows)
+        table(
+            [
+                translate("severity", language),
+                translate("dimension", language),
+                translate("table", language),
+                translate("column", language),
+                translate("message", language),
+            ],
+            rows,
+        )
         if rows
-        else element("p", "No issues were found in this run.", attrs={"class": "empty"})
+        else element("p", translate("no_issues", language), attrs={"class": "empty"})
     )
 
     shown = element(
         "p",
-        f"Showing {len(issues)} of {total} issue(s).",
+        Raw(ltr_span(len(issues))),
+        " / ",
+        Raw(ltr_span(total)),
         attrs={"class": "meta"},
     )
+    heading = f"{translate('issues', language)} - {run['run_id']}"
 
     return _page(
-        f"Issues - {run['run_id']}",
+        heading,
+        language,
         _breadcrumbs(
-            ("Overview", "/ui"),
-            (f"Run {run['run_id']}", f"/ui/runs/{run['run_id']}"),
-            ("Issues", None),
+            (translate("overview", language), "/ui"),
+            (
+                f"{translate('run', language)} {run['run_id']}",
+                f"/ui/runs/{run['run_id']}",
+            ),
+            (translate("issues", language), None),
         ),
-        _run_header(run),
-        element("h2", "Issues"),
+        _run_header(run, language),
+        element("h2", translate("issues", language)),
         shown,
         body,
     )
 
 
-def _severity_cell(severity: str) -> Raw:
+def _translated_or_raw(value: str, language: Language) -> str:
+    """Translate *value* when it is vocabulary, and leave it alone otherwise.
+
+    A dimension is vocabulary; a value that arrived from an older store, or
+    from a future DQT, is data. Passing data to the glossary would raise on
+    a row rather than on a programming mistake, and lose the page.
+
+    Args:
+        value: The word to render.
+        language: Which language to render in.
+
+    Returns:
+        The translated word, or *value* unchanged.
+
+    Example:
+        assert _translated_or_raw("completeness", "en") == "completeness"
+    """
+    return translate(value, language) if value in TRANSLATABLE else value
+
+
+def _severity_cell(severity: str, language: Language) -> Raw:
     """Render a severity as a shape and its word.
 
     Args:
@@ -424,8 +542,9 @@ def _severity_cell(severity: str) -> Raw:
     Example:
         cell = _severity_cell("error")
     """
+    label = _translated_or_raw(severity, language)
     try:
         indicator = severity_indicator(severity)
     except ValueError:
-        return element("span", severity, attrs={"class": "badge"})
-    return Raw(indicator.svg + element("span", severity, attrs={"class": "badge"}))
+        return element("span", label, attrs={"class": "badge"})
+    return Raw(indicator.svg + element("span", label, attrs={"class": "badge"}))
