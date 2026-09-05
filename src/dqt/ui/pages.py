@@ -32,6 +32,7 @@ from typing import Any
 
 from dqt._html import Raw, document, element, table
 from dqt.common.models import get_args_of_dq_dimension
+from dqt.fonts import embedded_font_face
 from dqt.i18n import Language, ltr_span, translate
 from dqt.viz import Chart, bar_chart, scorecard, severity_indicator
 
@@ -269,10 +270,12 @@ def _page(title: str, language: Language, *sections: object) -> str:
     Example:
         html = _page("Overview", element("h1", "hi"))
     """
+    # The font is prepended rather than appended so a reader's own stylesheet
+    # overrides can still win, and so an English page pays nothing for it.
     return document(
         title=f"DQT - {title}",
         body=element("div", *sections),
-        css=_CSS,
+        css=embedded_font_face(language) + _CSS,
         language=language,
     )
 

@@ -59,7 +59,7 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
     "completeness": {"en": "completeness", "fa": "کامل بودن"},
     "validity": {"en": "validity", "fa": "اعتبار"},
     "uniqueness": {"en": "uniqueness", "fa": "یکتایی"},
-    "consistency": {"en": "consistency", "fa": "سازگاری"},
+    "consistency": {"en": "consistency", "fa": "هم‌خوانی"},
     "referential_integrity": {"en": "referential integrity", "fa": "یکپارچگی ارجاعی"},
     "timeliness": {"en": "timeliness", "fa": "به‌هنگام بودن"},
     # Severities

@@ -141,3 +141,31 @@ class TestDataDoesNotFlip:
             return [part.split(">")[0] for part in html.split("<rect class=")[1:]]
 
         assert bars(english) == bars(persian)
+
+
+class TestAPersianPageCarriesItsFont:
+    """`docs/PLAN-VIZ-UI.md` §5: shaping is not optional for Persian.
+
+    A page that renders Persian in whatever the machine happens to have is
+    often rendering it in a font with no Arabic-script shaping — letters that
+    should join stand apart, and the words stop being words. That is not a
+    degraded rendering, it is an unreadable one.
+    """
+
+    def test_persian_inlines_the_font(self) -> None:
+        """Inlined, so the page still works on a machine without it."""
+        html = _overview("fa")
+
+        assert "@font-face" in html
+        assert "data:font/woff2;base64," in html
+
+    def test_english_does_not_pay_for_it(self) -> None:
+        """Sixty-odd kilobytes to render text with no Persian in it."""
+        assert "@font-face" not in _overview("en")
+
+    def test_the_font_is_not_fetched_from_anywhere(self) -> None:
+        """Self-contained is the property the whole delivery mode rests on."""
+        html = _overview("fa")
+
+        assert "fonts.googleapis.com" not in html
+        assert "src: url(data:" in html
