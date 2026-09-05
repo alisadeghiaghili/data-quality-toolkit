@@ -107,16 +107,47 @@ class TestApproximateDistinct:
 
 
 class TestIntrospectionSql:
-    def test_column_metadata_sql_is_unchanged_from_the_pre_move_query(self):
-        # Hand-compared against schema_discovery._discover_postgres as it
-        # stood on main before DQT-08.
+    def test_column_metadata_sql_reads_the_right_catalog(self):
+        """The query still asks information_schema and excludes system schemas.
+
+        This used to assert the text byte-for-byte against the pre-`DQT-08`
+        query, which was the right check for a move that was supposed to
+        change nothing. `NEW-M` deliberately extended it, so the assertion is
+        now on the properties that have to hold rather than on a frozen
+        string -- a snapshot test of SQL that is expected to grow only ever
+        reports that it grew.
+        """
         normalised = " ".join(COLUMN_METADATA_SQL.split())
-        assert normalised == (
-            "SELECT table_schema, table_name, column_name, data_type, is_nullable "
-            "FROM information_schema.columns "
-            "WHERE table_schema NOT IN ('information_schema', 'pg_catalog') "
-            "ORDER BY table_schema, table_name, ordinal_position"
-        )
+
+        assert "information_schema.columns" in normalised
+        assert "NOT IN ('information_schema', 'pg_catalog')" in normalised
+        assert "ORDER BY c.table_schema, c.table_name, c.ordinal_position" in normalised
+
+    def test_column_metadata_sql_reports_primary_keys(self):
+        """`NEW-M` needs to know which columns form the key.
+
+        Cleansing addresses rows by primary key so a stored plan still points
+        at the same rows when it is applied later; discovery is where that
+        information has to come from.
+        """
+        normalised = " ".join(COLUMN_METADATA_SQL.split())
+
+        assert "is_primary_key" in normalised
+        assert "table_constraints" in normalised
+        assert "'PRIMARY KEY'" in normalised
+
+    def test_a_table_without_a_primary_key_is_not_dropped_from_discovery(self):
+        """The key join is a LEFT JOIN, and that is load-bearing.
+
+        An inner join would hide every keyless table from discovery. DQT would
+        then profile a database and silently omit tables, which is worse than
+        the defect it is here to avoid -- and cleansing could not report that
+        a table has no key if it never saw the table.
+        """
+        normalised = " ".join(COLUMN_METADATA_SQL.split())
+
+        assert "LEFT JOIN information_schema.table_constraints" in normalised
+        assert "LEFT JOIN information_schema.key_column_usage" in normalised
 
 
 class TestReadOnlyEnforcementLevel:

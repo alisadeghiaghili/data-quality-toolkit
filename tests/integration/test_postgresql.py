@@ -32,6 +32,28 @@ from dqt.sql.profiling import SqlProfiler
 from dqt.sql.rules import apply_rules
 from dqt.sql.schema_discovery import discover_schema
 
+
+class _NullStore:
+    """A store for calls that fail before anything is persisted.
+
+    Example:
+        cleanse_plan(config, configs, store=_NullStore())
+    """
+
+    def save_cleansing_plan(self, plan: object) -> None:
+        """Discard the plan.
+
+        Args:
+            plan: Ignored.
+
+        Returns:
+            None.
+
+        Example:
+            _NullStore().save_cleansing_plan(plan)
+        """
+
+
 POSTGRES_DSN = os.environ.get("DQT_POSTGRES_TEST_DSN")
 
 pytestmark = pytest.mark.skipif(
@@ -123,14 +145,6 @@ class TestReadOnlyIsActuallyEnforced:
         finally:
             connection.close()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "NEW-M: cleansing addresses rows by SQLite's rowid, which "
-            "PostgreSQL does not have. Strict, so fixing NEW-M forces this "
-            "marker to be removed rather than left to rot."
-        ),
-    )
     def test_cleanse_apply_refuses_before_reaching_the_server(self, seeded_table: str) -> None:
         """DQT's own guard fires first, so the server is the second line.
 
@@ -223,3 +237,100 @@ class TestTheDialectWorksAgainstTheServer:
         config = ConnectionConfig(id="pg", dsn=str(POSTGRES_DSN))
 
         assert get_dialect_for(config).name == "postgresql"
+
+
+class TestRowIdentityOnPostgresql:
+    """`NEW-M`: cleansing addresses rows by primary key here, not by ``ctid``.
+
+    These are the assertions that could not exist before. Cleansing failed on
+    PostgreSQL outright with ``UndefinedColumn: column "rowid" does not
+    exist``, so nothing downstream of a connection was reachable.
+    """
+
+    def test_the_dialect_offers_no_physical_locator(self) -> None:
+        """PostgreSQL reports None, and that refusal is the design.
+
+        ``ctid`` exists and would have made the code run. It also moves on
+        UPDATE and under VACUUM FULL, so a plan applied in a later process
+        could address whatever now sits at the recorded position. Reporting
+        None makes cleansing demand a primary key instead of silently
+        corrupting a keyless table.
+        """
+        config = ConnectionConfig(id="pg", dsn=str(POSTGRES_DSN))
+
+        assert get_dialect_for(config).physical_row_locator is None
+
+    def test_discovery_reports_the_primary_key(self, seeded_table: str) -> None:
+        """The key has to come from the database, and here it does.
+
+        Ground truth: the fixture declares ``id INTEGER PRIMARY KEY``.
+        """
+        config = ConnectionConfig(id="pg", dsn=str(POSTGRES_DSN))
+        table = next(t for t in discover_schema(config) if t.table_name == seeded_table)
+
+        assert [c.column_name for c in table.columns if c.is_primary_key] == ["id"]
+
+    def test_a_keyless_table_is_still_discovered(self) -> None:
+        """The primary-key join is a LEFT JOIN, checked against a real server.
+
+        An inner join would hide keyless tables from discovery entirely, so
+        DQT would profile a database and silently omit them -- worse than the
+        defect it is here to avoid.
+        """
+        table_name = f"dqt_nokey_{uuid.uuid4().hex[:8]}"
+        writable = ConnectionConfig(id="pg-setup", dsn=str(POSTGRES_DSN), read_only=False)
+        connection = get_connection(writable)
+        try:
+            connection.cursor().execute(f"CREATE TABLE {table_name} (a TEXT, b TEXT)")
+            connection.commit()
+        finally:
+            connection.close()
+
+        try:
+            config = ConnectionConfig(id="pg", dsn=str(POSTGRES_DSN))
+            tables = {t.table_name for t in discover_schema(config)}
+
+            assert table_name in tables
+        finally:
+            connection = get_connection(writable)
+            try:
+                connection.cursor().execute(f"DROP TABLE IF EXISTS {table_name}")
+                connection.commit()
+            finally:
+                connection.close()
+
+    def test_cleansing_a_keyless_table_refuses_and_says_why(self) -> None:
+        """The error names the table and the fix, rather than failing in SQL.
+
+        Before `NEW-M` this failed with UndefinedColumn from inside a query,
+        which told a DBA nothing. Now it refuses up front and says to add a
+        primary key.
+        """
+        table_name = f"dqt_nokey_{uuid.uuid4().hex[:8]}"
+        writable = ConnectionConfig(id="pg-setup", dsn=str(POSTGRES_DSN), read_only=False)
+        connection = get_connection(writable)
+        try:
+            connection.cursor().execute(f"CREATE TABLE {table_name} (a TEXT, b TEXT)")
+            connection.commit()
+        finally:
+            connection.close()
+
+        try:
+            configs = [
+                CleansingConfig(
+                    table_name=table_name,
+                    column_name="a",
+                    operation="standardize",
+                    params={"trim": True},
+                )
+            ]
+
+            with pytest.raises(ValueError, match="primary key"):
+                cleanse_plan(writable, configs, store=_NullStore())
+        finally:
+            connection = get_connection(writable)
+            try:
+                connection.cursor().execute(f"DROP TABLE IF EXISTS {table_name}")
+                connection.commit()
+            finally:
+                connection.close()
