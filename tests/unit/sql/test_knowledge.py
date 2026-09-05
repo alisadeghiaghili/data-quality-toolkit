@@ -160,12 +160,12 @@ class TestTheQueryIsSetBasedAndBound:
         assert '"city" IS NOT NULL' in flattened
 
     def test_a_table_reference_is_an_anti_join(self) -> None:
-        """A LEFT JOIN, not a subquery evaluated once per row.
+        """A LEFT JOIN, not a value-list subquery.
 
-        ``NOT IN (SELECT ...)`` would also be one statement, and on several
-        engines it is a correlated scan with NULL semantics that silently
-        return nothing when the reference column has a NULL in it. The join
-        is the shape a planner can index.
+        ``NOT IN (SELECT ...)`` would also be one statement, but a single
+        NULL in the reference column makes the whole predicate UNKNOWN and
+        the rule reports nothing wrong at all -- a false clean bill of
+        health. The join is also the shape a planner can index.
         """
         sql, binds = unmatched_count_query(
             SQLITE,
@@ -179,7 +179,27 @@ class TestTheQueryIsSetBasedAndBound:
         assert binds == ()
         assert "LEFT JOIN" in flattened
         assert flattened.split()[0] == "SELECT"
-        assert flattened.count("SELECT") == 1, f"no subquery expected: {flattened}"
+        assert "NOT IN (SELECT" not in flattened
+
+    def test_the_reference_values_are_de_duplicated_before_joining(self) -> None:
+        """A reference column may repeat a value; the denominator must not.
+
+        Without ``SELECT DISTINCT`` a value listed twice matches each data
+        row twice, so "how many did we check" grows and the column looks
+        cleaner than it is -- the direction of error that hides problems.
+        ``test_rules_grouped.py`` exercises the same thing against a
+        database.
+        """
+        sql, _ = unmatched_count_query(
+            SQLITE,
+            None,
+            "people",
+            "city",
+            ReferenceTable(table_name="ref_cities", column_name="name"),
+        )
+        flattened = " ".join(sql.split())
+
+        assert "LEFT JOIN (SELECT DISTINCT" in flattened
 
     def test_the_reference_table_is_quoted(self) -> None:
         """Identifiers are quoted, values are bound -- the standing rule."""

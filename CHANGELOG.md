@@ -56,6 +56,14 @@ Dates are the merge dates on `main`.
 
 ### Changed
 
+- **Rules on the same table share one scan.** Each check compiles to
+  aggregate expressions rather than to a statement, and the checks over a
+  table run as a single `SELECT` — what `CLAUDE.md` §3 asks for. Twenty rules
+  on one table cost one pass, not twenty. A `REFERENCE` rule pointing at a
+  reference table still pays its own scan, because the join it needs changes
+  which rows the other aggregates would see. A batch the database rejects is
+  retried one check at a time, so a mistake in one rule costs that rule's
+  verdict rather than the table's whole report.
 - **Cleansing reads are paged by row identity** rather than taken in one
   `fetchall()`, so planning a cleanse of a very large table no longer builds
   a Python list the size of the table. Paged rather than streamed because
@@ -67,6 +75,13 @@ Dates are the merge dates on `main`.
 
 ### Fixed
 
+- **`regex` rules cost two queries**, a bare row count followed by the match.
+  The query-budget test never parametrised `regex`, so the pass that removed
+  exactly that shape from `RANGE` and `UNIQUE` walked past it.
+- **A reference table holding a value twice inflated the denominator.** The
+  join matched each data row once per repeat, so "how many values did we
+  check" grew and the column looked cleaner than it was — the direction of
+  error that hides problems. The join now reads distinct reference values.
 - **`NEW-M`** — cleansing addressed rows by SQLite's `rowid`, so every
   cleansing entry point failed on PostgreSQL and SQL Server. Rows are now
   addressed by primary key; deduplication's `MIN(rowid)` ordering became a

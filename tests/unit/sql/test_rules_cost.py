@@ -125,7 +125,7 @@ def run_rules_and_count(
     return _run
 
 
-class TestTheTableIsReadOncePerRuleAtMost:
+class TestTheTableIsReadOnce:
     """The denominator is a property of the table, not of each rule."""
 
     @pytest.mark.parametrize(
@@ -154,14 +154,20 @@ class TestTheTableIsReadOncePerRuleAtMost:
 
         assert len(statements) == 1, f"ran {len(statements)}: {statements}"
 
-    def test_four_rules_cost_four_queries(
+    def test_four_rules_on_one_table_cost_one_query(
         self, run_rules_and_count: Callable[[list[RuleConfig]], tuple[list[str], Any]]
     ) -> None:
-        """The cost is the rule count, and nothing else.
+        """The cost is the table count, not the rule count.
 
-        One query per rule is the honest floor: each rule tests something
-        different and has to look at the data. What is not the floor is a
-        second scan per rule to count rows the first scan already saw.
+        This test used to assert one query *per rule* and to call that the
+        honest floor. It was not: ``CLAUDE.md`` §3 asks for rules on the same
+        table to be grouped so the table is scanned once, and four rules over
+        the same rows need four denominators and four violation counts that
+        one pass can produce.
+
+        ``tests/unit/sql/test_rules_grouped.py`` owns that property and the
+        reasoning behind it; the assertion is kept here so this file cannot
+        quietly go on describing the older, weaker shape.
         """
         rules = [
             _rule("r1", "email", "NOT NULL"),
@@ -172,8 +178,8 @@ class TestTheTableIsReadOncePerRuleAtMost:
 
         statements, _ = run_rules_and_count(rules)
 
-        assert len(statements) == len(rules), (
-            f"budget is one query per rule ({len(rules)}), ran {len(statements)}: {statements}"
+        assert len(statements) == 1, (
+            f"one table means one scan, ran {len(statements)}: {statements}"
         )
 
     def test_no_rule_issues_a_bare_row_count(

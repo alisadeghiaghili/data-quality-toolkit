@@ -370,6 +370,112 @@ class TestOneBadRuleDoesNotBlankTheTable:
         assert "params.min" in by_rule["r2"].message
         assert [s.targets_error for s in summaries] == [0, 1, 0]
 
+    def test_a_regex_rule_with_no_pattern_is_refused_by_name(self, run_rules: RunRules) -> None:
+        """The other compile-time refusal, so both are covered rather than one.
+
+        A ``regex`` rule without a pattern cannot be compiled into anything.
+        Reporting it as an error names the fix; evaluating it against an
+        empty pattern would report a clean column that was never checked.
+        """
+        _, issues, summaries = run_rules(
+            [
+                _rule("r1", "people", "email", "regex"),
+                _rule("r2", "people", "email", "NOT NULL"),
+            ]
+        )
+        by_rule = {issue.rule_name: issue for issue in issues}
+
+        assert "params.pattern" in by_rule["r1"].message
+        assert by_rule["r2"].evidence == {"null_count": 1, "total_rows": 3}
+        assert [summary.targets_error for summary in summaries] == [1, 0]
+
+    def test_a_batch_the_database_rejects_is_retried_one_at_a_time(
+        self,
+        make_sqlite_db: Callable[[str, str], Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The fallback itself, exercised rather than assumed.
+
+        The test above fails a rule at *compile* time, which never reaches
+        the database. This one fails the batched **query** while each check
+        would succeed alone -- the case the retry exists for, and the only
+        way to see it is to make the batched call fail on purpose.
+
+        The seam is ``_run_aggregate``: it is the single place the engine
+        talks to the cursor, so refusing multi-expression calls there is
+        exactly "the batch failed" and nothing else.
+        """
+        import dqt.sql.rules as rules_module
+
+        real_run_aggregate = rules_module._run_aggregate
+
+        def only_single_checks(
+            cursor: Any,
+            dialect: Any,
+            from_clause: str,
+            expressions: Any,
+            binds: Any,
+        ) -> Any:
+            if len(list(expressions)) > 2:
+                raise RuntimeError("batched statement rejected")
+            return real_run_aggregate(cursor, dialect, from_clause, expressions, binds)
+
+        monkeypatch.setattr(rules_module, "_run_aggregate", only_single_checks)
+
+        db_file = make_sqlite_db("retry.db", SEEDED)
+        config = ConnectionConfig(id="retry", dsn=f"sqlite:///{db_file}")
+        tables = discover_schema(config)
+
+        issues, summaries = apply_rules(
+            run_id="run-retry",
+            connection_config=config,
+            rules=[
+                _rule("r1", "people", "email", "NOT NULL"),
+                _rule("r2", "people", "email", "UNIQUE"),
+            ],
+            discovered_tables=tables,
+        )
+        by_rule = {issue.rule_name: issue for issue in issues}
+
+        assert by_rule["r1"].evidence == {"null_count": 1, "total_rows": 3}
+        assert by_rule["r2"].evidence["duplicate_extra_rows"] == 1
+        assert [summary.targets_error for summary in summaries] == [0, 0]
+
+    def test_a_check_that_fails_alone_too_is_reported_as_an_error(
+        self,
+        make_sqlite_db: Callable[[str, str], Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When the retry fails as well, the rule says so and the run goes on.
+
+        The end of the fallback: DQT has nothing left to try, so it reports
+        an error naming the rule rather than a verdict it did not compute.
+        Passing quietly is the one unacceptable outcome.
+        """
+        import dqt.sql.rules as rules_module
+
+        def always_fail(*_: Any, **__: Any) -> Any:
+            raise RuntimeError("the database said no")
+
+        monkeypatch.setattr(rules_module, "_run_aggregate", always_fail)
+
+        db_file = make_sqlite_db("retryfail.db", SEEDED)
+        config = ConnectionConfig(id="retryfail", dsn=f"sqlite:///{db_file}")
+        tables = discover_schema(config)
+
+        issues, summaries = apply_rules(
+            run_id="run-retry-fail",
+            connection_config=config,
+            rules=[_rule("r1", "people", "email", "NOT NULL")],
+            discovered_tables=tables,
+        )
+
+        assert issues[0].severity == "error"
+        assert "the database said no" in issues[0].message
+        assert summaries[0].targets_error == 1
+        assert summaries[0].targets_failed == 0
+
+
 class TestAReferenceTableWithRepeatsDoesNotInflateTheCounts:
     """Found while compiling the join into a fragment.
 

@@ -44,6 +44,7 @@ from dqt.sql._identifiers import qualified_identifier, quote_identifier
 from dqt.sql.dialects.base import Dialect
 
 __all__ = [
+    "ReferenceFragment",
     "ReferenceList",
     "ReferenceSet",
     "ReferenceTable",
@@ -90,6 +91,34 @@ class ReferenceTable:
 
 #: Either source of allowed values.
 ReferenceSet = ReferenceList | ReferenceTable
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceFragment:
+    """The pieces of a reference check, before they become a statement.
+
+    Returned rather than a finished query so the rule engine can put several
+    checks over the same table into one ``SELECT``. Everything a check needs
+    to say is in the expressions: a fragment never carries a ``WHERE``,
+    because a predicate belonging to one rule would silently filter the rows
+    every other rule in the batch counted.
+
+    Attributes:
+        expressions: The two aggregates, in order: how many non-NULL values
+            were checked, and how many were not found.
+        binds: Values for the placeholders in *expressions*.
+        join_clause: A join to append to the table reference, or None when
+            the check needs none. Only a reference *table* needs one, and a
+            check that carries one cannot share a query with checks that do
+            not -- the join changes which rows they would see.
+
+    Example:
+        fragment = unmatched_count_fragment(dialect, None, "t", "c", reference)
+    """
+
+    expressions: tuple[str, ...]
+    binds: tuple[Any, ...]
+    join_clause: str | None
 
 
 def reference_set_from_params(params: dict[str, Any]) -> ReferenceSet:
@@ -205,50 +234,102 @@ def unmatched_count_query(
     Example:
         sql, binds = unmatched_count_query(dialect, None, "t", "c", reference)
     """
+    fragment = unmatched_count_fragment(
+        dialect,
+        schema_name,
+        table_name,
+        column_name,
+        reference,
+        normalize_persian=normalize_persian,
+    )
+    table = qualified_identifier(schema_name, table_name)
+    from_clause = f"{table}{fragment.join_clause or ''}"
+    return (
+        dialect.select_aggregates_sql(from_clause, list(fragment.expressions)),
+        fragment.binds,
+    )
+
+
+def unmatched_count_fragment(
+    dialect: Dialect,
+    schema_name: str | None,
+    table_name: str,
+    column_name: str,
+    reference: ReferenceSet,
+    *,
+    normalize_persian: bool = False,
+) -> ReferenceFragment:
+    """Build the aggregates that count values absent from *reference*.
+
+    Two numbers from one pass: how many non-NULL values were checked, and
+    how many of them were not found. A NULL is "not applicable" rather than
+    "invalid" -- the reading ``regex_not_matching_predicate`` already takes
+    -- so NULLs are excluded rather than counted as violations, and they are
+    excluded inside a ``CASE`` rather than by a ``WHERE`` so the fragment can
+    share a query with other checks on the same table.
+
+    Args:
+        dialect: Dialect supplying quoting and the bind placeholder.
+        schema_name: Schema of the table under test, or None.
+        table_name: Table under test.
+        column_name: Column under test.
+        reference: Where the allowed values come from.
+        normalize_persian: Fold Persian and Arabic letter variants on both
+            sides before comparing. Off by default: changing values silently
+            is not a data-quality tool's job.
+
+    Returns:
+        The :class:`ReferenceFragment` describing the check.
+
+    Example:
+        fragment = unmatched_count_fragment(dialect, None, "t", "c", reference)
+    """
     table = qualified_identifier(schema_name, table_name)
     column = f"{table}.{quote_identifier(column_name)}"
     compared_column = persian_fold_expression(column) if normalize_persian else column
+    checked = f"COUNT({column})"
 
     if isinstance(reference, ReferenceList):
         placeholders = ", ".join([dialect.parameter_placeholder] * len(reference.values))
-        # The values are folded in Python rather than in SQL: they are known
-        # here, so wrapping each placeholder in twenty-odd REPLACE calls would
-        # ask the database to compute a constant.
+        # The allowed values are folded in Python rather than in SQL: they are
+        # already known here, so wrapping each placeholder in twenty-odd
+        # REPLACE calls would ask the database to recompute a constant once
+        # per row. The column still folds in SQL, because its values are the
+        # ones DQT has not seen.
         binds = tuple(
             _folded_in_python(value) if normalize_persian else value for value in reference.values
         )
-        return (
-            dialect.select_aggregates_sql(
-                table,
-                [
-                    f"COUNT({column})",
-                    f"SUM(CASE WHEN {compared_column} NOT IN ({placeholders}) THEN 1 ELSE 0 END)",
-                ],
-                f"{column} IS NOT NULL",
-            ),
-            binds,
+        unmatched = (
+            f"SUM(CASE WHEN {column} IS NOT NULL "
+            f"AND {compared_column} NOT IN ({placeholders}) THEN 1 ELSE 0 END)"
         )
+        return ReferenceFragment(expressions=(checked, unmatched), binds=binds, join_clause=None)
 
     reference_table = qualified_identifier(reference.schema_name, reference.table_name)
-    reference_column = f"{reference_table}.{quote_identifier(reference.column_name)}"
-    compared_reference = (
-        persian_fold_expression(reference_column) if normalize_persian else reference_column
+    alias = quote_identifier("dqt_reference")
+    allowed = f"{alias}.{quote_identifier(_REFERENCE_VALUE_ALIAS)}"
+    compared_reference = persian_fold_expression(allowed) if normalize_persian else allowed
+    # SELECT DISTINCT, not a bare join to the table. A reference column holding
+    # the same value twice would otherwise match each data row twice, and the
+    # "how many did we check" denominator would grow -- making a column look
+    # cleaner than it is, which is the direction of error that hides problems.
+    #
+    # A derived table rather than a correlated NOT IN (SELECT ...): the latter
+    # is one statement too, but a single NULL in the reference column makes the
+    # whole predicate UNKNOWN and the rule reports nothing wrong at all.
+    distinct_values = (
+        f"SELECT DISTINCT {quote_identifier(reference.column_name)} "
+        f"AS {quote_identifier(_REFERENCE_VALUE_ALIAS)} FROM {reference_table}"
     )
-    # The join is expressed as the table reference so the whole statement stays
-    # one call to the dialect: an already-quoted FROM clause is what
-    # select_aggregates_sql takes, and a join is a table reference.
-    joined = f"{table} LEFT JOIN {reference_table} ON {compared_column} = {compared_reference}"
-    return (
-        dialect.select_aggregates_sql(
-            joined,
-            [
-                f"COUNT({column})",
-                f"SUM(CASE WHEN {reference_column} IS NULL THEN 1 ELSE 0 END)",
-            ],
-            f"{column} IS NOT NULL",
-        ),
-        (),
+    join_clause = (
+        f" LEFT JOIN ({distinct_values}) AS {alias} ON {compared_column} = {compared_reference}"
     )
+    unmatched = f"SUM(CASE WHEN {column} IS NOT NULL AND {allowed} IS NULL THEN 1 ELSE 0 END)"
+    return ReferenceFragment(expressions=(checked, unmatched), binds=(), join_clause=join_clause)
+
+
+#: Column name the derived reference table exposes its values under.
+_REFERENCE_VALUE_ALIAS = "dqt_reference_value"
 
 
 def _folded_in_python(value: str) -> str:
