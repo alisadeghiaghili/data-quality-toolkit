@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Literals (reused across domain objects)
@@ -522,6 +522,14 @@ class SamplingConfig(BaseModel):
         cfg = SamplingConfig(strategy="random", limit=5000, seed=42)
     """
 
+    # An unknown key is a mistake, not a suggestion. pydantic ignores extras by
+    # default, which means "exclude_tabels" parses cleanly and DQT profiles
+    # every table the author meant to skip. read_only is the reassuring case
+    # rather than the representative one -- its default is already True, so
+    # misspelling it fails safe; every other key fails in the direction of
+    # doing more than was asked.
+    model_config = ConfigDict(extra="forbid")
+
     strategy: Literal["random", "first_n"] = "random"
     limit: int = Field(default=10_000, gt=0, description="Maximum rows to sample.")
     seed: int | None = Field(default=None, description="Random seed for reproducibility.")
@@ -546,6 +554,14 @@ class RuleScope(BaseModel):
 
         scope = RuleScope(table_pattern="customers", column_pattern="email")
     """
+
+    # An unknown key is a mistake, not a suggestion. pydantic ignores extras by
+    # default, which means "exclude_tabels" parses cleanly and DQT profiles
+    # every table the author meant to skip. read_only is the reassuring case
+    # rather than the representative one -- its default is already True, so
+    # misspelling it fails safe; every other key fails in the direction of
+    # doing more than was asked.
+    model_config = ConfigDict(extra="forbid")
 
     schema_pattern: str | None = None
     table_pattern: str | None = None
@@ -579,6 +595,14 @@ class ConnectionConfig(BaseModel):
             ssl={"sslmode": "require"},
         )
     """
+
+    # An unknown key is a mistake, not a suggestion. pydantic ignores extras by
+    # default, which means "exclude_tabels" parses cleanly and DQT profiles
+    # every table the author meant to skip. read_only is the reassuring case
+    # rather than the representative one -- its default is already True, so
+    # misspelling it fails safe; every other key fails in the direction of
+    # doing more than was asked.
+    model_config = ConfigDict(extra="forbid")
 
     id: str = Field(..., min_length=1, description="Unique connection identifier.")
     dsn: str = Field(..., min_length=1, description="Database DSN; may use ${ENV_VAR} expansion.")
@@ -641,6 +665,14 @@ class DQPipelineConfig(BaseModel):
             rule_files=["rules/base.yaml", "rules/project_specific.yaml"],
         )
     """
+
+    # An unknown key is a mistake, not a suggestion. pydantic ignores extras by
+    # default, which means "exclude_tabels" parses cleanly and DQT profiles
+    # every table the author meant to skip. read_only is the reassuring case
+    # rather than the representative one -- its default is already True, so
+    # misspelling it fails safe; every other key fails in the direction of
+    # doing more than was asked.
+    model_config = ConfigDict(extra="forbid")
 
     connection_id: str = Field(..., min_length=1)
     include_schemas: list[str] | None = None
@@ -738,6 +770,14 @@ class RuleConfig(BaseModel):
             params={},
         )
     """
+
+    # An unknown key is a mistake, not a suggestion. pydantic ignores extras by
+    # default, which means "exclude_tabels" parses cleanly and DQT profiles
+    # every table the author meant to skip. read_only is the reassuring case
+    # rather than the representative one -- its default is already True, so
+    # misspelling it fails safe; every other key fails in the direction of
+    # doing more than was asked.
+    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(..., min_length=1, description="Unique rule identifier.")
     dimension: str = Field(..., min_length=1)

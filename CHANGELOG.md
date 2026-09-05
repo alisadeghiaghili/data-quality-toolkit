@@ -15,6 +15,19 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **The config-file schema is frozen, and now refuses unknown keys.** The
+  accepted keys of all five config models are pinned by name and by equality,
+  and their defaults with them. Unknown keys used to be **silently ignored**:
+  `exclude_tabels` parsed cleanly and DQT profiled every table the author
+  meant to skip. `read_only` is the reassuring case rather than the
+  representative one — its default is already `true`, so misspelling it fails
+  safe; every other key failed in the direction of doing *more* than was
+  asked. Fixing this after `1.0.0` would break configs that currently parse,
+  which is why it belongs in the freeze candidate.
+- **The documented surfaces are held by tests.** Every symbol in
+  `dqt.__all__`, every CLI flag (including that a closed-choice flag names its
+  choices) and every `dqt.ui.api` function is checked for documentation.
+
 - **An architecture gate (`ARC-01`).** `tools/arch_audit.py` checks what
   `CLAUDE.md` §2 states in prose: dependencies point inward, drivers live only
   in `sql/dialects/`, no module outside that package branches on a dialect
