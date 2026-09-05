@@ -30,6 +30,11 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **Python 3.14 is supported**, and the claim is tied to its evidence: a test
+  reads both `pyproject.toml`'s classifiers and the CI matrix and fails if
+  either names a version the other does not. A classifier with no CI run is
+  an unbacked claim of the most expensive kind — someone installs on that
+  version because the metadata said so.
 - **The rules screen (`VIZ-6`).** `GET /ui/runs/{id}/rules` lists what each
   rule did, and `GET /ui/rules/{name}` follows one rule across runs. The
   screen exists for the zero: a rule whose scope matches nothing reports no
