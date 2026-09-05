@@ -1329,9 +1329,24 @@ re-measure before estimating precisely.
 > also the thing that actually scaled badly. `benchmarks/profile_benchmark.py`
 > reports the timings and is deliberately not a gate.
 >
-> Still open in this unit: set-based rules grouped per table, bounded
-> evidence, chunked reads, connection reuse across rules, and the
-> approximate-distinct option.
+> **2026-09-05, second pass: the rule engine.** Measured rather than assumed,
+> and the assumption was wrong: `NOT NULL` already combined its denominator
+> and violation count into one aggregate; `RANGE` and `UNIQUE` each cost two
+> queries. Both now cost one — `RANGE` by conditional aggregation
+> (`SUM(CASE ...)`, portable where `FILTER (WHERE ...)` is not, since SQL
+> Server lacks it), and `UNIQUE` by `COUNT(col) - COUNT(DISTINCT col)`, which
+> is what the old `GROUP BY` subquery summed, in one pass instead of a
+> grouped scan plus a separate count.
+>
+> Two scope items turned out to be **already satisfied**, and are now pinned
+> by tests rather than left as assumptions: evidence carries counts and never
+> the violating rows, and one connection serves every rule.
+>
+> Still open in this unit: **chunked reads** for the paths that genuinely
+> read rows, and the **approximate-distinct option** — which `UNIQUE` now
+> makes concrete, since `COUNT(DISTINCT ...)` is exactly the expensive
+> operation the dialect protocol's `approximate_distinct_expression()` exists
+> to replace.
 
 ### 16. New unit, added 2026-09-04 — Performance and scale
 
