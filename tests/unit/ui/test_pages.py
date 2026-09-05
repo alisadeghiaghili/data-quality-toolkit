@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from dqt.i18n import translate
 from dqt.ui.pages import issues_page, overview_page, run_page
 
 _RUN: dict[str, Any] = {
@@ -121,11 +122,16 @@ class TestTheOverviewAnswersItsQuestion:
 
         Showing only what was measured invites the reader to assume the rest
         was fine -- the same reasoning as the report's scorecards.
+
+        Compared against the glossary rather than the raw key: `VIZ-4` gave
+        English a row of its own, so ``referential_integrity`` renders as
+        "referential integrity". Asserting the underscored key would be
+        asserting that the page leaks an internal identifier.
         """
         html = _overview()
 
         for dimension in _SCORES:
-            assert dimension in html
+            assert translate(dimension, "en") in html
 
     def test_an_unmeasured_dimension_says_so_and_draws_no_bar(self) -> None:
         """ "Not measured" and "perfect" are the two readings most easily confused."""
