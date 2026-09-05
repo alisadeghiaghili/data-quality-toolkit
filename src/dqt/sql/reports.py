@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from dqt._html import Raw, document, element, table
+from dqt._theme import STYLESHEET
 from dqt.common.models import DQMetric, PipelineResult, get_args_of_dq_dimension
 from dqt.viz import Chart, bar_chart, scorecard, severity_indicator
 
@@ -88,52 +89,6 @@ def generate_report(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-_CSS = """
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-    font-family: 'Segoe UI', Arial, sans-serif;
-    background: #f4f6f9; color: #1a1a2e; padding: 24px;
-}
-h1 { font-size: 1.6rem; margin-bottom: 4px; color: #0f3460; }
-h2 {
-    font-size: 1.1rem; margin: 24px 0 8px; color: #16213e;
-    border-bottom: 2px solid #e0e0e0; padding-bottom: 4px;
-}
-.meta { font-size: 0.85rem; color: #555; margin-bottom: 16px; }
-table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 0.88rem; }
-th { background: #0f3460; color: #fff; padding: 8px 12px; text-align: left; }
-td { padding: 7px 12px; border-bottom: 1px solid #e4e4e4; }
-tr:nth-child(even) td { background: #f9f9f9; }
-.badge {
-    display: inline-block; padding: 2px 8px; border-radius: 12px;
-    font-size: 0.78rem; font-weight: 600;
-}
-.ok { background: #d4edda; color: #155724; }
-.warn { background: #fff3cd; color: #856404; }
-.err { background: #f8d7da; color: #721c24; }
-
-/* Charts from dqt.viz. The SVG carries no colour of its own so that the page
-   decides how a chart looks -- which is what lets one set of primitives serve
-   both the report and the pages that read from the same store. */
-.dqt-track { fill: #e0e0e0; }
-.dqt-fill, .dqt-bar { fill: #0f3460; }
-.dqt-scorecard, .dqt-score-bar { vertical-align: middle; }
-.dqt-unmeasured { display: none; }
-.dqt-bar-label, .dqt-bar-value { font-size: 11px; fill: #1a1a2e; }
-.dqt-figure { margin: 0 0 12px 0; }
-/* The text equivalent is shown, not hidden. A sighted reader gets the numbers
-   without hovering, and nothing has to be maintained twice. */
-.dqt-chart-text { font-size: 0.78rem; color: #4a4a5e; margin-top: 2px; }
-.dqt-cards {
-    display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px;
-}
-.dqt-severity { vertical-align: middle; margin-right: 4px; }
-.dqt-severity-info { fill: #17a2b8; }
-.dqt-severity-warning { fill: #ffc107; }
-.dqt-severity-error { fill: #dc3545; }
-.dqt-severity-critical { fill: #721c24; }
-"""
 
 
 def _score_badge(score: float) -> Raw:
@@ -572,4 +527,4 @@ def _render(result: PipelineResult) -> str:
         Raw(_external_section(result)),
     )
 
-    return document(title=f"DQT Report - {result.run_id}", body=body, css=_CSS)
+    return document(title=f"DQT Report - {result.run_id}", body=body, css=STYLESHEET)

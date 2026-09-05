@@ -30,6 +30,15 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **Accessibility is measured, not intended (`VIZ-5`).** `dqt/_theme.py` names
+  the palette once and declares which pairs meet on screen; CI computes every
+  WCAG 2.1 contrast ratio and fails the build on one that falls short. Doing
+  that found two: the conventional amber and teal severity marks measured
+  **1.51:1** and **2.81:1** against the page — the amber was barely
+  distinguishable from the paper. Both darkened. Structural rules are checked
+  on rendered output too: every chart carries `role="img"` and an
+  `aria-label`, every table has header cells, there is exactly one `h1` and no
+  skipped heading level, and every link is a real focusable `<a href>`.
 - **Vazirmatn embedded in Persian pages (`VIZ-4`).** SIL OFL, vendored with
   its licence and inlined as a `data:` URI — never fetched, so a report still
   renders on an air-gapped machine, which is exactly where a DBA opens one.
@@ -97,6 +106,12 @@ Dates are the merge dates on `main`.
 
 ### Changed
 
+- **One stylesheet for the report and the screens.** `VIZ-2` and `VIZ-3` grew
+  near-identical CSS in two modules; a severity colour defined twice is one
+  that will eventually mean two different things. Alignment and spacing now
+  use `start` and `margin-inline-end` rather than `left` and `margin-right`,
+  which is what lets a single stylesheet serve both reading directions, and
+  the stylesheet has a print mode.
 - **Report HTML is built through an escape-by-default builder**
   (`dqt/_html.py`) instead of twenty-odd hand-placed `html.escape` calls.
   Text is escaped, markup is explicit; the one call that would eventually be

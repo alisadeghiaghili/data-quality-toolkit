@@ -45,7 +45,7 @@ dashboard / flows perspective.
 
 | Tool / UI | Status | DQ Dashboard | Explorer | Column Detail | Issues | Rules | Interactive Cleaning | Viz Richness | Workflow Clarity | User-in-loop | Accessibility | Complexity |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **DQT UI (current)** | Alpha | ✓ | ✓ | ~ | ✓ | - | - | ✓ | ✓ | - | ✓ | **Low** — three server-rendered screens (`VIZ-3`), no JS, no build step |
+| **DQT UI (current)** | Alpha | ✓ | ✓ | ~ | ✓ | - | - | ✓ | ✓ | - | ✓✓ | **Low** — three server-rendered screens plus the report, no JS, no build step. Accessibility is **measured**: WCAG AA contrast computed from the palette in CI (`VIZ-5`), severity carried by shape and word as well as colour, every chart labelled, bilingual EN/FA with RTL |
 | **DQT UI (target v1.0)** | — | ✓✓ | ✓✓ | ✓✓ | ✓✓ | ✓ | ~ | ✓✓ | ✓✓ | ~ | ✓✓ | **Low–Medium** |
 | **Talend DQ UI** | Commercial (OSS retired 2024) | ✓✓ | ✓ | ✓✓ | ✓✓ | ✓✓ | ✓ | ✓✓ | ✓ | ~ | ~ | Medium–High |
 | **DataLens (research prototype)** | Research | ✓✓ | ~ (dataset-centric) | ✓ | ✓✓ | ~ | ✓✓ | ✓✓ | ✓ | ✓✓ | Unknown | Medium |
