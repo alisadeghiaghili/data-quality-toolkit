@@ -290,9 +290,17 @@ class TestTheFourHashProofHoldsOnEveryServer:
         after_read = _fingerprint(engine, table)
 
         # 3. A write attempted through DQT under the guard.
+        #
+        # One store for both halves. Planning is a read and succeeds against a
+        # read-only connection -- that is the point of the plan/apply split --
+        # so the plan has to be findable when apply looks for it. Handing
+        # apply a fresh store instead makes it fail with "no such plan" before
+        # it ever reaches the guard, which looks like a passing test only if
+        # nobody checks which exception was raised.
+        guarded_store = _NullStore()
+        plan = cleanse_plan(read_only, [_standardize(table)], store=guarded_store)
         with pytest.raises(ReadOnlyViolationError):
-            plan = cleanse_plan(read_only, [_standardize(table)], store=_NullStore())
-            cleanse_apply(plan.plan_id, read_only, store=_NullStore())
+            cleanse_apply(plan.plan_id, read_only, store=guarded_store)
         after_guarded = _fingerprint(engine, table)
 
         # 4. A real write, with both opt-outs supplied explicitly.
