@@ -386,6 +386,95 @@ class RunStore:
                 ],
             )
 
+    def count_issues_by_severity(self, run_id: str) -> dict[str, int]:
+        """Count a run's issues by severity, grouped in the database.
+
+        Args:
+            run_id: The run to count.
+
+        Returns:
+            Severity to count. A severity with no issues is absent rather
+            than zero -- whether to show a zero is the caller's decision, and
+            this layer does not own the vocabulary.
+
+        Example:
+            counts = store.count_issues_by_severity("run-001")
+        """
+        return self._count_issues_by("severity", run_id)
+
+    def count_issues_by_dimension(self, run_id: str) -> dict[str, int]:
+        """Count a run's issues by dimension, grouped in the database.
+
+        Args:
+            run_id: The run to count.
+
+        Returns:
+            Dimension to count, absent where there are none.
+
+        Example:
+            counts = store.count_issues_by_dimension("run-001")
+        """
+        return self._count_issues_by("dimension", run_id)
+
+    def average_score_by_dimension(self, run_id: str) -> dict[str, float]:
+        """Average a run's metric scores per dimension.
+
+        Args:
+            run_id: The run to read.
+
+        Returns:
+            Dimension to mean score. A dimension nothing measured is absent
+            rather than zero: absent means "nothing measured this" and zero
+            means "it scored zero", and collapsing the two is the mistake the
+            scorecards exist to avoid.
+
+        Example:
+            scores = store.average_score_by_dimension("run-001")
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT dimension, AVG(score) AS mean_score
+                FROM run_metrics
+                WHERE run_id = ? AND dimension IS NOT NULL
+                GROUP BY dimension
+                """,
+                (run_id,),
+            ).fetchall()
+        return {str(row["dimension"]): float(row["mean_score"]) for row in rows}
+
+    def _count_issues_by(self, column: str, run_id: str) -> dict[str, int]:
+        """Group a run's issues by one of its own columns.
+
+        Args:
+            column: ``"severity"`` or ``"dimension"``. Chosen from a closed
+                set by the two callers above and never from user input --
+                a column name cannot be bound as a parameter, so the only
+                safe way to vary one is not to let a caller supply it.
+            run_id: The run to count.
+
+        Returns:
+            Value to count, absent where there are none.
+
+        Example:
+            counts = store._count_issues_by("severity", "run-001")
+        """
+        if column not in ("severity", "dimension"):
+            raise ValueError(
+                f"Issues can only be grouped by severity or dimension; got {column!r}."
+            )
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {column} AS grouping_value, COUNT(*) AS issue_count
+                FROM run_issues
+                WHERE run_id = ?
+                GROUP BY {column}
+                """,
+                (run_id,),
+            ).fetchall()
+        return {str(row["grouping_value"]): int(row["issue_count"]) for row in rows}
+
     def load_rule_results(self, run_id: str) -> list[dict[str, Any]]:
         """Return one summary per rule evaluated in *run_id*.
 

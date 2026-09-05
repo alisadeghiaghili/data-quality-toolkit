@@ -253,3 +253,59 @@ def get_rule_history(
         history = get_rule_history("dqt_runs.db", rule_name="not-null-email")
     """
     return _store(store_path).load_rule_history(rule_name, limit=limit)
+
+
+def get_issue_counts_by_severity(store_path: str | Path, run_id: str) -> dict[str, int]:
+    """Return how many issues of each severity a run produced.
+
+    Grouped in the database rather than by counting a loaded list: the size
+    of that list is exactly how bad the data is, which is the wrong thing for
+    a page's cost to depend on.
+
+    Args:
+        store_path: Path to the RunStore SQLite file.
+        run_id: The run to count.
+
+    Returns:
+        Severity to count, absent where there are none.
+
+    Example:
+        counts = get_issue_counts_by_severity("dqt_runs.db", run_id="run-001")
+    """
+    return _store(store_path).count_issues_by_severity(run_id)
+
+
+def get_issue_counts_by_dimension(store_path: str | Path, run_id: str) -> dict[str, int]:
+    """Return how many issues of each dimension a run produced.
+
+    Args:
+        store_path: Path to the RunStore SQLite file.
+        run_id: The run to count.
+
+    Returns:
+        Dimension to count, absent where there are none.
+
+    Example:
+        counts = get_issue_counts_by_dimension("dqt_runs.db", run_id="run-001")
+    """
+    return _store(store_path).count_issues_by_dimension(run_id)
+
+
+def get_dimension_scores(store_path: str | Path, run_id: str) -> dict[str, float]:
+    """Return a run's mean score per dimension.
+
+    A dimension nothing measured is absent rather than zero. The screens rely
+    on that distinction: absent renders as "not measured" and zero renders as
+    a measured failure, and they are different claims.
+
+    Args:
+        store_path: Path to the RunStore SQLite file.
+        run_id: The run to read.
+
+    Returns:
+        Dimension to mean score.
+
+    Example:
+        scores = get_dimension_scores("dqt_runs.db", run_id="run-001")
+    """
+    return _store(store_path).average_score_by_dimension(run_id)

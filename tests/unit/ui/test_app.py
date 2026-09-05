@@ -192,3 +192,60 @@ def test_app_version_matches_the_package_version() -> None:
     served in the OpenAPI document, so consumers pin against it.
     """
     assert app.version == dqt.__version__
+
+
+# ---------------------------------------------------------------------------
+# The HTML screens (VIZ-3)
+# ---------------------------------------------------------------------------
+#
+# The pages themselves are pure and tested in test_pages.py without a server.
+# What is left for a live app is the part only routing can get wrong: that a
+# URL exists, that it serves HTML rather than JSON, and that a run which does
+# not exist says so instead of rendering an empty page that looks like a
+# healthy one.
+
+
+class TestTheScreensAreServed:
+    """Routing only. The rendering is asserted in test_pages.py."""
+
+    def test_the_overview_is_served_as_html(self, client: TestClient) -> None:
+        """The entry point a DBA actually opens."""
+        response = client.get("/ui")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert "<!DOCTYPE html>" in response.text
+
+    def test_a_run_has_its_own_page(self, client: TestClient) -> None:
+        """Overview to run is the first step of the drill-down path."""
+        response = client.get(f"/ui/runs/{RUN_ID}")
+
+        assert response.status_code == 200
+        assert RUN_ID in response.text
+
+    def test_a_run_s_issues_have_their_own_page(self, client: TestClient) -> None:
+        """Run to issues is the second step, and the last one that exists."""
+        response = client.get(f"/ui/runs/{RUN_ID}/issues")
+
+        assert response.status_code == 200
+        assert "Issues" in response.text
+
+    def test_an_unknown_run_is_a_404_rather_than_an_empty_page(self, client: TestClient) -> None:
+        """An empty run page reads as a run that went perfectly.
+
+        Which is the same defect as a failed run rendering green, reached by
+        a different route: the page has to distinguish "nothing wrong" from
+        "nothing here".
+        """
+        assert client.get("/ui/runs/no-such-run").status_code == 404
+
+    def test_the_json_api_still_answers(self, client: TestClient) -> None:
+        """The screens are added beside the JSON, not instead of it.
+
+        Anything already reading /runs keeps working; `VIZ-3` only adds a
+        second way to look at the same store.
+        """
+        response = client.get("/runs")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/json")
