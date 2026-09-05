@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from dqt.common.models import ConnectionConfig, RuleConfig, RuleScope
+from dqt.common.models import ConnectionConfig, DQIssue, RuleConfig, RuleScope
 from dqt.common.storage import RunStore
 from dqt.exceptions import ReadOnlyViolationError
 from dqt.sql._connect import get_connection, get_dialect_for
@@ -188,6 +188,32 @@ def keyless_table() -> Iterator[str]:
     """
     table = f"dqt_nokey_{uuid.uuid4().hex[:8]}"
     _execute(f"CREATE TABLE {table} (a NVARCHAR(50) NULL, b NVARCHAR(50) NULL)")
+    yield table
+    _execute(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.fixture
+def duplicated_table() -> Iterator[str]:
+    """Create a keyed table whose ``email`` column repeats one value.
+
+    Six rows, five of them non-NULL, with ``a@b.com`` appearing twice. So
+    exactly one row duplicates another -- counted from the literal INSERT
+    below, not from anything DQT reports.
+
+    Yields:
+        The name of the created table.
+
+    Example:
+        def test_something(duplicated_table):
+            ...
+    """
+    table = f"dqt_dup_{uuid.uuid4().hex[:8]}"
+    _execute(
+        f"CREATE TABLE {table} (id INT NOT NULL PRIMARY KEY, email NVARCHAR(200) NULL)",
+        f"INSERT INTO {table} (id, email) VALUES "
+        "(1, 'a@b.com'), (2, 'a@b.com'), (3, 'c@d.com'), "
+        "(4, 'e@f.com'), (5, 'g@h.com'), (6, NULL)",
+    )
     yield table
     _execute(f"DROP TABLE IF EXISTS {table}")
 
@@ -417,3 +443,107 @@ class TestCleansingRoundTripsOnSqlServer:
 
         with pytest.raises(ValueError, match="primary key"):
             cleanse_plan(_writable(), configs, store=_NullStore())
+
+
+class TestTheApproximateDistinctOptionRunsHere:
+    """SQL Server is the only dialect with a native estimating form.
+
+    The unit suite asserts the *text* ``approximate_distinct_expression``
+    hands back, because it has no SQL Server to run it against. Whether the
+    server accepts that text inside DQT's generated aggregate is a different
+    question, and only an instance can answer it -- the same gap `DQT-08`
+    left for the connection string and `INFORMATION_SCHEMA`.
+    """
+
+    def _unique_rule(self, table: str, *, approximate: bool) -> RuleConfig:
+        """Build a UNIQUE rule on *table*'s ``email`` column.
+
+        Args:
+            table: Table to scope the rule to.
+            approximate: Whether the rule asks for an estimate.
+
+        Returns:
+            A RuleConfig.
+
+        Example:
+            rule = self._unique_rule("t", approximate=True)
+        """
+        return RuleConfig(
+            name="unique-email",
+            dimension="uniqueness",
+            severity="error",
+            scope=RuleScope(table_pattern=table, column_pattern="email"),
+            expression="UNIQUE",
+            params={"approximate": approximate},
+        )
+
+    def _run(self, table: str, *, approximate: bool) -> list[DQIssue]:
+        """Evaluate the UNIQUE rule against the live instance.
+
+        Args:
+            table: Table to scope the rule to.
+            approximate: Whether the rule asks for an estimate.
+
+        Returns:
+            The issues raised.
+
+        Example:
+            issues = self._run("t", approximate=False)
+        """
+        config = ConnectionConfig(id="mssql", dsn=str(SQLSERVER_DSN))
+        tables = [t for t in discover_schema(config) if t.table_name == table]
+        issues, _ = apply_rules(
+            run_id="run-mssql-approx",
+            connection_config=config,
+            rules=[self._unique_rule(table, approximate=approximate)],
+            discovered_tables=tables,
+        )
+        return issues
+
+    def test_the_exact_path_counts_the_duplicate(self, duplicated_table: str) -> None:
+        """Ground truth: ``a@b.com`` appears twice, so one row is a duplicate.
+
+        The control. If this disagreed with the literal INSERT there would be
+        no point asking whether the estimate agrees with it.
+        """
+        issues = self._run(duplicated_table, approximate=False)
+
+        assert issues[0].evidence["duplicate_extra_rows"] == 1
+        assert issues[0].evidence["approximate"] is False
+
+    def test_the_server_accepts_approx_count_distinct(self, duplicated_table: str) -> None:
+        """The estimating form runs, and the evidence admits it is one.
+
+        The value is deliberately not asserted exactly. Microsoft documents
+        ``APPROX_COUNT_DISTINCT`` as within 2% of the true cardinality at 97%
+        probability, and an approximation that happens to be exact on six
+        rows is not something DQT is entitled to promise. What is being
+        settled here is that the server accepts the expression inside DQT's
+        generated aggregate and returns a number -- ``APPROX_COUNT_DISTINCT``
+        arrived in SQL Server 2019, so on an older instance this is where a
+        syntax error would surface rather than in production.
+        """
+        issues = self._run(duplicated_table, approximate=True)
+
+        assert issues, "the duplicate should still be found via the estimate"
+        assert issues[0].evidence["approximate"] is True
+        assert isinstance(issues[0].evidence["duplicate_extra_rows"], int)
+        assert issues[0].evidence["duplicate_extra_rows"] > 0
+
+    def test_the_two_paths_agree_at_this_size(self, duplicated_table: str) -> None:
+        """Pinned as a sanity check, not as a promise about the algorithm.
+
+        On six rows HyperLogLog's sparse representation is exact in practice.
+        This asserts that DQT is wiring the estimate into the same arithmetic
+        as the exact count -- a wrong subtraction would show up as a wildly
+        different number, which is what this catches. It is not a claim that
+        an estimate equals an exact count in general; the test above is
+        deliberately the loose one.
+        """
+        exact = self._run(duplicated_table, approximate=False)
+        estimated = self._run(duplicated_table, approximate=True)
+
+        assert (
+            estimated[0].evidence["duplicate_extra_rows"]
+            == exact[0].evidence["duplicate_extra_rows"]
+        )
