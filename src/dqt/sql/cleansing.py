@@ -92,8 +92,11 @@ from typing import Any, Literal
 
 from dqt.common.models import ConnectionConfig, PipelineResult
 from dqt.exceptions import ReadOnlyViolationError
-from dqt.sql._connect import get_connection
+from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql._identifiers import qualified_identifier, quote_identifier
+from dqt.sql.dialects.base import Dialect
+from dqt.sql.row_identity import RowIdentity, resolve_row_identity
+from dqt.sql.schema_discovery import discover_schema
 
 # ---------------------------------------------------------------------------
 # Public data classes
@@ -245,9 +248,79 @@ def _fetch_all_dicts(cursor: Any, sql: str, params: tuple[Any, ...] = ()) -> lis
 # ---------------------------------------------------------------------------
 
 
+def _identity_from_row_key(row_key: dict[str, Any], dialect: Dialect) -> RowIdentity:
+    """Reconstruct how a logged row was addressed, from the log entry itself.
+
+    Storing the identity on every log row would repeat it thousands of times
+    for one plan; the key names already carry it.
+
+    Args:
+        row_key: The identity recorded when the change was planned.
+        dialect: Dialect whose locator name to recognise.
+
+    Returns:
+        The :class:`~dqt.sql.row_identity.RowIdentity` that produced *row_key*.
+
+    Raises:
+        ValueError: If *row_key* is empty, which would address every row.
+
+    Example:
+        identity = _identity_from_row_key({"id": 42}, dialect)
+    """
+    names = tuple(row_key)
+    if not names:
+        raise ValueError(
+            "A cleansing log entry has no row key. Replaying it would match "
+            "every row in the table rather than the one that changed."
+        )
+    if len(names) == 1 and names[0] == dialect.physical_row_locator:
+        return RowIdentity(columns=(), locator=names[0])
+    return RowIdentity(columns=names, locator=None)
+
+
+def _identity_projection(identity: RowIdentity, dialect: Dialect) -> str:
+    """Return the SELECT list that reads a row's identity.
+
+    Args:
+        identity: How rows of this table are addressed.
+        dialect: Dialect used for quoting.
+
+    Returns:
+        A comma-separated projection, aliased so the values can be read back
+        by name whatever the dialect called them.
+
+    Example:
+        projection = _identity_projection(identity, dialect)
+    """
+    return ", ".join(
+        f"{expression} AS {dialect.quote_identifier(name)}"
+        for expression, name in zip(
+            identity.select_expressions(dialect), identity.key_names(), strict=True
+        )
+    )
+
+
+def _read_row_key(row: dict[str, Any], identity: RowIdentity) -> dict[str, Any]:
+    """Extract a row's identity from a fetched row.
+
+    Args:
+        row: One row as a name-keyed dict.
+        identity: How rows of this table are addressed.
+
+    Returns:
+        The identity, ready to store in a CleansingLog and replay later.
+
+    Example:
+        row_key = _read_row_key(row, identity)
+    """
+    return {name: row[name] for name in identity.key_names()}
+
+
 def _standardize(
     cursor: Any,
     run_id: str,
+    identity: RowIdentity,
+    dialect: Dialect,
     schema_name: str | None,
     table_name: str,
     column_name: str,
@@ -293,10 +366,12 @@ def _standardize(
     case = params.get("case")  # "upper" | "lower" | "title" | None
     tbl = qualified_identifier(schema_name, table_name)
     col = quote_identifier(column_name)
+    identity_projection = _identity_projection(identity, dialect)
+    placeholder = dialect.parameter_placeholder
 
     rows = _fetch_all_dicts(
         cursor,
-        f"SELECT rowid AS dqt_row_id, {col} FROM {tbl} WHERE {col} IS NOT NULL",
+        f"SELECT {identity_projection}, {col} FROM {tbl} WHERE {col} IS NOT NULL",
     )
 
     logs: list[CleansingLog] = []
@@ -319,9 +394,11 @@ def _standardize(
 
         if value != original:
             if not dry_run:
+                row_key = _read_row_key(row, identity)
                 cursor.execute(
-                    f"UPDATE {tbl} SET {col} = ? WHERE rowid = ?",
-                    (value, row["dqt_row_id"]),
+                    f"UPDATE {tbl} SET {col} = {placeholder} "
+                    f"WHERE {identity.where_clause(dialect)}",
+                    (value, *identity.bind_values(row_key)),
                 )
             logs.append(
                 CleansingLog(
@@ -330,7 +407,7 @@ def _standardize(
                     schema_name=schema_name,
                     table_name=table_name,
                     column_name=column_name,
-                    row_key={"rowid": row["dqt_row_id"]},
+                    row_key=_read_row_key(row, identity),
                     before_value=original,
                     after_value=value,
                 )
@@ -341,6 +418,8 @@ def _standardize(
 def _deduplicate(
     cursor: Any,
     run_id: str,
+    identity: RowIdentity,
+    dialect: Dialect,
     schema_name: str | None,
     table_name: str,
     params: dict[str, Any],
@@ -353,7 +432,8 @@ def _deduplicate(
     key_columns : list[str]
         Column(s) that define a duplicate.  **Required.**
     keep : str
-        ``"first"`` (keep the lowest rowid) or ``"last"`` (keep the highest).
+        ``"first"`` (keep the earliest row by identity order) or ``"last"``
+        (keep the latest).
         Default ``"first"``.
 
     For every set of duplicates, all rows except the one to keep are
@@ -388,37 +468,47 @@ def _deduplicate(
 
     quoted_keys = [quote_identifier(c) for c in key_columns]
     key_expr = ", ".join(quoted_keys)
-    keep_func = "MIN" if keep == "first" else "MAX"
     # A NULL-valued key column is not equal to another NULL for duplicate purposes —
     # GROUP BY would otherwise collapse all NULL-keyed rows into one "duplicate" group
     # and delete genuinely distinct rows. Exclude any row with a NULL key column.
     not_null_guard = " AND ".join(f"{qk} IS NOT NULL" for qk in quoted_keys)
 
-    # Find rowids to delete: those that are NOT the keep-rowid for their key group
+    # Rank each row within its duplicate group and delete everything after the
+    # first. This used to be `rowid NOT IN (SELECT MIN(rowid) ... GROUP BY ...)`,
+    # which is SQLite-only twice over: rowid does not exist elsewhere, and
+    # PostgreSQL has no aggregate over its ctid equivalent either. A window
+    # function is portable across SQLite 3.25+, PostgreSQL and SQL Server, and
+    # it handles a composite key without needing an aggregate at all (NEW-M).
+    identity_projection = _identity_projection(identity, dialect)
+    order_expr = ", ".join(identity.select_expressions(dialect))
+    direction = "ASC" if keep == "first" else "DESC"
     dup_sql = f"""
-        SELECT rowid AS dqt_row_id
-        FROM {tbl}
-        WHERE {not_null_guard}
-          AND rowid NOT IN (
-            SELECT {keep_func}(rowid)
+        SELECT {", ".join(dialect.quote_identifier(n) for n in identity.key_names())}
+        FROM (
+            SELECT
+                {identity_projection},
+                ROW_NUMBER() OVER (
+                    PARTITION BY {key_expr}
+                    ORDER BY {order_expr} {direction}
+                ) AS dqt_rank
             FROM {tbl}
             WHERE {not_null_guard}
-            GROUP BY {key_expr}
-        )
+        ) AS dqt_ranked
+        WHERE dqt_rank > 1
     """
     rows_to_delete = _fetch_all_dicts(cursor, dup_sql)
 
+    where_clause = identity.where_clause(dialect)
     logs: list[CleansingLog] = []
     for row in rows_to_delete:
-        # Fetch all column values before deletion for audit
-        full_row = _fetch_all_dicts(
-            cursor,
-            f"SELECT * FROM {tbl} WHERE rowid = ?",
-            (row["dqt_row_id"],),
-        )
+        row_key = _read_row_key(row, identity)
+        binds = identity.bind_values(row_key)
+        # Capture every column before deleting: a DELETE has no after-value, so
+        # the whole row is what revert() has to put back.
+        full_row = _fetch_all_dicts(cursor, f"SELECT * FROM {tbl} WHERE {where_clause}", binds)
         before = full_row[0] if full_row else {}
         if not dry_run:
-            cursor.execute(f"DELETE FROM {tbl} WHERE rowid = ?", (row["dqt_row_id"],))
+            cursor.execute(f"DELETE FROM {tbl} WHERE {where_clause}", binds)
         logs.append(
             CleansingLog(
                 run_id=run_id,
@@ -426,7 +516,7 @@ def _deduplicate(
                 schema_name=schema_name,
                 table_name=table_name,
                 column_name=None,
-                row_key={"rowid": row["dqt_row_id"]},
+                row_key=row_key,
                 before_value=before,
                 after_value=None,
             )
@@ -437,6 +527,8 @@ def _deduplicate(
 def _lookup_correct(
     cursor: Any,
     run_id: str,
+    identity: RowIdentity,
+    dialect: Dialect,
     schema_name: str | None,
     table_name: str,
     column_name: str,
@@ -498,6 +590,8 @@ def _lookup_correct(
     tbl = qualified_identifier(schema_name, table_name)
     lookup_tbl = qualified_identifier(lookup_schema, lookup_table)
     col = quote_identifier(column_name)
+    identity_projection = _identity_projection(identity, dialect)
+    placeholder = dialect.parameter_placeholder
     from_col_q = quote_identifier(from_col)
     to_col_q = quote_identifier(to_col)
 
@@ -513,7 +607,7 @@ def _lookup_correct(
     logs: list[CleansingLog] = []
     rows = _fetch_all_dicts(
         cursor,
-        f"SELECT rowid AS dqt_row_id, {col} FROM {tbl} WHERE {col} IS NOT NULL",
+        f"SELECT {identity_projection}, {col} FROM {tbl} WHERE {col} IS NOT NULL",
     )
     for row in rows:
         old_val = row[column_name]
@@ -521,8 +615,9 @@ def _lookup_correct(
             new_val = mapping[old_val]
             if not dry_run:
                 cursor.execute(
-                    f"UPDATE {tbl} SET {col} = ? WHERE rowid = ?",
-                    (new_val, row["dqt_row_id"]),
+                    f"UPDATE {tbl} SET {col} = {placeholder} "
+                    f"WHERE {identity.where_clause(dialect)}",
+                    (new_val, *identity.bind_values(_read_row_key(row, identity))),
                 )
             logs.append(
                 CleansingLog(
@@ -531,7 +626,7 @@ def _lookup_correct(
                     schema_name=schema_name,
                     table_name=table_name,
                     column_name=column_name,
-                    row_key={"rowid": row["dqt_row_id"]},
+                    row_key=_read_row_key(row, identity),
                     before_value=old_val,
                     after_value=new_val,
                 )
@@ -634,6 +729,9 @@ def apply_cleansing(
     cleansing_result = CleansingResult(run_id=run_id, dry_run=dry_run)
     tables_modified: set[str] = set()
 
+    dialect = get_dialect_for(connection_config)
+    identities = _resolve_identities(connection_config, configs, dialect)
+
     db_conn = get_connection(connection_config)
     try:
         cursor = db_conn.cursor()
@@ -648,6 +746,8 @@ def apply_cleansing(
                     logs = _standardize(
                         cursor,
                         run_id,
+                        identities[cfg.table_name],
+                        dialect,
                         cfg.schema_name,
                         cfg.table_name,
                         cfg.column_name,
@@ -658,6 +758,8 @@ def apply_cleansing(
                     logs = _deduplicate(
                         cursor,
                         run_id,
+                        identities[cfg.table_name],
+                        dialect,
                         cfg.schema_name,
                         cfg.table_name,
                         cfg.params,
@@ -669,6 +771,8 @@ def apply_cleansing(
                     logs = _lookup_correct(
                         cursor,
                         run_id,
+                        identities[cfg.table_name],
+                        dialect,
                         cfg.schema_name,
                         cfg.table_name,
                         cfg.column_name,
@@ -729,11 +833,54 @@ def cleanse(result: PipelineResult) -> PipelineResult:
     return result
 
 
+def _resolve_identities(
+    connection_config: ConnectionConfig,
+    configs: list[CleansingConfig],
+    dialect: Dialect,
+) -> dict[str, RowIdentity]:
+    """Work out how to address rows of every table the configs touch.
+
+    Discovery runs once per plan rather than once per operation, so several
+    configs against one table cost one introspection between them.
+
+    Args:
+        connection_config: Connection to introspect.
+        configs: Cleansing operations about to run.
+        dialect: Dialect that may offer a physical locator.
+
+    Returns:
+        A RowIdentity per table name named by *configs*.
+
+    Raises:
+        ValueError: If a named table does not exist, or has no primary key on
+            a dialect with no stable locator.
+
+    Example:
+        identities = _resolve_identities(config, configs, dialect)
+    """
+    wanted = {cfg.table_name for cfg in configs if cfg.enabled}
+    discovered = {
+        table.table_name: table
+        for table in discover_schema(connection_config)
+        if table.table_name in wanted
+    }
+    missing = wanted - set(discovered)
+    if missing:
+        raise ValueError(
+            f"Cleansing was asked to change {sorted(missing)}, which discovery "
+            "did not find. Check the table name and the schema the connection "
+            "points at."
+        )
+    return {name: resolve_row_identity(table, dialect) for name, table in discovered.items()}
+
+
 def _compute_changes(
     cursor: Any,
     run_id: str,
     configs: list[CleansingConfig],
     dry_run: bool,
+    dialect: Dialect,
+    identities: dict[str, RowIdentity],
 ) -> list[CleansingLog]:
     """Run every enabled config and collect the rows it would change.
 
@@ -742,6 +889,8 @@ def _compute_changes(
         run_id: Run the logs are attributed to.
         configs: Cleansing operations to evaluate.
         dry_run: When True, compute without issuing any mutation.
+        dialect: Dialect owning quoting, placeholders and row identity.
+        identities: How to address rows, keyed by table name.
 
     Returns:
         One :class:`CleansingLog` per row that changed or would change.
@@ -756,12 +905,15 @@ def _compute_changes(
     for cfg in configs:
         if not cfg.enabled:
             continue
+        identity = identities[cfg.table_name]
         if cfg.operation == "standardize":
             if not cfg.column_name:
                 raise ValueError("standardize requires column_name.")
             collected += _standardize(
                 cursor,
                 run_id,
+                identity,
+                dialect,
                 cfg.schema_name,
                 cfg.table_name,
                 cfg.column_name,
@@ -772,6 +924,8 @@ def _compute_changes(
             collected += _deduplicate(
                 cursor,
                 run_id,
+                identity,
+                dialect,
                 cfg.schema_name,
                 cfg.table_name,
                 cfg.params,
@@ -783,6 +937,8 @@ def _compute_changes(
             collected += _lookup_correct(
                 cursor,
                 run_id,
+                identity,
+                dialect,
                 cfg.schema_name,
                 cfg.table_name,
                 cfg.column_name,
@@ -875,13 +1031,16 @@ def cleanse_plan(
     Example:
         plan = cleanse_plan(config, configs, store=store)
     """
+    dialect = get_dialect_for(connection_config)
+    identities = _resolve_identities(connection_config, configs, dialect)
+
     connection = get_connection(connection_config)
     try:
         cursor = connection.cursor()
         # dry_run=True: planning is a read, which is why it works against a
         # read-only connection and why producing a plan from production needs
         # no write authority.
-        changes = _compute_changes(cursor, run_id or "", configs, dry_run=True)
+        changes = _compute_changes(cursor, run_id or "", configs, True, dialect, identities)
     finally:
         connection.close()
 
@@ -939,11 +1098,19 @@ def cleanse_apply(
             "write authority; applying does."
         )
 
+    dialect = get_dialect_for(connection_config)
     connection = get_connection(connection_config)
     result = CleansingResult(run_id=plan.run_id or "", dry_run=False)
     try:
         cursor = connection.cursor()
-        current = _compute_changes(cursor, plan.run_id or "", plan.configs, dry_run=True)
+        current = _compute_changes(
+            cursor,
+            plan.run_id or "",
+            plan.configs,
+            True,
+            dialect,
+            _resolve_identities(connection_config, plan.configs, dialect),
+        )
         if _fingerprint(current) != plan.fingerprint:
             raise ValueError(
                 f"The data changed since plan {plan_id!r} was computed. Applying it "
@@ -957,9 +1124,11 @@ def cleanse_apply(
         for change in plan.changes:
             table = qualified_identifier(change.schema_name, change.table_name)
             column = quote_identifier(str(change.column_name))
+            identity = _identity_from_row_key(change.row_key, dialect)
             cursor.execute(
-                f"UPDATE {table} SET {column} = ? WHERE rowid = ?",
-                (change.after_value, change.row_key["rowid"]),
+                f"UPDATE {table} SET {column} = {dialect.parameter_placeholder} "
+                f"WHERE {identity.where_clause(dialect)}",
+                (change.after_value, *identity.bind_values(change.row_key)),
             )
         connection.commit()
     except Exception:
@@ -1012,6 +1181,7 @@ def revert(
         )
 
     entries = store.load_cleansing_log(plan_id)
+    dialect = get_dialect_for(connection_config)
     connection = get_connection(connection_config)
     result = CleansingResult(run_id=plan.run_id or "", dry_run=False)
     try:
@@ -1021,9 +1191,11 @@ def revert(
         for entry in reversed(entries):
             table = qualified_identifier(entry["schema_name"], entry["table_name"])
             column = quote_identifier(str(entry["column_name"]))
+            identity = _identity_from_row_key(entry["row_key"], dialect)
             cursor.execute(
-                f"UPDATE {table} SET {column} = ? WHERE rowid = ?",
-                (entry["before_value"], entry["row_key"]["rowid"]),
+                f"UPDATE {table} SET {column} = {dialect.parameter_placeholder} "
+                f"WHERE {identity.where_clause(dialect)}",
+                (entry["before_value"], *identity.bind_values(entry["row_key"])),
             )
         connection.commit()
     except Exception:

@@ -169,6 +169,10 @@ class SqliteDialect:
     """
 
     name = "sqlite"
+    #: Stable for the row's lifetime, and every table has one unless it was
+    #: created WITHOUT ROWID.
+    physical_row_locator: str | None = "rowid"
+
     parameter_placeholder = "?"
     read_only_enforcement = ReadOnlyEnforcement.DRIVER_ENFORCED
 
@@ -299,6 +303,9 @@ class SqliteDialect:
                     column_name=row[1],
                     data_type=row[2] or "UNKNOWN",
                     nullable=(row[3] == 0),
+                    # PRAGMA table_info's `pk` column: 0 when the column is
+                    # not part of the key, otherwise its 1-based position.
+                    is_primary_key=bool(row[5]),
                 )
                 for row in pragma_rows
             )

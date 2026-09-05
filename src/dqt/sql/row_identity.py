@@ -66,7 +66,9 @@ class RowIdentity:
         Example:
             assert identity.select_expressions(dialect) == ['"id"']
         """
-        raise NotImplementedError("select_expressions is specified but not implemented")
+        if self.locator is not None:
+            return [self.locator]
+        return [dialect.quote_identifier(column) for column in self.columns]
 
     def key_names(self) -> tuple[str, ...]:
         """Return the names this identity is recorded under in a log entry.
@@ -78,7 +80,7 @@ class RowIdentity:
         Example:
             assert identity.key_names() == ("id",)
         """
-        raise NotImplementedError("key_names is specified but not implemented")
+        return (self.locator,) if self.locator is not None else self.columns
 
     def where_clause(self, dialect: Dialect) -> str:
         """Return a parameterised predicate matching exactly this row.
@@ -96,7 +98,12 @@ class RowIdentity:
         Example:
             assert identity.where_clause(dialect) == '"id" = ?'
         """
-        raise NotImplementedError("where_clause is specified but not implemented")
+        placeholder = dialect.parameter_placeholder
+        if self.locator is not None:
+            return f"{self.locator} = {placeholder}"
+        return " AND ".join(
+            f"{dialect.quote_identifier(column)} = {placeholder}" for column in self.columns
+        )
 
     def bind_values(self, row_key: dict[str, Any]) -> tuple[Any, ...]:
         """Return the bind values for :meth:`where_clause`, in its order.
@@ -115,7 +122,7 @@ class RowIdentity:
         Example:
             assert identity.bind_values({"id": 42}) == (42,)
         """
-        raise NotImplementedError("bind_values is specified but not implemented")
+        return tuple(row_key[name] for name in self.key_names())
 
 
 def resolve_row_identity(table: DiscoveredTable, dialect: Dialect) -> RowIdentity:
@@ -137,7 +144,21 @@ def resolve_row_identity(table: DiscoveredTable, dialect: Dialect) -> RowIdentit
     Example:
         identity = resolve_row_identity(table, dialect)
     """
-    raise NotImplementedError("resolve_row_identity is specified but not implemented")
+    key_columns = tuple(column.column_name for column in table.columns if column.is_primary_key)
+    if key_columns:
+        return RowIdentity(columns=key_columns, locator=None)
+
+    locator = dialect.physical_row_locator
+    if locator is None:
+        raise ValueError(
+            f"Table {table.table_name!r} has no primary key, and the "
+            f"{dialect.name!r} dialect has no row locator stable enough to "
+            "substitute for one. Cleansing addresses rows so it can undo "
+            "them later, and a physical address that moves under an UPDATE "
+            "or a VACUUM would make a stored plan edit the wrong rows. Add a "
+            "primary key to the table."
+        )
+    return RowIdentity(columns=(), locator=locator)
 
 
 __all__ = ["RowIdentity", "resolve_row_identity"]

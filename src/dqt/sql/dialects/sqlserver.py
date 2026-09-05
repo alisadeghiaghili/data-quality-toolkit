@@ -73,14 +73,27 @@ SUPPORTED_DSN_QUERY_KEYS = ("driver", "encrypt", "trust_server_certificate")
 
 # Base tables only (views excluded, matching the other two dialects), system
 # schemas excluded, ordered so discovery output is deterministic.
+# Primary-key columns are LEFT JOINed so a table without a key still returns
+# its columns rather than vanishing from discovery (NEW-M).
 COLUMN_METADATA_SQL = """
                 SELECT
                     c.TABLE_SCHEMA,
                     c.TABLE_NAME,
                     c.COLUMN_NAME,
                     c.DATA_TYPE,
-                    c.IS_NULLABLE
+                    c.IS_NULLABLE,
+                    CASE WHEN k.COLUMN_NAME IS NULL THEN 0 ELSE 1 END
+                        AS IS_PRIMARY_KEY
                 FROM INFORMATION_SCHEMA.COLUMNS AS c
+                LEFT JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS AS tc
+                  ON tc.TABLE_SCHEMA = c.TABLE_SCHEMA
+                 AND tc.TABLE_NAME = c.TABLE_NAME
+                 AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE AS k
+                  ON k.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+                 AND k.TABLE_SCHEMA = c.TABLE_SCHEMA
+                 AND k.TABLE_NAME = c.TABLE_NAME
+                 AND k.COLUMN_NAME = c.COLUMN_NAME
                 JOIN INFORMATION_SCHEMA.TABLES AS t
                   ON t.TABLE_CATALOG = c.TABLE_CATALOG
                  AND t.TABLE_SCHEMA = c.TABLE_SCHEMA
@@ -228,6 +241,9 @@ class SqlServerDialect:
     """
 
     name = "sqlserver"
+    #: %%physloc%% is likewise physical and moves. A primary key is required.
+    physical_row_locator: str | None = None
+
     parameter_placeholder = "?"
     read_only_enforcement = ReadOnlyEnforcement.ADVISORY
 
@@ -352,8 +368,16 @@ class SqlServerDialect:
                 column_name=column_name,
                 data_type=data_type,
                 nullable=(is_nullable == "YES"),
+                is_primary_key=bool(is_primary_key),
             )
-            for schema_name, table_name, column_name, data_type, is_nullable in rows
+            for (
+                schema_name,
+                table_name,
+                column_name,
+                data_type,
+                is_nullable,
+                is_primary_key,
+            ) in rows
         ]
 
     def select_aggregates_sql(

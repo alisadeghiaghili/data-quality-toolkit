@@ -32,6 +32,10 @@ class DiscoveredColumn:
         column_name: Column name.
         data_type: Database-reported type name.
         nullable: Whether the column accepts NULL values.
+        is_primary_key: Whether the column is part of the table's primary
+            key. Cleansing addresses rows by this where it exists, because
+            a key the database maintains is stable across the gap between
+            planning a change and applying it (`NEW-M`).
 
     Example:
         column = DiscoveredColumn(
@@ -48,6 +52,7 @@ class DiscoveredColumn:
     column_name: str
     data_type: str
     nullable: bool
+    is_primary_key: bool = False
 
 
 @dataclass(slots=True)
@@ -139,6 +144,7 @@ def _group_columns_into_tables(column_rows: list[ColumnMetadata]) -> list[Discov
                 column_name=row.column_name,
                 data_type=row.data_type,
                 nullable=row.nullable,
+                is_primary_key=row.is_primary_key,
             )
         )
     return list(tables.values())
