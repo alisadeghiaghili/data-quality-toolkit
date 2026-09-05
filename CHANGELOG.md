@@ -30,6 +30,15 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **`dqt.viz` — the chart primitives (`VIZ-1`).** Score bars, bar charts,
+  trend lines, severity indicators and scorecards, as inline SVG produced by
+  pure functions. No plotting library: a raster image can only be
+  smoke-tested, and *"this bar is drawn shorter than that one"* is a claim
+  the honesty gate wants a test behind. Every function returns the SVG **and**
+  its text equivalent, so the accessibility requirement is structural rather
+  than remembered. Severity is carried by a shape and a word as well as a
+  colour, and an unmeasured dimension draws no bar at all — "not measured"
+  must never look like a full score.
 - **The Knowledge/Domain facet (`NEW-K`).** A `REFERENCE` rule expression
   checks that a column's values come from a known set — the validity check
   neither `REGEX` nor `RANGE` can express. The set is either a table in the

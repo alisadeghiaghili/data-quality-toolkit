@@ -63,13 +63,16 @@ class TestEveryChartCarriesItsOwnTextEquivalent:
 
         The equivalent has to contain what the chart encodes, which is the
         values, so a screen reader reaches the same conclusion as an eye.
-        """
-        chart = bar_chart([("completeness", 0.5), ("validity", 1.0)], title="Scores")
 
-        assert "completeness" in chart.text
-        assert "50" in chart.text
-        assert "validity" in chart.text
-        assert "100" in chart.text
+        Counts rather than proportions: ``bar_chart`` draws whatever it is
+        given -- issues per dimension, rows per table -- and does not assume
+        its input is a score. ``scorecard`` is the one that speaks in
+        percentages.
+        """
+        chart = bar_chart([("completeness", 3), ("validity", 12)], title="Issues")
+
+        assert "completeness 3" in chart.text
+        assert "validity 12" in chart.text
 
 
 class TestGeometryIsProportional:
@@ -281,6 +284,18 @@ class TestManyCategoriesStayReadable:
     def test_a_short_series_is_left_alone(self) -> None:
         """No truncation note when nothing was truncated."""
         assert "more" not in bar_chart([("a", 1), ("b", 2)], title="t").text
+
+    def test_a_trend_needs_two_points_to_be_a_trend(self) -> None:
+        """One reading is not a direction.
+
+        Drawing a single dot and calling it a trend invites a conclusion the
+        data cannot support -- the first run after a store is recreated would
+        otherwise render as a flat, reassuring line.
+        """
+        chart = trend_line([("2026-09-05", 0.9)], title="Score")
+
+        assert "no data" in chart.text.lower()
+        assert "polyline" not in chart.svg
 
     def test_an_empty_series_says_there_is_nothing_to_show(self) -> None:
         """An empty chart frame implies a rendering failure."""
