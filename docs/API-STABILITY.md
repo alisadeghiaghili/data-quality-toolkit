@@ -102,9 +102,12 @@ page describes the shape the promise will take rather than one already in
 force. Two things have to be true before `1.0.0` claims it:
 
 - **The facet modules are decided.** `sql/knowledge.py` now exists and is
-  tested (`NEW-K`); `viz.py` still does not. Freezing a surface with a named
-  gap in it means either adding to a frozen API later or admitting the facets
-  model overstated what DQT does.
+  tested (`NEW-K`). `viz.py` still does not exist, but it is no longer an open
+  question: `docs/PLAN-VIZ-UI.md` decides the stack and sequences the work, and
+  the owner confirmed on 2026-09-05 that DQT gets a UI rather than cutting the
+  facet. Freezing a surface with a named gap in it means either adding to a
+  frozen API later or admitting the facets model overstated what DQT does —
+  so the gap has to be closed, not annotated.
 - ~~**The performance work is finished enough to have shaped the
   interfaces.**~~ Done. The approximate-distinct option and grouped rules
   have both landed, and both did change how a rule is evaluated — which is
