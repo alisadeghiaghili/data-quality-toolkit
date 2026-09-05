@@ -102,6 +102,29 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
     },
     "view_issues": {"en": "View issues", "fa": "مشاهدهٔ مسائل"},
     "stage_errors": {"en": "Stage Errors", "fa": "خطاهای مرحله"},
+    # Rules screen (VIZ-6)
+    "rules": {"en": "Rules", "fa": "قوانین"},
+    "rule": {"en": "Rule", "fa": "قانون"},
+    "history": {"en": "History", "fa": "تاریخچه"},
+    "targets_checked": {"en": "Checked", "fa": "بررسی‌شده"},
+    "targets_failed": {"en": "Failed", "fa": "ناموفق‌ها"},
+    "targets_error": {"en": "Errored", "fa": "خطاخورده"},
+    "matched_nothing": {
+        "en": "These rules matched no table or column. A rule that matches "
+        "nothing reports no failures, which reads exactly like a rule that "
+        "passes.",
+        "fa": "این قوانین به هیچ جدول یا ستونی نخوردند. قانونی که به چیزی "
+        "نمی‌خورد هیچ شکستی گزارش نمی‌کند، و این دقیقاً شبیه قانونی است که "
+        "پاس شده.",
+    },
+    "no_rules": {
+        "en": "No rules were evaluated in this run.",
+        "fa": "در این اجرا قانونی ارزیابی نشد.",
+    },
+    "no_history": {
+        "en": "This rule has not run yet.",
+        "fa": "این قانون هنوز اجرا نشده است.",
+    },
 }
 
 

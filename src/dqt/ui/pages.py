@@ -37,7 +37,13 @@ from dqt.fonts import embedded_font_face
 from dqt.i18n import Language, ltr_span, translate
 from dqt.viz import Chart, bar_chart, scorecard, severity_indicator
 
-__all__ = ["issues_page", "overview_page", "run_page"]
+__all__ = [
+    "issues_page",
+    "overview_page",
+    "rule_history_page",
+    "rules_page",
+    "run_page",
+]
 
 #: How many issues a page shows. The size of a response must not depend on
 #: how bad the data is -- the rule DQIssue evidence already follows.
@@ -515,3 +521,47 @@ def _severity_cell(severity: str, language: Language) -> Raw:
     except ValueError:
         return element("span", label, attrs={"class": "badge"})
     return Raw(indicator.svg + element("span", label, attrs={"class": "badge"}))
+
+
+def rules_page(
+    *,
+    run: Mapping[str, Any],
+    results: Sequence[Mapping[str, Any]],
+    language: Language = "en",
+) -> str:
+    """Render what each rule did in one run.
+
+    Args:
+        run: The run the results belong to.
+        results: One summary per rule evaluated.
+        language: Which language to render in.
+
+    Returns:
+        The page HTML.
+
+    Example:
+        html = rules_page(run=run, results=[])
+    """
+    raise NotImplementedError
+
+
+def rule_history_page(
+    *,
+    rule_name: str,
+    history: Sequence[Mapping[str, Any]],
+    language: Language = "en",
+) -> str:
+    """Render one rule's results across runs.
+
+    Args:
+        rule_name: The rule being followed.
+        history: Its results, newest first.
+        language: Which language to render in.
+
+    Returns:
+        The page HTML.
+
+    Example:
+        html = rule_history_page(rule_name="r", history=[])
+    """
+    raise NotImplementedError
