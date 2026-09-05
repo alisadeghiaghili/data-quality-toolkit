@@ -25,10 +25,24 @@ executes that stored plan, and `revert(plan_id)` undoes it. The legacy
 `apply_cleansing()` remains reversible only by hand, and only while you still
 hold the log it returns — prefer the triple.
 
-Supported and exercised: **SQLite** and **PostgreSQL**. **SQL Server** ships a
-dialect but has never been run against a live server — its ODBC connection
-string and `INFORMATION_SCHEMA` queries are tested as SQL text only. Treat it
-as unproven.
+Supported and exercised against a live server in CI: **SQLite**,
+**PostgreSQL** and **SQL Server**.
+
+One difference matters more than the others. `read_only` means different
+things per database, and DQT reports which you are getting rather than
+implying they are the same:
+
+| Database | `read_only=True` gives you | Who refuses a write |
+|---|---|---|
+| SQLite | `mode=ro` on the connection | the driver |
+| PostgreSQL | a read-only session | the server |
+| SQL Server | an ODBC access-mode hint | **nobody** |
+
+On SQL Server the hint is advisory. DQT emits a `RuntimeWarning` saying so and
+still refuses to build a mutating statement itself, but a write that reaches
+the server will land. **Connect with a read-only login there.** There is a
+test asserting the write lands, so the limitation cannot quietly stop being
+true without someone noticing.
 
 Full audit: `DQT-critical-review.md`.
 
@@ -54,9 +68,14 @@ computed with SQL, against the live database, without extracting the data.
   badges.
 - **Read-only HTTP API** — an optional FastAPI surface over the stored results.
 
-Supported databases: **SQLite** and **PostgreSQL**, both exercised in CI.
-**SQL Server** has a dialect but no live-server coverage — see the status
-block above. MySQL is not supported.
+Supported databases: **SQLite**, **PostgreSQL** and **SQL Server**, all three
+exercised against a live server in CI. MySQL is not supported.
+
+SQL Server needs a system ODBC driver that pip cannot install, so
+`pip install "dqt[sqlserver]"` is necessary but not sufficient — install
+Microsoft's `msodbcsql18` as well. The dialect imports `pyodbc` lazily and
+names the extra when it is missing. It has no regular-expression operator, so
+`regex` rules are refused there rather than reported as zero violations.
 
 Adding a database means registering a dialect in `dqt.sql.dialects`, not
 editing branches across the codebase: identifier quoting, the read-only
