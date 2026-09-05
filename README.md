@@ -143,8 +143,19 @@ without a stable row locator. The refusal names the fix: give the table a key.
 ## Rules
 
 Rules are declarative, defined in YAML or JSON, and compile to set-based SQL —
-one query per rule, never a row-by-row loop. Five expressions:
-`NOT NULL`, `UNIQUE`, `RANGE`, `REGEX`, `REFERENCE`.
+never a row-by-row loop. Five expressions: `NOT NULL`, `UNIQUE`, `RANGE`,
+`REGEX`, `REFERENCE`.
+
+**Rules on the same table share one scan.** Each check compiles to aggregate
+expressions rather than to a statement, and the checks over a table are run as
+a single `SELECT`. Twenty rules on your busiest table cost one pass, not
+twenty. The one exception is a `REFERENCE` rule pointing at a reference
+*table*: it needs a join, and a join changes which rows the other aggregates
+would see, so it pays its own scan.
+
+If the database rejects a batched statement, DQT retries its checks one at a
+time — so a mistake in one rule costs you that rule's verdict, not the whole
+table's report.
 
 ### `REFERENCE` — values must come from a known set
 

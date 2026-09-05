@@ -1383,21 +1383,39 @@ re-measure before estimating precisely.
 > ordering returns an arbitrary page and "any twenty rows" cannot be resumed
 > from.
 >
-> **Correction, same day: this unit is not closed.** The paragraph below
-> originally said it was. That was wrong, and wrong in the way the honesty
-> gate exists to catch — a status marker running ahead of the work. Two scope
-> items from `CLAUDE.md` §3 remain:
+> **Correction, and then the work.** The paragraph below originally declared
+> this unit closed. That was wrong in the way the honesty gate exists to
+> catch — a status marker running ahead of the work — and two scope items
+> from `CLAUDE.md` §3 were still open: rules on the same table were scanned
+> once *per rule* rather than once per table, and `regex` still cost two
+> queries because the budget test never parametrised it.
 >
-> * **"Rules on the same table are grouped so the table is scanned once, not
->   once per rule."** Each rule still issues its own query.
->   `test_rules_cost.py` gates *one query per rule*, which is a real
->   improvement over two and is not the same claim. On a hot table carrying
->   twenty rules that is twenty scans where one would do.
-> * **`regex` costs two queries**, not one: a bare row count followed by the
->   match. The budget test never parametrised it, so nothing noticed.
+> **2026-09-05, fifth pass: grouped rules.** Both are now done. A check
+> compiles to aggregate expressions and a decoder rather than to a statement,
+> so the checks over one table are concatenated into a single `SELECT` and
+> each reads back its own slice of the row. The invariant that makes it safe
+> is that a fragment never carries a `WHERE`: a predicate belonging to one
+> rule would silently filter the rows every other rule counted. Putting
+> `regex`'s match inside a `CASE` is what let it join the batch, so the
+> second defect fell out of fixing the first.
 >
-> Everything else in the unit is either implemented and gated or pinned as
-> already true. One limit is recorded rather than fixed:
+> A `REFERENCE` rule pointing at a reference *table* keeps its own query,
+> because the join changes which rows the other aggregates would see.
+> Grouping is by `from_clause`, so that is mechanical rather than
+> special-cased.
+>
+> Batching introduces a risk that the same pass answers: one unusable
+> expression fails a statement several rules were relying on, so a failed
+> batch is retried one check at a time. Without it, a typo in one rule would
+> blank a table's whole report — worse than the scans it saved.
+>
+> One defect was found while writing it, unrelated to speed: a reference
+> table holding the same value twice matched each data row twice, inflating
+> the "how many did we check" denominator and making a column look cleaner
+> than it was.
+>
+> **Now the unit is closed**, and this time every scope item in `CLAUDE.md`
+> §3 has a gate behind it. One limit is recorded rather than fixed:
 > the deduplicate delete list is still materialised in full, because it *is*
 > the list of rows to delete and the plan has to hold it to be reviewable.
 > On a table that is mostly duplicates that list is large — a real bound, and

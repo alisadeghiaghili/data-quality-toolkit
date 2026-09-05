@@ -105,10 +105,8 @@ force. Two things have to be true before `1.0.0` claims it:
   tested (`NEW-K`); `viz.py` still does not. Freezing a surface with a named
   gap in it means either adding to a frozen API later or admitting the facets
   model overstated what DQT does.
-- **The performance work is finished enough to have shaped the interfaces.**
-  The approximate-distinct option has landed and did touch a signature.
-  **Rules grouped per table has not**: each rule still issues its own query,
-  so the table is scanned once per rule rather than once per table, which is
-  what `CLAUDE.md` §3 asks for. That work will change how a rule is
-  evaluated, and freezing before it would mean deprecating a just-frozen
-  API.
+- ~~**The performance work is finished enough to have shaped the
+  interfaces.**~~ Done. The approximate-distinct option and grouped rules
+  have both landed, and both did change how a rule is evaluated — which is
+  exactly why freezing before them would have meant deprecating a
+  just-frozen API.

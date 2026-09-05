@@ -18,14 +18,11 @@ from dqt.common.models import ConnectionConfig, RuleConfig, RuleScope
 from dqt.sql._connect import get_connection
 from dqt.sql.dialects import get_dialect, get_dialect_by_name
 from dqt.sql.rules import (
-    _eval_not_null,
-    _eval_range,
-    _eval_regex,
-    _eval_unique,
     _matches_scope,
     apply_rules,
 )
 from dqt.sql.schema_discovery import DiscoveredColumn, DiscoveredTable
+from tests.eval_helpers import eval_not_null, eval_range, eval_regex, eval_unique
 
 # Repository root, three levels above tests/unit/sql/test_rules.py, used to
 # load the real shipped example rule file rather than re-typing its pattern
@@ -137,7 +134,7 @@ class TestDetectDialect:
 class TestEvalNotNull:
     def test_detects_nulls(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
-        total, null_count = _eval_not_null(
+        total, null_count = eval_not_null(
             cursor, None, "users", "email", dialect=get_dialect_by_name("sqlite")
         )
         assert total == 5
@@ -146,7 +143,7 @@ class TestEvalNotNull:
     def test_no_nulls(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
         # 'age' column has no NULLs in fixture
-        total, null_count = _eval_not_null(
+        total, null_count = eval_not_null(
             cursor, None, "users", "age", dialect=get_dialect_by_name("sqlite")
         )
         assert total == 5
@@ -160,7 +157,7 @@ class TestEvalUnique:
 
         # because SQLite has no estimating form (see test_approximate_distinct).
 
-        total, dup_extra, approximate = _eval_unique(
+        total, dup_extra, approximate = eval_unique(
             cursor, None, "users", "email", dialect=get_dialect_by_name("sqlite")
         )
         # alice@example.com appears twice -> 1 extra row
@@ -169,7 +166,7 @@ class TestEvalUnique:
     def test_no_duplicates_when_unique(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
         # age values: 25, 30, 17, -1, 22 -> all unique
-        _, dup_extra, _ = _eval_unique(
+        _, dup_extra, _ = eval_unique(
             cursor, None, "users", "age", dialect=get_dialect_by_name("sqlite")
         )
         assert dup_extra == 0
@@ -178,7 +175,7 @@ class TestEvalUnique:
 class TestEvalRange:
     def test_detects_below_min(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
-        total, out = _eval_range(
+        total, out = eval_range(
             cursor,
             None,
             "users",
@@ -192,7 +189,7 @@ class TestEvalRange:
 
     def test_detects_above_max(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
-        total, out = _eval_range(
+        total, out = eval_range(
             cursor,
             None,
             "users",
@@ -205,7 +202,7 @@ class TestEvalRange:
 
     def test_both_bounds(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
-        total, out = _eval_range(
+        total, out = eval_range(
             cursor,
             None,
             "users",
@@ -220,7 +217,7 @@ class TestEvalRange:
     def test_no_bounds_raises(self, sqlite_conn):
         cursor = sqlite_conn.cursor()
         with pytest.raises(ValueError, match="range rule requires"):
-            _eval_range(
+            eval_range(
                 cursor, None, "users", "age", None, None, dialect=get_dialect_by_name("sqlite")
             )
 
@@ -646,7 +643,7 @@ class TestEvalRegexEmailRule:
         try:
             cursor = conn.cursor()
 
-            total, non_matching = _eval_regex(
+            total, non_matching = eval_regex(
                 cursor, None, "users", "email", pattern, dialect=get_dialect_by_name("sqlite")
             )
             assert total == 5
@@ -698,7 +695,7 @@ class TestEvalRegexMalformedPattern:
             # _eval_regex's own pattern handling, independent of whether
             # the connection has REGEXP registered.
             with pytest.raises(ValueError):
-                _eval_regex(
+                eval_regex(
                     cursor,
                     None,
                     "users",
@@ -745,7 +742,7 @@ class TestRegexPatternCacheBounded:
                 # Each pattern is syntactically distinct (and harmless: none
                 # of them match 'sample'), forcing n_distinct_patterns
                 # separate compilations if nothing bounds the cache.
-                _eval_regex(
+                eval_regex(
                     cursor,
                     None,
                     "t",

@@ -64,17 +64,20 @@ from __future__ import annotations
 
 import fnmatch
 import uuid
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from dqt.common.models import (
     ConnectionConfig,
     DQIssue,
+    IssueSeverity,
     RuleConfig,
     RuleRunResult,
 )
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.dialects.base import Dialect
-from dqt.sql.knowledge import reference_set_from_params, unmatched_count_query
+from dqt.sql.knowledge import reference_set_from_params, unmatched_count_fragment
 from dqt.sql.schema_discovery import DiscoveredTable
 
 # ---------------------------------------------------------------------------
@@ -159,516 +162,653 @@ def _matches_scope(
 
 
 # ---------------------------------------------------------------------------
-# Internal: SQL evaluators
+# Internal: compiled checks
 # ---------------------------------------------------------------------------
+#
+# A check compiles to aggregate *expressions* rather than to a statement, so
+# that checks against the same table can be concatenated into one SELECT and
+# read back from one row. `CLAUDE.md` section 3 asks for exactly that: a table
+# is scanned once, not once per rule.
+#
+# The invariant that makes it safe: a fragment never carries a WHERE. A
+# predicate belonging to one rule would silently filter the rows every other
+# rule in the batch counted, so every per-rule condition lives inside a CASE.
 
 
-def _eval_not_null(
-    cursor: Any,
-    schema_name: str | None,
-    table_name: str,
-    column_name: str,
-    dialect: Dialect,
-) -> tuple[int, int]:
-    """Count total rows and NULL rows for a column.
+#: Turns one check's slice of a result row into the issues it implies.
+_Decoder = Callable[[Sequence[Any]], list[DQIssue]]
 
-    Args:
-        cursor: Open DBAPI cursor.
-        schema_name: Schema name (may be ``None``).
-        table_name: Table name.
-        column_name: Column name to check.
-        dialect: Target SQL dialect, used for identifier quoting.
-        approximate: When True, use the dialect's estimating distinct count if
-            it has one. Dialects without one answer exactly, and the third
-            return value says which happened -- an estimate and an exact count
-            are different claims, and a report must not render them alike.
 
-    Returns:
-        Tuple of ``(total_rows, null_count)``.
+@dataclass(frozen=True, slots=True)
+class _CompiledCheck:
+    """One rule against one column, ready to be run with others.
 
-    Example::
+    Attributes:
+        rule_index: Position of the owning rule, so verdicts can be
+            attributed back to it after the work is regrouped by table.
+        table: The table the check reads, kept so a failed retry can name
+            what it was checking.
+        column_name: The column the check reads, kept for the same reason.
+        from_clause: The already-quoted table reference this check reads,
+            including any join it needs. Checks sharing a from_clause share
+            a query.
+        expressions: The aggregates this check contributes, in order.
+        binds: Values for the placeholders in *expressions*.
+        decode: Turns the values those expressions produced into issues.
 
-        total, nulls = _eval_not_null(cursor, "public", "orders", "customer_id")
+    Example:
+        check = _compile_check(run_id, rule, 0, table, "email", dialect)
     """
-    tbl = dialect.qualified_identifier(schema_name, table_name)
-    col = dialect.quote_identifier(column_name)
-    cursor.execute(f"SELECT COUNT(*), COUNT(*) - COUNT({col}) FROM {tbl}")
-    row = cursor.fetchone()
-    return int(row[0]), int(row[1])
+
+    rule_index: int
+    table: DiscoveredTable
+    column_name: str
+    from_clause: str
+    expressions: tuple[str, ...]
+    binds: tuple[Any, ...]
+    decode: _Decoder
 
 
-def _eval_unique(
-    cursor: Any,
-    schema_name: str | None,
-    table_name: str,
-    column_name: str,
-    dialect: Dialect,
-    approximate: bool = False,
-) -> tuple[int, int, bool]:
-    """Count total non-null rows and duplicate rows for a column.
+def _fragment_not_null(quoted_column: str) -> tuple[tuple[str, ...], tuple[Any, ...]]:
+    """Return the aggregates counting rows and NULLs for a column.
 
     Args:
-        cursor: Open DBAPI cursor.
-        schema_name: Schema name.
-        table_name: Table name.
-        column_name: Column name to check.
-        dialect: Target SQL dialect, used for identifier quoting.
+        quoted_column: An already-quoted column reference.
 
     Returns:
-        Tuple of ``(total_rows, duplicate_count, used_approximation)`` where
-        ``duplicate_count``
-        is the number of rows that share a value with at least one other row.
+        The expressions and their binds.
 
-    Example::
+    Example:
+        expressions, binds = _fragment_not_null('"email"')
+    """
+    return (("COUNT(*)", f"COUNT(*) - COUNT({quoted_column})"), ())
 
-        total, dupes, approx = _eval_unique(
-            cursor, "public", "users", "email", dialect
+
+def _fragment_unique(
+    quoted_column: str, dialect: Dialect, *, approximate: bool
+) -> tuple[tuple[str, ...], tuple[Any, ...], bool]:
+    """Return the aggregates counting non-NULL values and duplicates.
+
+    ``COUNT(col)`` counts non-NULL values and ``COUNT(DISTINCT col)`` counts
+    the values that exist, so the difference is how many rows duplicate some
+    other row -- what the old ``GROUP BY`` subquery summed, in one pass.
+
+    ``COUNT(DISTINCT ...)`` has to hold every distinct value it has seen, so
+    on a high-cardinality column it is the one operation here that can cost
+    real memory on the server. A caller may opt into an estimate per rule;
+    whether that is acceptable is a property of the check, not of the run.
+
+    Args:
+        quoted_column: An already-quoted column reference.
+        dialect: Dialect that may offer an estimating distinct count.
+        approximate: Whether the rule asked for an estimate.
+
+    Returns:
+        The expressions, their binds, and whether an estimate was used --
+        an estimate and an exact count are different claims, and a report
+        must not render them alike.
+
+    Example:
+        expressions, binds, estimated = _fragment_unique(
+            '"email"', dialect, approximate=False
         )
     """
-    tbl = dialect.qualified_identifier(schema_name, table_name)
-    col = dialect.quote_identifier(column_name)
-    # COUNT(col) counts non-NULL values and COUNT(DISTINCT col) counts the
-    # values that exist, so the difference is how many rows are duplicates of
-    # some other row -- exactly what the old GROUP BY subquery summed, in one
-    # pass instead of a grouped scan plus a separate count.
-    #
-    # COUNT(DISTINCT ...) is expensive at scale; an approximate-distinct path
-    # is a separate scope item of this unit, and the dialect protocol already
-    # carries approximate_distinct_expression() for it.
-    # COUNT(DISTINCT ...) has to hold every distinct value it has seen, so on
-    # a high-cardinality column it is the one operation here that can cost
-    # real memory on the server. A caller may opt into an estimate per rule --
-    # whether that is acceptable is a property of the check, not of the run.
     distinct_expression = None
     if approximate:
-        distinct_expression = dialect.approximate_distinct_expression(col)
+        distinct_expression = dialect.approximate_distinct_expression(quoted_column)
     used_approximation = distinct_expression is not None
     if distinct_expression is None:
-        distinct_expression = f"COUNT(DISTINCT {col})"
+        distinct_expression = f"COUNT(DISTINCT {quoted_column})"
 
-    statement = dialect.select_aggregates_sql(
-        tbl, [f"COUNT({col})", f"COUNT({col}) - {distinct_expression}"]
+    return (
+        (f"COUNT({quoted_column})", f"COUNT({quoted_column}) - {distinct_expression}"),
+        (),
+        used_approximation,
     )
-    cursor.execute(statement)
-    row = cursor.fetchone()
-    return int(row[0]), int(row[1] or 0), used_approximation
 
 
-def _eval_range(
-    cursor: Any,
-    schema_name: str | None,
-    table_name: str,
-    column_name: str,
+def _fragment_range(
+    quoted_column: str,
+    dialect: Dialect,
     min_val: float | None,
     max_val: float | None,
-    dialect: Dialect,
-) -> tuple[int, int]:
-    """Count rows outside the specified [min, max] range.
+) -> tuple[tuple[str, ...], tuple[Any, ...]]:
+    """Return the aggregates counting rows outside ``[min_val, max_val]``.
 
-    *min_val* and *max_val* are always passed to the database as DBAPI bind
-    parameters, never interpolated into the SQL text.
+    The bounds are always bound as DBAPI parameters, never interpolated:
+    ``DQT-02`` established that a rule literal comes from a file a person
+    edits.
 
     Args:
-        cursor: Open DBAPI cursor.
-        schema_name: Schema name.
-        table_name: Table name.
-        column_name: Column name.
-        min_val: Minimum acceptable value (inclusive).  ``None`` = no lower bound.
-        max_val: Maximum acceptable value (inclusive).  ``None`` = no upper bound.
-        dialect: Target SQL dialect, used for identifier quoting and the
-            bind-parameter placeholder style.
+        quoted_column: An already-quoted column reference.
+        dialect: Dialect supplying the bind placeholder.
+        min_val: Inclusive lower bound, or None.
+        max_val: Inclusive upper bound, or None.
 
     Returns:
-        Tuple of ``(total_rows, out_of_range_count)``.
+        The expressions and their binds.
 
     Raises:
-        ValueError: If both *min_val* and *max_val* are ``None``.
+        ValueError: If both bounds are None, which would describe no range
+            at all.
 
-    Example::
-
-        total, bad = _eval_range(cursor, None, "products", "price", 0.0, None)
+    Example:
+        expressions, binds = _fragment_range('"age"', dialect, 0, 120)
     """
     if min_val is None and max_val is None:
         raise ValueError("range rule requires at least one of params.min or params.max.")
-    tbl = dialect.qualified_identifier(schema_name, table_name)
-    col = dialect.quote_identifier(column_name)
-    ph = dialect.parameter_placeholder
-    bind_params: list[float]
+
+    placeholder = dialect.parameter_placeholder
+    bind_params: tuple[Any, ...]
     if min_val is not None and max_val is not None:
-        where = f"{col} IS NOT NULL AND ({col} < {ph} OR {col} > {ph})"
-        bind_params = [min_val, max_val]
+        condition = (
+            f"{quoted_column} IS NOT NULL AND "
+            f"({quoted_column} < {placeholder} OR {quoted_column} > {placeholder})"
+        )
+        bind_params = (min_val, max_val)
     elif min_val is not None:
-        where = f"{col} IS NOT NULL AND {col} < {ph}"
-        bind_params = [min_val]
+        condition = f"{quoted_column} IS NOT NULL AND {quoted_column} < {placeholder}"
+        bind_params = (min_val,)
     else:
-        assert max_val is not None  # narrowed by the branch above
-        where = f"{col} IS NOT NULL AND {col} > {ph}"
-        bind_params = [max_val]
+        condition = f"{quoted_column} IS NOT NULL AND {quoted_column} > {placeholder}"
+        bind_params = (max_val,)
 
-    # One scan for both numbers. The denominator and the violation count come
-    # from the same rows, so asking separately reads the table twice to learn
-    # one thing. SUM(CASE ...) is the portable form of a filtered count --
-    # FILTER (WHERE ...) is standard but SQL Server does not have it.
-    statement = dialect.select_aggregates_sql(
-        tbl, ["COUNT(*)", f"SUM(CASE WHEN {where} THEN 1 ELSE 0 END)"]
-    )
-    cursor.execute(statement, bind_params)
-    row = cursor.fetchone()
-    # SUM over no rows is NULL, not 0.
-    return int(row[0]), int(row[1] or 0)
+    # SUM(CASE ...) is the portable filtered count: FILTER (WHERE ...) is
+    # standard, and SQL Server does not have it.
+    return (("COUNT(*)", f"SUM(CASE WHEN {condition} THEN 1 ELSE 0 END)"), bind_params)
 
 
-def _eval_regex(
-    cursor: Any,
-    schema_name: str | None,
-    table_name: str,
-    column_name: str,
-    pattern: str,
-    dialect: Dialect,
-) -> tuple[int, int]:
-    """Count rows whose column value does not match *pattern*.
+def _fragment_regex(
+    quoted_column: str, dialect: Dialect, pattern: str
+) -> tuple[tuple[str, ...], tuple[Any, ...]]:
+    """Return the aggregates counting values that fail *pattern*.
 
-    How the match is expressed is the dialect's business, not this
-    function's: it asks
-    :meth:`~dqt.sql.dialects.base.Dialect.regex_not_matching_predicate` for a
-    predicate and binds *pattern* as a parameter. SQLite answers with its
-    registered ``REGEXP`` function (`DQT-04`), PostgreSQL with the native
-    ``~`` operator, and SQL Server refuses outright because it has no regex
-    operator to answer with.
-
-    *cursor* must come from a connection opened by
-    :func:`~dqt.sql._connect.get_connection`, which is what installs SQLite's
-    ``REGEXP`` function; a connection opened any other way raises
-    ``sqlite3.OperationalError: no such function: REGEXP``.
-
-    The dialect validates *pattern* up front, before any query runs. This is
-    deliberate: without it, a malformed pattern would only be discovered
-    when SQLite invokes the registered function mid-query, which surfaces
-    as ``sqlite3.OperationalError: user-defined function raised
-    exception`` rather than the ``ValueError`` this module otherwise uses
-    for bad rule configuration (see :func:`_eval_range`) — and, more
-    importantly, callers must never receive a row count computed against a
-    pattern that failed to compile, which is why validation happens before
-    the counting query rather than being left for the per-row callback to
-    discover.
+    The dialect validates *pattern* before any query is built. Without that,
+    a malformed pattern would surface as a driver error mid-scan, and -- far
+    worse -- a caller could receive a row count computed against a pattern
+    that failed to compile.
 
     Args:
-        cursor: Open DBAPI cursor.
-        schema_name: Schema name.
-        table_name: Table name.
-        column_name: Column name.
-        pattern: Regular expression pattern.
-        dialect: Resolved :class:`~dqt.sql.dialects.base.Dialect`. It owns
-            the identifier quoting and the bind placeholder used below.
+        quoted_column: An already-quoted column reference.
+        dialect: Dialect owning the match predicate.
+        pattern: Regular expression source, bound as a parameter.
 
     Returns:
-        Tuple of ``(total_rows, non_matching_count)``.
+        The expressions and their binds.
 
     Raises:
         ValueError: If the dialect cannot evaluate a regular expression at
-            all, or if *pattern* is not a valid, length-bounded regular
-            expression. Which of the two applies is the dialect's decision;
-            see
-            :meth:`~dqt.sql.dialects.base.Dialect.regex_not_matching_predicate`.
+            all, or if *pattern* is not a valid, length-bounded one.
 
-    Example::
-
-        total, bad = _eval_regex(cursor, None, "users", "email",
-                                  r"^[^@]+@[^@]+$", "sqlite")
+    Example:
+        expressions, binds = _fragment_regex('"email"', dialect, r"^[^@]+@")
     """
-    tbl = dialect.qualified_identifier(schema_name, table_name)
-    col = dialect.quote_identifier(column_name)
-    cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
-    total = int(cursor.fetchone()[0])
-
-    predicate = dialect.regex_not_matching_predicate(col, pattern)
     # The predicate carries its own IS NOT NULL guard: whether a NULL can
-    # even reach the match operator is the dialect's business, so adding a
-    # second guard here would duplicate it and invite the two to drift.
-    cursor.execute(f"SELECT COUNT(*) FROM {tbl} WHERE {predicate}", (pattern,))
-
-    non_matching = int(cursor.fetchone()[0])
-    return total, non_matching
+    # reach the match operator is the dialect's business, and a second guard
+    # here would duplicate it and invite the two to drift.
+    predicate = dialect.regex_not_matching_predicate(quoted_column, pattern)
+    return (("COUNT(*)", f"SUM(CASE WHEN {predicate} THEN 1 ELSE 0 END)"), (pattern,))
 
 
-def _eval_reference(
+def _run_aggregate(
     cursor: Any,
-    schema_name: str | None,
-    table_name: str,
-    column_name: str,
     dialect: Dialect,
-    params: dict[str, Any],
-) -> tuple[int, int, bool]:
-    """Count values absent from the rule's reference set.
-
-    One query, like every other rule: the number of non-NULL values checked
-    and the number not found come from the same pass. See
-    :mod:`dqt.sql.knowledge` for what a reference set is and why a table
-    reference compiles to a join rather than to ``NOT IN (SELECT ...)``.
+    from_clause: str,
+    expressions: Sequence[str],
+    binds: Sequence[Any],
+) -> tuple[Any, ...]:
+    """Run one aggregate query and return its single row.
 
     Args:
         cursor: Open DBAPI cursor.
-        schema_name: Schema name.
-        table_name: Table name.
-        column_name: Column name.
-        dialect: Resolved :class:`~dqt.sql.dialects.base.Dialect`.
-        params: The rule's parameters, naming the reference set.
+        dialect: Dialect assembling the statement.
+        from_clause: An already-quoted table reference, joins included.
+        expressions: The aggregates to project. Must not be empty.
+        binds: Values for the placeholders, in order.
 
     Returns:
-        Tuple of ``(checked_rows, unmatched_count, normalized)``.
+        The row, one value per expression.
+
+    Example:
+        values = _run_aggregate(cursor, dialect, '"t"', ["COUNT(*)"], ())
+    """
+    cursor.execute(dialect.select_aggregates_sql(from_clause, list(expressions)), tuple(binds))
+    row = cursor.fetchone()
+    return tuple(row)
+
+
+def _issue(
+    run_id: str,
+    rule: RuleConfig,
+    table: DiscoveredTable,
+    column_name: str,
+    *,
+    message: str,
+    evidence: dict[str, Any],
+    severity: IssueSeverity | None = None,
+) -> DQIssue:
+    """Build a DQIssue for *rule* against one column.
+
+    Every issue this module raises names the same (run, rule, table, column),
+    so assembling them in one place keeps that from drifting between the six
+    call sites that used to repeat it.
+
+    Args:
+        run_id: Pipeline run identifier.
+        rule: The rule that produced the finding.
+        table: The table it ran against.
+        column_name: The column it ran against.
+        message: Human-readable finding.
+        evidence: Counts backing the finding. Never the offending rows.
+        severity: Overrides the rule's severity, for findings about the rule
+            itself rather than about the data.
+
+    Returns:
+        The issue.
+
+    Example:
+        issue = _issue(run_id, rule, table, "email", message="...", evidence={})
+    """
+    return DQIssue(
+        issue_id=str(uuid.uuid4()),
+        run_id=run_id,
+        dimension=rule.dimension,
+        severity=severity or rule.severity,
+        message=message,
+        evidence=evidence,
+        schema_name=table.schema_name,
+        table_name=table.table_name,
+        column_name=column_name,
+        rule_name=rule.name,
+    )
+
+
+def _evaluation_error_issue(
+    run_id: str,
+    rule: RuleConfig,
+    table: DiscoveredTable,
+    column_name: str,
+    error: Exception,
+) -> DQIssue:
+    """Report that a rule could not be evaluated.
+
+    A rule DQT cannot run must say so rather than pass quietly: reporting a
+    clean column that was never checked is a false clean bill of health.
+
+    Args:
+        run_id: Pipeline run identifier.
+        rule: The rule that could not run.
+        table: The table it targeted.
+        column_name: The column it targeted.
+        error: What went wrong.
+
+    Returns:
+        An error-severity issue naming the rule and the failure.
+
+    Example:
+        issue = _evaluation_error_issue(run_id, rule, table, "email", exc)
+    """
+    return _issue(
+        run_id,
+        rule,
+        table,
+        column_name,
+        message=(
+            f"Rule '{rule.name}' evaluation error on '{table.table_name}.{column_name}': {error}"
+        ),
+        evidence={"error": str(error)},
+        severity="error",
+    )
+
+
+def _compile_check(
+    run_id: str,
+    rule: RuleConfig,
+    rule_index: int,
+    table: DiscoveredTable,
+    column_name: str,
+    dialect: Dialect,
+) -> _CompiledCheck:
+    """Compile one rule against one column into shareable aggregates.
+
+    Args:
+        run_id: Pipeline run identifier.
+        rule: The rule to compile.
+        rule_index: Position of *rule* in the run, kept so its verdicts can
+            be attributed back after the work is regrouped by table.
+        table: The target table.
+        column_name: The target column.
+        dialect: Resolved :class:`~dqt.sql.dialects.base.Dialect`.
+
+    Returns:
+        The compiled check.
 
     Raises:
-        ValueError: If the parameters do not describe exactly one usable
-            reference set. Refusing is the point: a REFERENCE rule that
-            cannot find its reference must not report a clean column.
+        ValueError: If the rule's parameters do not describe a runnable
+            check. Raised here, before any query, so a misconfigured rule is
+            reported as itself rather than as a driver error.
 
-    Example::
-
-        checked, bad, folded = _eval_reference(
-            cursor, None, "people", "city", dialect, {"values": ["Tehran"]}
-        )
+    Example:
+        check = _compile_check(run_id, rule, 0, table, "email", dialect)
     """
-    reference = reference_set_from_params(params)
-    normalized = bool(params.get("normalize_persian", False))
+    qualified_table = dialect.qualified_identifier(table.schema_name, table.table_name)
+    quoted_column = dialect.quote_identifier(column_name)
+    expression = rule.expression.strip().upper()
 
-    statement, binds = unmatched_count_query(
-        dialect,
-        schema_name,
-        table_name,
-        column_name,
-        reference,
-        normalize_persian=normalized,
-    )
-    cursor.execute(statement, binds)
-    row = cursor.fetchone()
-    return int(row[0]), int(row[1] or 0), normalized
+    if expression == "NOT NULL":
+        expressions, binds = _fragment_not_null(quoted_column)
+
+        def decode_not_null(values: Sequence[Any]) -> list[DQIssue]:
+            total, null_count = int(values[0]), int(values[1])
+            if null_count == 0:
+                return []
+            return [
+                _issue(
+                    run_id,
+                    rule,
+                    table,
+                    column_name,
+                    message=(
+                        f"Column '{column_name}' in '{table.table_name}' has "
+                        f"{null_count} NULL value(s) out of {total} total rows."
+                    ),
+                    evidence={"null_count": null_count, "total_rows": total},
+                )
+            ]
+
+        return _CompiledCheck(
+            rule_index, table, column_name, qualified_table, expressions, binds, decode_not_null
+        )
+
+    if expression == "UNIQUE":
+        expressions, binds, used_approximation = _fragment_unique(
+            quoted_column,
+            dialect,
+            approximate=bool(rule.params.get("approximate", False)),
+        )
+
+        def decode_unique(values: Sequence[Any]) -> list[DQIssue]:
+            total, duplicate_extra = int(values[0]), int(values[1] or 0)
+            if duplicate_extra == 0:
+                return []
+            return [
+                _issue(
+                    run_id,
+                    rule,
+                    table,
+                    column_name,
+                    message=(
+                        f"Column '{column_name}' in '{table.table_name}' has "
+                        f"{duplicate_extra} extra duplicate value(s) "
+                        "(violates uniqueness)."
+                    ),
+                    evidence={
+                        "duplicate_extra_rows": duplicate_extra,
+                        "total_rows": total,
+                        # Present whether or not the caller asked, so a reader
+                        # never has to guess which kind of number this is.
+                        "approximate": used_approximation,
+                    },
+                )
+            ]
+
+        return _CompiledCheck(
+            rule_index, table, column_name, qualified_table, expressions, binds, decode_unique
+        )
+
+    if expression == "RANGE":
+        min_val = rule.params.get("min")
+        max_val = rule.params.get("max")
+        expressions, binds = _fragment_range(quoted_column, dialect, min_val, max_val)
+
+        def decode_range(values: Sequence[Any]) -> list[DQIssue]:
+            total, out_of_range = int(values[0]), int(values[1] or 0)
+            if out_of_range == 0:
+                return []
+            return [
+                _issue(
+                    run_id,
+                    rule,
+                    table,
+                    column_name,
+                    message=(
+                        f"Column '{column_name}' in '{table.table_name}' has "
+                        f"{out_of_range} value(s) outside range "
+                        f"[{min_val}, {max_val}] out of {total} total rows."
+                    ),
+                    evidence={
+                        "out_of_range_count": out_of_range,
+                        "total_rows": total,
+                        "min": min_val,
+                        "max": max_val,
+                    },
+                )
+            ]
+
+        return _CompiledCheck(
+            rule_index, table, column_name, qualified_table, expressions, binds, decode_range
+        )
+
+    if expression == "REGEX":
+        pattern = rule.params.get("pattern")
+        if not pattern:
+            raise ValueError("regex rule requires params.pattern.")
+        expressions, binds = _fragment_regex(quoted_column, dialect, str(pattern))
+
+        def decode_regex(values: Sequence[Any]) -> list[DQIssue]:
+            total, non_matching = int(values[0]), int(values[1] or 0)
+            if non_matching == 0:
+                return []
+            return [
+                _issue(
+                    run_id,
+                    rule,
+                    table,
+                    column_name,
+                    message=(
+                        f"Column '{column_name}' in '{table.table_name}' has "
+                        f"{non_matching} value(s) not matching pattern "
+                        f"'{pattern}' out of {total} total rows."
+                    ),
+                    evidence={
+                        "non_matching_count": non_matching,
+                        "total_rows": total,
+                        "pattern": pattern,
+                    },
+                )
+            ]
+
+        return _CompiledCheck(
+            rule_index, table, column_name, qualified_table, expressions, binds, decode_regex
+        )
+
+    if expression == "REFERENCE":
+        reference = reference_set_from_params(rule.params)
+        normalized = bool(rule.params.get("normalize_persian", False))
+        fragment = unmatched_count_fragment(
+            dialect,
+            table.schema_name,
+            table.table_name,
+            column_name,
+            reference,
+            normalize_persian=normalized,
+        )
+
+        def decode_reference(values: Sequence[Any]) -> list[DQIssue]:
+            checked_rows, unmatched = int(values[0]), int(values[1] or 0)
+            if unmatched == 0:
+                return []
+            return [
+                _issue(
+                    run_id,
+                    rule,
+                    table,
+                    column_name,
+                    message=(
+                        f"Column '{column_name}' in '{table.table_name}' has "
+                        f"{unmatched} value(s) absent from its reference set, "
+                        f"out of {checked_rows} non-NULL value(s) checked."
+                    ),
+                    evidence={
+                        "unmatched_count": unmatched,
+                        "checked_rows": checked_rows,
+                        # Present whether or not folding was asked for, so a
+                        # reader never has to guess whether two spellings of
+                        # one word were treated as one value.
+                        "normalized": normalized,
+                    },
+                )
+            ]
+
+        # A joined check cannot share a query: the join changes which rows the
+        # other aggregates would see. It pays its own scan, and says so.
+        return _CompiledCheck(
+            rule_index,
+            table,
+            column_name,
+            f"{qualified_table}{fragment.join_clause or ''}",
+            fragment.expressions,
+            fragment.binds,
+            decode_reference,
+        )
+
+    def decode_unknown(_: Sequence[Any]) -> list[DQIssue]:
+        return [
+            _issue(
+                run_id,
+                rule,
+                table,
+                column_name,
+                message=(
+                    f"Rule '{rule.name}' uses unknown expression "
+                    f"'{rule.expression}'. No evaluation was performed."
+                ),
+                evidence={"expression": rule.expression},
+                severity="error",
+            )
+        ]
+
+    # No expressions, so an unknown rule costs nothing and still reports
+    # itself. Passing quietly would be the one unacceptable outcome.
+    return _CompiledCheck(rule_index, table, column_name, qualified_table, (), (), decode_unknown)
+
+
+def _decode_group(
+    cursor: Any,
+    dialect: Dialect,
+    from_clause: str,
+    checks: Sequence[_CompiledCheck],
+) -> list[list[DQIssue]]:
+    """Run one batch of checks and hand each its own slice of the row.
+
+    Args:
+        cursor: Open DBAPI cursor.
+        dialect: Dialect assembling the statement.
+        from_clause: The table reference every check in *checks* reads.
+        checks: Checks sharing that table reference.
+
+    Returns:
+        The issues each check produced, in the order the checks were given.
+
+    Example:
+        per_check = _decode_group(cursor, dialect, '"t"', checks)
+    """
+    expressions = [expression for check in checks for expression in check.expressions]
+    binds = [bind for check in checks for bind in check.binds]
+
+    values: tuple[Any, ...] = ()
+    if expressions:
+        values = _run_aggregate(cursor, dialect, from_clause, expressions, binds)
+
+    produced: list[list[DQIssue]] = []
+    offset = 0
+    for check in checks:
+        width = len(check.expressions)
+        produced.append(check.decode(values[offset : offset + width]))
+        offset += width
+    return produced
+
+
+def _run_group(
+    run_id: str,
+    rules: Sequence[RuleConfig],
+    cursor: Any,
+    dialect: Dialect,
+    from_clause: str,
+    checks: Sequence[_CompiledCheck],
+) -> list[tuple[_CompiledCheck, list[DQIssue], bool]]:
+    """Run a batch, falling back to one check at a time if it fails.
+
+    Sharing a query is what makes a table cost one scan; it is also what
+    makes a single unusable expression able to fail a statement several
+    rules were relying on. When that happens each check is retried alone, so
+    the DBA gets every verdict that was computable and an error naming only
+    the rule that was not. Without the retry, one typo would blank a whole
+    table's report -- a far worse regression than the scans it saved.
+
+    Args:
+        run_id: Pipeline run identifier.
+        rules: Every rule in the run, indexed by ``rule_index``.
+        cursor: Open DBAPI cursor.
+        dialect: Dialect assembling the statements.
+        from_clause: The table reference every check in *checks* reads.
+        checks: Checks sharing that table reference.
+
+    Returns:
+        One ``(check, issues, errored)`` triple per check.
+
+    Example:
+        outcomes = _run_group(run_id, rules, cursor, dialect, '"t"', checks)
+    """
+    try:
+        return [
+            (check, produced, False)
+            for check, produced in zip(
+                checks, _decode_group(cursor, dialect, from_clause, checks), strict=True
+            )
+        ]
+    except Exception:  # noqa: BLE001
+        return [_run_alone(run_id, rules, cursor, dialect, from_clause, check) for check in checks]
+
+
+def _run_alone(
+    run_id: str,
+    rules: Sequence[RuleConfig],
+    cursor: Any,
+    dialect: Dialect,
+    from_clause: str,
+    check: _CompiledCheck,
+) -> tuple[_CompiledCheck, list[DQIssue], bool]:
+    """Run one check by itself and report what it produced.
+
+    Args:
+        run_id: Pipeline run identifier.
+        rules: Every rule in the run, indexed by ``rule_index``.
+        cursor: Open DBAPI cursor.
+        dialect: Dialect assembling the statement.
+        from_clause: The table reference the check reads.
+        check: The check to run.
+
+    Returns:
+        A ``(check, issues, errored)`` triple.
+
+    Example:
+        outcome = _run_alone(run_id, rules, cursor, dialect, '"t"', check)
+    """
+    try:
+        return (check, _decode_group(cursor, dialect, from_clause, [check])[0], False)
+    except Exception as error:  # noqa: BLE001
+        rule = rules[check.rule_index]
+        return (
+            check,
+            [_evaluation_error_issue(run_id, rule, check.table, check.column_name, error)],
+            True,
+        )
 
 
 # ---------------------------------------------------------------------------
 # Internal: dialect detection
 # ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Internal: single-rule evaluator
-# ---------------------------------------------------------------------------
-
-
-def _evaluate_rule(
-    run_id: str,
-    rule: RuleConfig,
-    table: DiscoveredTable,
-    column_name: str,
-    cursor: Any,
-    dialect: Dialect,
-) -> list[DQIssue]:
-    """Evaluate one rule against one (table, column) and return any issues.
-
-    Args:
-        run_id: Pipeline run identifier.
-        rule: The rule configuration to evaluate.
-        table: The target table.
-        column_name: The target column.
-        cursor: Open DBAPI cursor.
-        dialect: Resolved :class:`~dqt.sql.dialects.base.Dialect`.
-
-    Returns:
-        List of :class:`~dqt.common.models.DQIssue` (empty if rule passes).
-
-    Example::
-
-        issues = _evaluate_rule("run-001", rule, table, "email", cursor, "sqlite")
-    """
-    schema = table.schema_name
-    tname = table.table_name
-    expr = rule.expression.strip().upper()
-    issues: list[DQIssue] = []
-
-    try:
-        if expr == "NOT NULL":
-            total, null_count = _eval_not_null(cursor, schema, tname, column_name, dialect)
-            if null_count > 0:
-                issues.append(
-                    DQIssue(
-                        issue_id=str(uuid.uuid4()),
-                        run_id=run_id,
-                        dimension=rule.dimension,
-                        severity=rule.severity,
-                        message=(
-                            f"Column '{column_name}' in '{tname}' has {null_count} "
-                            f"NULL value(s) out of {total} total rows."
-                        ),
-                        evidence={"null_count": null_count, "total_rows": total},
-                        schema_name=schema,
-                        table_name=tname,
-                        column_name=column_name,
-                        rule_name=rule.name,
-                    )
-                )
-
-        elif expr == "UNIQUE":
-            total, duplicate_extra, used_approximation = _eval_unique(
-                cursor,
-                schema,
-                tname,
-                column_name,
-                dialect,
-                approximate=bool(rule.params.get("approximate", False)),
-            )
-            if duplicate_extra > 0:
-                issues.append(
-                    DQIssue(
-                        issue_id=str(uuid.uuid4()),
-                        run_id=run_id,
-                        dimension=rule.dimension,
-                        severity=rule.severity,
-                        message=(
-                            f"Column '{column_name}' in '{tname}' has {duplicate_extra} "
-                            f"extra duplicate value(s) (violates uniqueness)."
-                        ),
-                        evidence={
-                            "duplicate_extra_rows": duplicate_extra,
-                            "total_rows": total,
-                            # Present whether or not the caller asked, so a
-                            # reader never has to guess which kind of number
-                            # they are looking at.
-                            "approximate": used_approximation,
-                        },
-                        schema_name=schema,
-                        table_name=tname,
-                        column_name=column_name,
-                        rule_name=rule.name,
-                    )
-                )
-
-        elif expr == "RANGE":
-            min_val = rule.params.get("min")
-            max_val = rule.params.get("max")
-            total, out_of_range = _eval_range(
-                cursor, schema, tname, column_name, min_val, max_val, dialect
-            )
-            if out_of_range > 0:
-                issues.append(
-                    DQIssue(
-                        issue_id=str(uuid.uuid4()),
-                        run_id=run_id,
-                        dimension=rule.dimension,
-                        severity=rule.severity,
-                        message=(
-                            f"Column '{column_name}' in '{tname}' has {out_of_range} "
-                            f"value(s) outside the range "
-                            f"[{min_val if min_val is not None else '-inf'}, "
-                            f"{max_val if max_val is not None else '+inf'}]."
-                        ),
-                        evidence={
-                            "out_of_range_count": out_of_range,
-                            "total_rows": total,
-                            "min": min_val,
-                            "max": max_val,
-                        },
-                        schema_name=schema,
-                        table_name=tname,
-                        column_name=column_name,
-                        rule_name=rule.name,
-                    )
-                )
-
-        elif expr == "REGEX":
-            pattern = rule.params.get("pattern", "")
-            if not pattern:
-                raise ValueError(f"Rule '{rule.name}' uses 'regex' but params.pattern is missing.")
-            total, non_matching = _eval_regex(cursor, schema, tname, column_name, pattern, dialect)
-            if non_matching > 0:
-                issues.append(
-                    DQIssue(
-                        issue_id=str(uuid.uuid4()),
-                        run_id=run_id,
-                        dimension=rule.dimension,
-                        severity=rule.severity,
-                        message=(
-                            f"Column '{column_name}' in '{tname}' has {non_matching} "
-                            f"value(s) not matching pattern '{pattern}'."
-                        ),
-                        evidence={
-                            "non_matching_count": non_matching,
-                            "total_rows": total,
-                            "pattern": pattern,
-                        },
-                        schema_name=schema,
-                        table_name=tname,
-                        column_name=column_name,
-                        rule_name=rule.name,
-                    )
-                )
-
-        elif expr == "REFERENCE":
-            checked_rows, unmatched_count, normalized = _eval_reference(
-                cursor, schema, tname, column_name, dialect, rule.params
-            )
-            if unmatched_count > 0:
-                issues.append(
-                    DQIssue(
-                        issue_id=str(uuid.uuid4()),
-                        run_id=run_id,
-                        dimension=rule.dimension,
-                        severity=rule.severity,
-                        message=(
-                            f"Column '{column_name}' in '{tname}' has "
-                            f"{unmatched_count} value(s) absent from its reference "
-                            f"set, out of {checked_rows} non-NULL value(s) checked."
-                        ),
-                        evidence={
-                            "unmatched_count": unmatched_count,
-                            "checked_rows": checked_rows,
-                            # Present whether or not folding was asked for, so
-                            # a reader never has to guess whether two spellings
-                            # of one word were treated as one value.
-                            "normalized": normalized,
-                        },
-                        schema_name=schema,
-                        table_name=tname,
-                        column_name=column_name,
-                        rule_name=rule.name,
-                    )
-                )
-
-        else:
-            # Unknown expression: produce an error-severity issue so the DBA
-            # knows a rule was skipped, rather than silently passing.
-            issues.append(
-                DQIssue(
-                    issue_id=str(uuid.uuid4()),
-                    run_id=run_id,
-                    dimension=rule.dimension,
-                    severity="error",
-                    message=(
-                        f"Rule '{rule.name}' uses unknown expression '{rule.expression}'. "
-                        "No evaluation was performed."
-                    ),
-                    evidence={"expression": rule.expression},
-                    schema_name=schema,
-                    table_name=tname,
-                    column_name=column_name,
-                    rule_name=rule.name,
-                )
-            )
-    except Exception as exc:  # noqa: BLE001
-        issues.append(
-            DQIssue(
-                issue_id=str(uuid.uuid4()),
-                run_id=run_id,
-                dimension=rule.dimension,
-                severity="error",
-                message=f"Rule '{rule.name}' evaluation error on '{tname}.{column_name}': {exc}",
-                evidence={"error": str(exc)},
-                schema_name=schema,
-                table_name=tname,
-                column_name=column_name,
-                rule_name=rule.name,
-            )
-        )
-
-    return issues
 
 
 # ---------------------------------------------------------------------------
@@ -725,54 +865,62 @@ def apply_rules(
         return [], []
 
     dialect = get_dialect_for(connection_config)
-    all_issues: list[DQIssue] = []
-    summaries: list[RuleRunResult] = []
+    compiled: list[_CompiledCheck] = []
+    issues_by_rule: dict[int, list[DQIssue]] = {index: [] for index in range(len(rules))}
+    targets_checked = [0] * len(rules)
+    targets_error = [0] * len(rules)
+
+    # Compile first, connect second. A rule whose parameters cannot describe a
+    # check is a configuration mistake, and finding it costs no database work.
+    for rule_index, rule in enumerate(rules):
+        for table in discovered_tables:
+            for column in table.columns:
+                if not _matches_scope(table, column.column_name, rule):
+                    continue
+                targets_checked[rule_index] += 1
+                try:
+                    compiled.append(
+                        _compile_check(run_id, rule, rule_index, table, column.column_name, dialect)
+                    )
+                except Exception as error:  # noqa: BLE001
+                    issues_by_rule[rule_index].append(
+                        _evaluation_error_issue(run_id, rule, table, column.column_name, error)
+                    )
+                    targets_error[rule_index] += 1
+
+    # Checks reading the same table reference share one scan. That is the
+    # whole point: `CLAUDE.md` section 3 asks for a table to be read once, not
+    # once per rule, and a DBA writes the most rules against the table they
+    # care about most.
+    groups: dict[str, list[_CompiledCheck]] = {}
+    for check in compiled:
+        groups.setdefault(check.from_clause, []).append(check)
 
     db_conn = get_connection(connection_config)
     try:
         cursor = db_conn.cursor()
-        for rule in rules:
-            rule_issues: list[DQIssue] = []
-            targets_checked = 0
-            targets_failed = 0
-            targets_error = 0
-
-            for table in discovered_tables:
-                for col in table.columns:
-                    if not _matches_scope(table, col.column_name, rule):
-                        continue
-                    targets_checked += 1
-                    col_issues = _evaluate_rule(
-                        run_id=run_id,
-                        rule=rule,
-                        table=table,
-                        column_name=col.column_name,
-                        cursor=cursor,
-                        dialect=dialect,
-                    )
-                    rule_issues.extend(col_issues)
-                    if col_issues:
-                        error_issues = [
-                            i
-                            for i in col_issues
-                            if i.severity == "error" and "evaluation error" in i.message
-                        ]
-                        if error_issues:
-                            targets_error += 1
-                        else:
-                            targets_failed += 1
-
-            all_issues.extend(rule_issues)
-            summaries.append(
-                RuleRunResult(
-                    run_id=run_id,
-                    rule_name=rule.name,
-                    targets_checked=targets_checked,
-                    targets_failed=targets_failed,
-                    targets_error=targets_error,
-                )
-            )
+        for from_clause, checks in groups.items():
+            for check, produced, errored in _run_group(
+                run_id, rules, cursor, dialect, from_clause, checks
+            ):
+                issues_by_rule[check.rule_index].extend(produced)
+                targets_error[check.rule_index] += int(errored)
     finally:
         db_conn.close()
+
+    all_issues: list[DQIssue] = []
+    summaries: list[RuleRunResult] = []
+    for rule_index, rule in enumerate(rules):
+        rule_issues = issues_by_rule[rule_index]
+        all_issues.extend(rule_issues)
+        summaries.append(
+            RuleRunResult(
+                run_id=run_id,
+                rule_name=rule.name,
+                targets_checked=targets_checked[rule_index],
+                targets_failed=len(rule_issues) - targets_error[rule_index],
+                targets_error=targets_error[rule_index],
+            )
+        )
 
     return all_issues, summaries
