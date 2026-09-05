@@ -248,3 +248,39 @@ class TestTheScreenIsNavigableAndReadOnly:
 
         assert "<script>alert(1)</script>" not in html
         assert "&lt;script&gt;" in html
+
+
+class TestARuleThatMatchedNothingIsNotPlottedAsAPass:
+    """The zero has to mean the same thing on the chart as in the table."""
+
+    def test_a_zero_target_run_scores_zero_not_one(self) -> None:
+        """It did not pass. It did not run.
+
+        A pass rate computed as "failures over targets" has no answer when
+        there are no targets, and the tempting default -- nothing failed, so
+        100% -- would draw the exact rule this screen exists to surface at
+        the top of its own trend line.
+        """
+        html = rule_history_page(
+            rule_name="orphan-rule",
+            history=[
+                {
+                    "run_id": "run-1",
+                    "started_at": "2026-09-02T09:00:00+00:00",
+                    "targets_checked": 0,
+                    "targets_failed": 0,
+                    "targets_error": 0,
+                },
+                {
+                    "run_id": "run-0",
+                    "started_at": "2026-09-01T09:00:00+00:00",
+                    "targets_checked": 2,
+                    "targets_failed": 0,
+                    "targets_error": 0,
+                },
+            ],
+        )
+        equivalent = html.split('class="dqt-chart-text"')[1].split("<")[0]
+
+        assert "100%" in equivalent
+        assert "0%" in equivalent
