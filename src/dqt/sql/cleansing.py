@@ -219,6 +219,18 @@ class CleansingResult:
     dry_run: bool = True
 
 
+#: How many rows a cleansing read pulls back at a time.
+#:
+#: Cleansing is the one facet that genuinely reads rows, because it records a
+#: before-value for every change so ``revert()`` can put it back. Reading them
+#: all at once puts the planner's memory at the mercy of the table's size, so
+#: reads are paged by the row identity instead.
+#:
+#: Internal and unstable: it is a tuning knob, not part of the promise in
+#: ``docs/API-STABILITY.md``.
+_READ_PAGE_SIZE = 1000
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

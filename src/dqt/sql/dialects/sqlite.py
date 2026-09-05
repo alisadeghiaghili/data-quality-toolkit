@@ -342,6 +342,7 @@ class SqliteDialect:
         expressions: Sequence[str],
         where_clause: str | None = None,
         limit: int | None = None,
+        order_by: Sequence[str] | None = None,
     ) -> str:
         """Build a ``SELECT`` bounded by SQLite's trailing ``LIMIT`` clause.
 
@@ -363,6 +364,8 @@ class SqliteDialect:
             assert sql == 'SELECT * FROM "t" LIMIT 5'
         """
         validate_row_limit(limit)
+        if order_by is not None:
+            raise NotImplementedError
         statement = ansi_select_aggregates_sql(qualified_table, expressions, where_clause)
         if limit is None:
             return statement

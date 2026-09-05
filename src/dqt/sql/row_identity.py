@@ -82,6 +82,48 @@ class RowIdentity:
         """
         return (self.locator,) if self.locator is not None else self.columns
 
+    def order_by_expressions(self, dialect: Dialect) -> list[str]:
+        """Return the ordering that makes this identity pageable.
+
+        Args:
+            dialect: Dialect used to quote the key columns.
+
+        Returns:
+            One ordering term per identity component, in key order.
+
+        Example:
+            assert identity.order_by_expressions(dialect) == ['"id"']
+        """
+        raise NotImplementedError
+
+    def after_clause(self, dialect: Dialect) -> str:
+        """Return a predicate matching rows ordered after a given one.
+
+        Args:
+            dialect: Dialect supplying the bind placeholder and quoting.
+
+        Returns:
+            A predicate such as ``("id" > ?)``.
+
+        Example:
+            assert identity.after_clause(dialect) == '("id" > ?)'
+        """
+        raise NotImplementedError
+
+    def after_bind_values(self, row_key: dict[str, Any]) -> tuple[Any, ...]:
+        """Return the bind values for :meth:`after_clause`, in its order.
+
+        Args:
+            row_key: The identity of the last row of the previous page.
+
+        Returns:
+            Values ordered to match the placeholders.
+
+        Example:
+            assert identity.after_bind_values({"id": 42}) == (42,)
+        """
+        raise NotImplementedError
+
     def where_clause(self, dialect: Dialect) -> str:
         """Return a parameterised predicate matching exactly this row.
 

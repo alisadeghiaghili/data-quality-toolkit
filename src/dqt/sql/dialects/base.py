@@ -301,6 +301,7 @@ class Dialect(Protocol):
         expressions: Sequence[str],
         where_clause: str | None = None,
         limit: int | None = None,
+        order_by: Sequence[str] | None = None,
     ) -> str:
         """Build a row-limited ``SELECT``, using this dialect's limit syntax.
 

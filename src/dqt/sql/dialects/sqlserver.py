@@ -411,6 +411,7 @@ class SqlServerDialect:
         expressions: Sequence[str],
         where_clause: str | None = None,
         limit: int | None = None,
+        order_by: Sequence[str] | None = None,
     ) -> str:
         """Build a ``SELECT`` bounded by T-SQL's ``TOP (n)`` prefix.
 
@@ -437,6 +438,8 @@ class SqlServerDialect:
             assert sql == "SELECT TOP (5) * FROM [t]"
         """
         validate_row_limit(limit)
+        if order_by is not None:
+            raise NotImplementedError
         if limit is None:
             return ansi_select_aggregates_sql(qualified_table, expressions, where_clause)
         if not expressions:
