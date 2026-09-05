@@ -249,3 +249,37 @@ class TestTheScreensAreServed:
 
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("application/json")
+
+
+class TestTheRulesScreensAreServed:
+    """Routing for `VIZ-6`. The rendering is asserted in test_rules_page.py."""
+
+    def test_a_run_s_rules_have_a_page(self, client: TestClient) -> None:
+        """Reached from the run, which is where a DBA is when they ask."""
+        response = client.get(f"/ui/runs/{RUN_ID}/rules")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+
+    def test_a_rule_has_a_history_page(self, client: TestClient) -> None:
+        """Not scoped to a run: history is the question that spans them."""
+        response = client.get("/ui/rules/not-null-email")
+
+        assert response.status_code == 200
+        assert "not-null-email" in response.text
+
+    def test_an_unknown_run_s_rules_are_a_404(self, client: TestClient) -> None:
+        """Consistent with the other run-scoped screens."""
+        assert client.get("/ui/runs/no-such-run/rules").status_code == 404
+
+    def test_a_rule_that_never_ran_is_a_page_rather_than_a_404(self, client: TestClient) -> None:
+        """ "Never ran" is an answer, and a different one from "does not exist".
+
+        A 404 would tell a DBA their rule name was wrong, when the truth may
+        be that the rule has never matched a run -- which is exactly the
+        condition this screen was built to surface.
+        """
+        response = client.get("/ui/rules/never-ran")
+
+        assert response.status_code == 200
+        assert "never-ran" in response.text

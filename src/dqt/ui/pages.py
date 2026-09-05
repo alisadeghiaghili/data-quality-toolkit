@@ -35,7 +35,7 @@ from dqt._theme import STYLESHEET
 from dqt.common.models import get_args_of_dq_dimension
 from dqt.fonts import embedded_font_face
 from dqt.i18n import Language, ltr_span, translate
-from dqt.viz import Chart, bar_chart, scorecard, severity_indicator
+from dqt.viz import Chart, bar_chart, scorecard, severity_indicator, trend_line
 
 __all__ = [
     "issues_page",
@@ -531,6 +531,12 @@ def rules_page(
 ) -> str:
     """Render what each rule did in one run.
 
+    The rules that matched nothing are called out above the table, in words.
+    A rule whose scope no longer matches anything reports no failures, which
+    reads exactly like a rule that passes -- and it sits in the same table,
+    next to real passes, showing the same zero. A zero in a column of zeroes
+    is invisible, so the warning has to be a sentence and it has to be first.
+
     Args:
         run: The run the results belong to.
         results: One summary per rule evaluated.
@@ -542,7 +548,67 @@ def rules_page(
     Example:
         html = rules_page(run=run, results=[])
     """
-    raise NotImplementedError
+    orphans = [
+        str(entry["rule_name"]) for entry in results if int(entry.get("targets_checked", 0)) == 0
+    ]
+    # Only when there is something to say. A permanent banner is a banner
+    # people stop reading, which costs the attention this screen exists to buy.
+    warning: list[object] = []
+    if orphans:
+        warning = [
+            element(
+                "p",
+                translate("matched_nothing", language),
+                " ",
+                Raw(", ".join(ltr_span(name) for name in sorted(orphans))),
+                attrs={"class": "badge warn"},
+            )
+        ]
+
+    rows: list[list[object]] = [
+        [
+            element(
+                "a",
+                Raw(ltr_span(entry["rule_name"])),
+                attrs={"href": f"/ui/rules/{entry['rule_name']}"},
+            ),
+            entry.get("targets_checked", 0),
+            entry.get("targets_failed", 0),
+            entry.get("targets_error", 0),
+        ]
+        for entry in results
+    ]
+    body = (
+        table(
+            [
+                translate("rule", language),
+                translate("targets_checked", language),
+                translate("targets_failed", language),
+                translate("targets_error", language),
+            ],
+            rows,
+        )
+        if rows
+        else element("p", translate("no_rules", language), attrs={"class": "empty"})
+    )
+
+    heading = translate("rules", language)
+    return _page(
+        heading,
+        language,
+        _breadcrumbs(
+            (translate("overview", language), "/ui"),
+            (
+                f"{translate('run', language)} {run['run_id']}",
+                f"/ui/runs/{run['run_id']}",
+            ),
+            (heading, None),
+        ),
+        _run_header(run, language),
+        element("h2", heading),
+        *warning,
+        body,
+    )
 
 
 def rule_history_page(
@@ -552,6 +618,10 @@ def rule_history_page(
     language: Language = "en",
 ) -> str:
     """Render one rule's results across runs.
+
+    Charted oldest-first. The store returns history newest-first, which is
+    right for a list and wrong for a time axis: plotting it as given would
+    draw every improving rule as though it were getting worse.
 
     Args:
         rule_name: The rule being followed.
@@ -564,4 +634,74 @@ def rule_history_page(
     Example:
         html = rule_history_page(rule_name="r", history=[])
     """
-    raise NotImplementedError
+    oldest_first = list(reversed(list(history)))
+    chart = trend_line(
+        [
+            (
+                str(entry.get("started_at", ""))[:10],
+                _pass_rate(entry),
+            )
+            for entry in oldest_first
+        ],
+        title=f"{translate('rule', language)} {rule_name}",
+    )
+
+    rows: list[list[object]] = [
+        [
+            Raw(ltr_span(entry.get("run_id", ""))),
+            Raw(ltr_span(entry.get("started_at", ""))),
+            entry.get("targets_checked", 0),
+            entry.get("targets_failed", 0),
+            entry.get("targets_error", 0),
+        ]
+        for entry in history
+    ]
+    body = (
+        table(
+            [
+                translate("run", language),
+                translate("started", language),
+                translate("targets_checked", language),
+                translate("targets_failed", language),
+                translate("targets_error", language),
+            ],
+            rows,
+        )
+        if rows
+        else element("p", translate("no_history", language), attrs={"class": "empty"})
+    )
+
+    heading = f"{translate('rule', language)} {rule_name}"
+    return _page(
+        heading,
+        language,
+        _breadcrumbs(
+            (translate("overview", language), "/ui"),
+            (translate("history", language), None),
+        ),
+        element("h1", Raw(ltr_span(rule_name))),
+        element("h2", translate("history", language)),
+        _chart_block(chart),
+        body,
+    )
+
+
+def _pass_rate(entry: Mapping[str, Any]) -> float:
+    """Return the share of a rule's targets that passed in one run.
+
+    Args:
+        entry: One history entry.
+
+    Returns:
+        A value in ``[0, 1]``. A rule that matched nothing scores 0.0 rather
+        than 1.0: it did not pass, it did not run, and drawing it at the top
+        of the chart would say the opposite.
+
+    Example:
+        assert _pass_rate({"targets_checked": 2, "targets_failed": 1}) == 0.5
+    """
+    checked = int(entry.get("targets_checked", 0))
+    if checked <= 0:
+        return 0.0
+    bad = int(entry.get("targets_failed", 0)) + int(entry.get("targets_error", 0))
+    return max(0.0, (checked - bad) / checked)
