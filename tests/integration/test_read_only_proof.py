@@ -292,14 +292,14 @@ class TestTheFourHashProofHoldsOnEveryServer:
         # 3. A write attempted through DQT under the guard.
         with pytest.raises(ReadOnlyViolationError):
             plan = cleanse_plan(read_only, [_standardize(table)], store=_NullStore())
-            cleanse_apply(read_only, plan.plan_id, store=_NullStore())
+            cleanse_apply(plan.plan_id, read_only, store=_NullStore())
         after_guarded = _fingerprint(engine, table)
 
         # 4. A real write, with both opt-outs supplied explicitly.
         writable = ConnectionConfig(id=engine, dsn=dsn, read_only=False)
         store = _NullStore()
         plan = cleanse_plan(writable, [_standardize(table)], store=store)
-        cleanse_apply(writable, plan.plan_id, store=store)
+        cleanse_apply(plan.plan_id, writable, store=store)
         after_write = _fingerprint(engine, table)
 
         assert before == after_read == after_guarded
@@ -338,7 +338,11 @@ class TestSqlServerIsProvedWhereItIsWeakest:
 
         try:
             read_only = ConnectionConfig(id=engine, dsn=dsn)
-            with pytest.warns(UserWarning):
+            # RuntimeWarning, not UserWarning: the dialect chose that class
+            # deliberately, because this is a statement about what the
+            # program can and cannot do at run time rather than advice to
+            # the person who wrote the config.
+            with pytest.warns(RuntimeWarning, match="advisory"):
                 connection = get_connection(read_only)
             try:
                 connection.cursor().execute(f"INSERT INTO {table} (id) VALUES (1)")
