@@ -2,9 +2,18 @@
 
 These check the shape of the source tree, not its runtime behaviour, so they
 keep holding when a future change is correct but reintroduces a second
-authority. They are the plain-test stand-in for the checks
-``tools/arch_audit.py`` will automate under `ARC-01`; when that tool lands,
-these should become its seed cases rather than being deleted.
+authority.
+
+**`ARC-01` has landed**, and these cases seeded `tools/arch_audit.py` as this
+docstring said they would. The import-graph rules now live there and are
+exercised by ``tests/unit/test_arch_audit.py``, which hands each one a
+synthetic violation to catch before running it over the real tree.
+
+What stays here is what the audit deliberately does not do. Packaging is
+checked from ``pyproject.toml`` rather than from the import graph -- which
+driver is declared in which extra is a distribution question, not an
+architectural one, and an audit that read both would answer neither
+clearly.
 """
 
 from __future__ import annotations
