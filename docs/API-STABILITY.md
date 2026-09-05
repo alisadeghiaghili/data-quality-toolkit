@@ -95,21 +95,74 @@ The replacement has to exist and be at least as capable **before** step 1.
 |---|---|---|---|
 | `dqt.sql.cleansing.apply_cleansing` | 0.1.0 | `cleanse_plan()` / `cleanse_apply()` / `revert()` | It writes its log to memory and returns it, so a caller who drops the return value loses the before-values permanently and the change cannot be undone — the defect `DQT-05` exists to fix. The replacement persists the log against a `plan_id` and can undo automatically. |
 
-## 6. What is deliberately not frozen yet
+## 6. The surfaces beyond the import list
 
-DQT is `0.x`. Under semver that is *no* stability promise at all, and this
-page describes the shape the promise will take rather than one already in
-force. Two things have to be true before `1.0.0` claims it:
+`docs/PROPOSAL-v1.0-roadmap.md` §1 is explicit that a compatibility promise
+covers more than what a Python caller imports. Each of these is frozen, and
+each is held by a named test.
 
-- **The facet modules are decided.** `sql/knowledge.py` now exists and is
-  tested (`NEW-K`). `viz.py` still does not exist, but it is no longer an open
-  question: `docs/PLAN-VIZ-UI.md` decides the stack and sequences the work, and
-  the owner confirmed on 2026-09-05 that DQT gets a UI rather than cutting the
-  facet. Freezing a surface with a named gap in it means either adding to a
-  frozen API later or admitting the facets model overstated what DQT does —
-  so the gap has to be closed, not annotated.
-- ~~**The performance work is finished enough to have shaped the
-  interfaces.**~~ Done. The approximate-distinct option and grouped rules
-  have both landed, and both did change how a rule is evaluated — which is
-  exactly why freezing before them would have meant deprecating a
-  just-frozen API.
+### The CLI
+
+`dqt profile`'s **flags** and **exit codes** are a contract, because a CI
+pipeline is scripted against them and a changed exit code changes whether a
+build goes red. Every flag also carries help text, and a flag with a closed
+set of values names them — `--fail-on` decides whether CI fails, and guessing
+at its values is guessing at a gate.
+
+Held by `tests/unit/test_documented_surface.py` and
+`tests/unit/test_exit_codes.py`.
+
+### The config file
+
+The keys DQT accepts in `connection.yaml`, `pipeline.yaml` and a rules file
+are frozen by name, **and unknown keys are refused**.
+
+That refusal is the part worth explaining. pydantic ignores extras by
+default, so `exclude_tabels` used to parse cleanly and DQT would profile
+every table the author meant to skip. `read_only` is the reassuring case
+rather than the representative one — its default is already `true`, so
+misspelling it fails safe. Every other key failed in the direction of doing
+*more* than was asked.
+
+Defaults are frozen with the keys, because a default is what a config that
+omits a key *means*. Flipping `read_only`'s would turn every config that
+omits it into one that permits writes — a break no signature records and no
+import error announces.
+
+Held by `tests/unit/test_config_schema_frozen.py`.
+
+### The UI: the JSON is frozen, the HTML is not
+
+A deliberate split.
+
+**The six JSON endpoints are inside the promise.** `/health`, `/runs`,
+`/runs/{id}`, `/runs/{id}/tables`, `/runs/{id}/metrics`, `/runs/{id}/issues`
+return documented shapes that someone will script against, and a script
+cannot tell the difference between a renamed key and a bug.
+
+**The HTML screens are outside it.** `/ui`, `/ui/runs/{id}`,
+`/ui/runs/{id}/issues`, `/ui/runs/{id}/rules` and `/ui/rules/{name}` render a
+presentation. Freezing their markup would mean a clearer table or a better
+chart is a breaking change, which would stop the screens improving for no
+one's benefit — nobody parses them, and anyone tempted to should use the JSON
+that exists for exactly that.
+
+The URLs themselves are stable; what they render is not.
+
+> `docs/PROPOSAL-v1.0-roadmap.md` §4 recommended deferring a dashboard past
+> 1.0 and keeping only the read-only surface and the HTML report. The owner
+> asked for the screens on 2026-09-05 and they were built (`VIZ-1`…`VIZ-6`).
+> That recommendation is superseded by an owner decision, recorded here
+> rather than left as a contradiction between two documents.
+
+## 7. What was deliberately not frozen, and now is
+
+Both blockers this section used to list are closed.
+
+- ~~**The facet modules are decided.**~~ `sql/knowledge.py` and `viz.py` are
+  built and tested. `docs/CONVENTIONS-DQT.md` §2 carries no row reading "not
+  started".
+- ~~**The performance work has shaped the interfaces.**~~ The
+  approximate-distinct option, grouped rules and paged cleansing reads have
+  all landed, and each changed a signature — which is why freezing before
+  them would have meant deprecating a just-frozen API.
