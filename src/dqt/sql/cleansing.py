@@ -1235,12 +1235,22 @@ def cleanse_apply(
         # is what executes.
         for change in plan.changes:
             table = qualified_identifier(change.schema_name, change.table_name)
-            column = quote_identifier(str(change.column_name))
             identity = _identity_from_row_key(change.row_key, dialect)
+            binds = identity.bind_values(change.row_key)
+            where = identity.where_clause(dialect)
+
+            if change.operation == "deduplicate":
+                # A deletion, not a value change. Replaying it as an UPDATE
+                # was the defect NEW-U fixed: column_name is None for a
+                # table-level operation, so the statement read SET "None" = ?
+                # and no deduplicate plan could ever be applied.
+                cursor.execute(f"DELETE FROM {table} WHERE {where}", binds)
+                continue
+
+            column = quote_identifier(str(change.column_name))
             cursor.execute(
-                f"UPDATE {table} SET {column} = {dialect.parameter_placeholder} "
-                f"WHERE {identity.where_clause(dialect)}",
-                (change.after_value, *identity.bind_values(change.row_key)),
+                f"UPDATE {table} SET {column} = {dialect.parameter_placeholder} WHERE {where}",
+                (change.after_value, *binds),
             )
         connection.commit()
     except Exception:
@@ -1257,6 +1267,57 @@ def cleanse_apply(
     result.total_changes = len(plan.changes)
     result.tables_affected = len({c.table_name for c in plan.changes})
     return result
+
+
+def _reinsert_deleted_row(
+    cursor: Any,
+    dialect: Dialect,
+    qualified_table: str,
+    identity: RowIdentity,
+    entry: dict[str, Any],
+) -> None:
+    """Put back a row ``deduplicate`` removed.
+
+    Undoing a deletion is an insert, not an update: there is no row left to
+    update, which is what made ``revert`` fail on this operation before
+    `NEW-U`. The whole row was captured as ``before_value`` when the plan was
+    computed, so every column is written back -- including the ones that were
+    NULL, because reinserting only the columns that had values leaves a NULL
+    as whatever the column defaults to, which is a different value rather
+    than a missing one.
+
+    Args:
+        cursor: Open DBAPI cursor.
+        dialect: Dialect supplying quoting and the bind placeholder.
+        qualified_table: An already-quoted table reference.
+        identity: How the row was addressed.
+        entry: The log entry recording the deletion.
+
+    Raises:
+        ValueError: If the entry has no recorded row, which would mean the
+            log cannot restore what it deleted.
+
+    Example:
+        _reinsert_deleted_row(cursor, dialect, tbl, identity, entry)
+    """
+    row = entry["before_value"]
+    if not isinstance(row, dict) or not row:
+        raise ValueError(
+            f"The log entry for a deleted row in {entry['table_name']!r} carries no "
+            "row to restore, so the deletion cannot be undone. This plan's log was "
+            "written by a DQT that could not store one."
+        )
+
+    # A physical locator is not a column, so it must not be written back. A
+    # primary key is, and must be.
+    excluded = set(identity.key_names()) if identity.locator is not None else set()
+    columns = [name for name in row if name not in excluded]
+    placeholders = ", ".join([dialect.parameter_placeholder] * len(columns))
+    quoted = ", ".join(quote_identifier(name) for name in columns)
+    cursor.execute(
+        f"INSERT INTO {qualified_table} ({quoted}) VALUES ({placeholders})",
+        tuple(row[name] for name in columns),
+    )
 
 
 def revert(
@@ -1302,8 +1363,13 @@ def revert(
         # edits to one row unwind in the order they were applied.
         for entry in reversed(entries):
             table = qualified_identifier(entry["schema_name"], entry["table_name"])
-            column = quote_identifier(str(entry["column_name"]))
             identity = _identity_from_row_key(entry["row_key"], dialect)
+
+            if entry["operation"] == "deduplicate":
+                _reinsert_deleted_row(cursor, dialect, table, identity, entry)
+                continue
+
+            column = quote_identifier(str(entry["column_name"]))
             cursor.execute(
                 f"UPDATE {table} SET {column} = {dialect.parameter_placeholder} "
                 f"WHERE {identity.where_clause(dialect)}",

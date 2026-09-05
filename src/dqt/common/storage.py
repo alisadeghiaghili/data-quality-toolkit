@@ -50,9 +50,14 @@ _DEFAULT_DB_PATH: Path = Path("dqt_runs.db")
 #:
 #: One integer, rather than a growing chain of "does this column exist yet"
 #: probes: each of those only ever detects the specific past it was taught
-#: about. Bump it whenever the DDL below changes -- the store is a local
-#: artifact meant to be recreated rather than migrated.
-SCHEMA_VERSION = 2
+#: about. Bump it whenever the DDL below changes, or whenever what is written
+#: into a column changes shape -- the store is a local artifact meant to be
+#: recreated rather than migrated.
+#:
+#: 3 (`NEW-U`): cleansing_log's before_value and after_value are JSON. They
+#: were written raw, which worked for the strings standardize produces and
+#: could not store the whole-row dict deduplicate produces at all.
+SCHEMA_VERSION = 3
 
 
 class RunStore:
@@ -780,8 +785,13 @@ class RunStore:
                         change.table_name,
                         change.column_name,
                         json.dumps(change.row_key),
-                        change.before_value,
-                        change.after_value,
+                        # JSON, not raw. deduplicate's before_value is the
+                        # whole deleted row as a dict, which sqlite3 cannot
+                        # store at all; standardize's is a string, which it
+                        # could -- so writing raw worked for one operation and
+                        # silently excluded the other.
+                        json.dumps(change.before_value),
+                        json.dumps(change.after_value),
                         applied_at.isoformat(),
                     )
                     for change in changes
@@ -804,7 +814,15 @@ class RunStore:
             rows = conn.execute(
                 "SELECT * FROM cleansing_log WHERE plan_id = ? ORDER BY id", (plan_id,)
             ).fetchall()
-        return [dict(r) | {"row_key": json.loads(r["row_key"])} for r in rows]
+        return [
+            dict(row)
+            | {
+                "row_key": json.loads(row["row_key"]),
+                "before_value": json.loads(row["before_value"]),
+                "after_value": json.loads(row["after_value"]),
+            }
+            for row in rows
+        ]
 
     def mark_cleansing_plan_applied(self, plan_id: str, applied_at: Any) -> None:
         """Record that a plan has been executed.

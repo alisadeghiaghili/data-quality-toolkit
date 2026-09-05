@@ -273,6 +273,26 @@ jobs:
             exit 1
           fi
 
+      - name: Cleansing round trip (PostgreSQL)
+        env:
+          DQT_POSTGRES_TEST_DSN: postgresql://dqt:dqt@localhost:5432/dqt_test
+        # GATE-03. Apply and undo, for both operations that change data.
+        # deduplicate is the one worth the container time: it deletes rows, so
+        # undoing it means reinserting them with every column reconstructed
+        # from a log written before they were gone -- addressed by a primary
+        # key, on an engine where rowid does not exist.
+        run: |
+          set -o pipefail
+          pytest tests/integration/test_cleansing_roundtrip.py -v --color=no             -k "postgresql" | tee pg-roundtrip.txt
+          if ! grep -qE "[0-9]+ passed" pg-roundtrip.txt; then
+            echo "::error::The PostgreSQL cleansing round trip produced no evidence." >&2
+            exit 1
+          fi
+          if grep -qE "[0-9]+ skipped" pg-roundtrip.txt; then
+            echo "::error::The PostgreSQL cleansing round trip skipped." >&2
+            exit 1
+          fi
+
   # --------------------------------------------------------------------------
   # Job 7: SQL Server integration tests (service container)
   # --------------------------------------------------------------------------
@@ -398,5 +418,25 @@ jobs:
           fi
           if grep -qE "[0-9]+ skipped" mssql-proof.txt; then
             echo "::error::The SQL Server read-only proof skipped; the DSN did not reach it." >&2
+            exit 1
+          fi
+
+      - name: Cleansing round trip (SQL Server)
+        env:
+          DQT_SQLSERVER_TEST_DSN: "mssql://sa:DqtCiTest!2026@localhost:1433/dqt_test?trust_server_certificate=yes"
+        # GATE-03. Apply and undo, for both operations that change data.
+        # deduplicate is the one worth the container time: it deletes rows, so
+        # undoing it means reinserting them with every column reconstructed
+        # from a log written before they were gone -- addressed by a primary
+        # key, on an engine where rowid does not exist.
+        run: |
+          set -o pipefail
+          pytest tests/integration/test_cleansing_roundtrip.py -v --color=no             -k "sqlserver" | tee mssql-roundtrip.txt
+          if ! grep -qE "[0-9]+ passed" mssql-roundtrip.txt; then
+            echo "::error::The SQL Server cleansing round trip produced no evidence." >&2
+            exit 1
+          fi
+          if grep -qE "[0-9]+ skipped" mssql-roundtrip.txt; then
+            echo "::error::The SQL Server cleansing round trip skipped." >&2
             exit 1
           fi

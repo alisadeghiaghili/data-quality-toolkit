@@ -166,6 +166,20 @@ Dates are the merge dates on `main`.
 
 ### Fixed
 
+- **`deduplicate` never worked through the supported API (`NEW-U`).** `DQT-05`
+  replaced `apply_cleansing` with `cleanse_plan` / `cleanse_apply` /
+  `revert` and deprecated the old one — but for `deduplicate` the
+  replacement had **three** fatal breaks, on every dialect including SQLite:
+  the log could not be stored (the deleted row is a dict, written raw to
+  SQLite), apply replayed a deletion as `UPDATE ... SET "None" = ?`, and
+  revert did the same against a row that was already gone. Only the
+  deprecated path handled it, because it deletes inline and never round-trips
+  through storage. `docs/API-STABILITY.md` requires a replacement to be at
+  least as capable *before* the old one is deprecated; that deprecation was
+  written against an intention. Found by `GATE-03`.
+- **`RunStore`'s cleansing log now stores JSON** for `before_value` and
+  `after_value` (schema version 3). **Existing `dqt_runs.db` files must be
+  recreated.**
 - **The HTML report never stated the run's status (`VIZ-0`).** It rendered a
   severity badge reading "info" for a success and "warning" for everything
   else, so `partial` and `failed` were indistinguishable and neither word
