@@ -134,6 +134,7 @@ class TestTheTableIsReadOncePerRuleAtMost:
             ("email", "NOT NULL", {}),
             ("age", "RANGE", {"min": 0, "max": 120}),
             ("email", "UNIQUE", {}),
+            ("city", "REFERENCE", {"values": ["Tehran"]}),
         ],
     )
     def test_every_rule_type_costs_one_query(

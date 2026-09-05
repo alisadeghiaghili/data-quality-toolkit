@@ -30,6 +30,20 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **The Knowledge/Domain facet (`NEW-K`).** A `REFERENCE` rule expression
+  checks that a column's values come from a known set — the validity check
+  neither `REGEX` nor `RANGE` can express. The set is either a table in the
+  same database, compiled to an anti-join so the planner does the matching,
+  or an inline list bound as parameters. An optional `normalize_persian`
+  folds Persian and Arabic letter and digit variants on both sides, in SQL.
+  DQT deliberately ships no reference *data*: a tool carrying its own
+  country list is one stale release away from reporting correct data as
+  invalid. This was the last facet in `docs/CONVENTIONS-DQT.md` §2 with no
+  module behind it, and a `1.0.0` blocker in `docs/API-STABILITY.md`.
+- **An approximate-distinct option for `UNIQUE` rules.** `params:
+  {approximate: true}` asks the dialect for an estimate where it has one —
+  only SQL Server does. The issue's evidence always carries `approximate`,
+  because an estimate and an exact count are different claims.
 - **SQL Server exercised against a live server in CI.** `DQT-08` shipped the
   dialect with every assertion made against SQL text; whether `pyodbc` accepts
   the generated ODBC connection string, and whether `INFORMATION_SCHEMA`
@@ -39,6 +53,17 @@ Dates are the merge dates on `main`.
   now checked rather than only documented.
 - **PostgreSQL exercised against a live server in CI**, which verified
   `read_only` enforcement for the first time and immediately found `NEW-M`.
+
+### Changed
+
+- **Cleansing reads are paged by row identity** rather than taken in one
+  `fetchall()`, so planning a cleanse of a very large table no longer builds
+  a Python list the size of the table. Paged rather than streamed because
+  cleansing writes while it reads, and a streaming cursor would have made
+  the result depend on the engine's isolation level.
+- **Profiling is one aggregate query per table** rather than one per column,
+  and `RANGE` and `UNIQUE` rules each cost one query rather than two.
+  `_deduplicate` no longer issues a `SELECT *` per duplicate row.
 
 ### Fixed
 

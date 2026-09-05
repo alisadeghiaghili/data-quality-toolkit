@@ -1383,8 +1383,21 @@ re-measure before estimating precisely.
 > ordering returns an arbitrary page and "any twenty rows" cannot be resumed
 > from.
 >
-> **This unit is now closed.** Every scope item is either implemented and
-> gated or pinned as already true. One limit is recorded rather than fixed:
+> **Correction, same day: this unit is not closed.** The paragraph below
+> originally said it was. That was wrong, and wrong in the way the honesty
+> gate exists to catch — a status marker running ahead of the work. Two scope
+> items from `CLAUDE.md` §3 remain:
+>
+> * **"Rules on the same table are grouped so the table is scanned once, not
+>   once per rule."** Each rule still issues its own query.
+>   `test_rules_cost.py` gates *one query per rule*, which is a real
+>   improvement over two and is not the same claim. On a hot table carrying
+>   twenty rules that is twenty scans where one would do.
+> * **`regex` costs two queries**, not one: a bare row count followed by the
+>   match. The budget test never parametrised it, so nothing noticed.
+>
+> Everything else in the unit is either implemented and gated or pinned as
+> already true. One limit is recorded rather than fixed:
 > the deduplicate delete list is still materialised in full, because it *is*
 > the list of rows to delete and the plan has to hold it to be reviewable.
 > On a table that is mostly duplicates that list is large — a real bound, and

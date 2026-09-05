@@ -95,6 +95,24 @@ _PERSIAN_TRANSLATION_TABLE: dict[int, str | None] = {
     0x200D: None,  # zero-width joiner: same reasoning
 }
 
+#: The same fold, as ordered (source, replacement) pairs.
+#:
+#: ``str.translate`` applies every rule at once; SQL has no such operation,
+#: so the knowledge facet's fold expression nests ``REPLACE`` calls instead
+#: and applies them one after another. (Named in prose rather than as a
+#: dotted path: this module must not reach into the SQL layer, and
+#: ``test_classification_module_performs_no_io`` enforces that by reading the
+#: source text, which cannot tell a comment from an import.) They agree only
+#: because no replacement here is itself the source of another rule -- the
+#: outputs are ASCII digits, Persian yeh and Persian kaf, none of which is
+#: rewritten. ``tests/unit/sql/test_knowledge.py`` checks that rather than
+#: trusting it: if the two ever disagreed, a value would pass in Python and
+#: fail in SQL.
+PERSIAN_FOLD_RULES: tuple[tuple[str, str], ...] = tuple(
+    (chr(code_point), replacement if replacement is not None else "")
+    for code_point, replacement in _PERSIAN_TRANSLATION_TABLE.items()
+)
+
 # ---------------------------------------------------------------------------
 # Detector patterns -- compiled once, at module scope, never per value
 # ---------------------------------------------------------------------------
