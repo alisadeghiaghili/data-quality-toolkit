@@ -13,6 +13,26 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Added
+
+- **SQL Server exercised against a live server in CI.** `DQT-08` shipped the
+  dialect with every assertion made against SQL text; whether `pyodbc` accepts
+  the generated ODBC connection string, and whether `INFORMATION_SCHEMA`
+  returns what discovery expects, could only be settled against an instance.
+  Twelve tests now do, including one asserting that a write on a read-only
+  connection **lands** — the limitation `ReadOnlyEnforcement.ADVISORY` encodes,
+  now checked rather than only documented.
+- **PostgreSQL exercised against a live server in CI**, which verified
+  `read_only` enforcement for the first time and immediately found `NEW-M`.
+
+### Fixed
+
+- **`NEW-M`** — cleansing addressed rows by SQLite's `rowid`, so every
+  cleansing entry point failed on PostgreSQL and SQL Server. Rows are now
+  addressed by primary key; deduplication's `MIN(rowid)` ordering became a
+  portable `ROW_NUMBER()` window function that also handles composite keys.
+
+
 ## [0.1.0] — 2026-09-05
 
 The v0.1 cut line: everything `docs/PLAN-TDD.md` judged either **silently

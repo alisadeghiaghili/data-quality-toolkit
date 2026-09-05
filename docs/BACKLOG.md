@@ -244,6 +244,25 @@ No CLI-level rule-file flag exists; this fix only closes the config-file path.
 
 ---
 
+### Update 2026-09-05 — all three dialects run against live servers
+
+`DQT-08`'s one admitted gap is closed. Its own PR said no assertion touched a
+live SQL Server and that the ODBC connection string and `INFORMATION_SCHEMA`
+queries were tested as SQL text only; twelve tests now exercise them against
+a real instance in CI, alongside eleven for PostgreSQL.
+
+Both suites fail the build if they *skip*, because a skipped suite reports
+green and proves nothing — and these jobs exist to produce evidence.
+
+What the two runs found is worth recording as a pattern rather than two
+incidents. PostgreSQL's first run failed immediately and surfaced `NEW-M`;
+SQL Server's passed on the first attempt. The difference is not luck. The
+PostgreSQL gap was in `cleansing.py`, written long before the dialects layer
+existed and never revisited; the SQL Server dialect was written *after*
+`DQT-08` established the seam, against a protocol that made the dialect's
+obligations explicit. Code written against a stated contract survived contact
+with reality; code that predated one did not.
+
 ### `NEW-M` · Cleansing addresses rows by SQLite's `rowid` — **fixed**
 
 **Severity:** high — cleansing is unusable on PostgreSQL · **Found:** 2026-09-05,
