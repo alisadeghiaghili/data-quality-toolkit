@@ -6,8 +6,13 @@
 
 ## Status: alpha
 
-Version `0.1.0`. `docs/PLAN-TDD.md`'s cut line defines v0.1 as its units 1-9,
-and all nine have landed. See [`CHANGELOG.md`](CHANGELOG.md).
+Version `0.5.0`. The roadmap's release ladder defines four gates between
+`0.1.0` and here, and all four are met: the read-only proof runs against a
+live SQL Server and PostgreSQL, cleansing round-trips on both, the performance
+budgets are published with a committed run against them, and every facet in
+`docs/CONVENTIONS-DQT.md` §2 has a decision rather than a silence. See
+[`CHANGELOG.md`](CHANGELOG.md), including the upgrade note — your
+`dqt_runs.db` must be recreated.
 
 What that bar meant, in the plan's own words, was closing everything that was
 either **silently wrong** or **false in a shipped docstring**. Both are now

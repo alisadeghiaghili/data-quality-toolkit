@@ -13,6 +13,42 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-06
+
+**Why this is `0.5.0` and not `0.2.0`.** `docs/PROPOSAL-v1.0-roadmap.md` §6
+defines a release ladder whose rungs are *gates*, not decorations. Four of
+them are now met, in order, and this release is the first tag since `0.1.0`
+because the work that closed them landed continuously rather than in four
+separable batches:
+
+| rung | gate | closed by |
+|---|---|---|
+| **v0.2** — safety proven | The four-hash read-only proof against a **live SQL Server** and a live PostgreSQL, not only SQLite | `GATE-02` |
+| **v0.3** — the wedge is real | Cleansing round-trips — apply then revert to identical data — for **both** operations, on both servers | `GATE-03`, which found `NEW-U` |
+| **v0.4** — a measured budget | A committed benchmark run reporting profiling, rule-evaluation and cleanse-plan timings under published budgets at a stated fixture size | `GATE-04` |
+| **v0.5** — every facet decided | No row in the facet table still reads "not started" without an owner decision | `NEW-K`, `VIZ-1`…`VIZ-6` |
+
+`0.2.0`, `0.3.0` and `0.4.0` were **never published**. Their gates were closed
+in sequence and are listed above rather than invented as releases that did not
+happen.
+
+**The ladder was also reordered.** It originally put PostgreSQL at `v0.2` and
+SQL Server at `v0.4` as "the third dialect" — written before the owner named
+SQL Server as DQT's primary target. SQL Server now leads every rung, which
+makes `v0.2` stronger rather than weaker: it is the engine where
+`ReadOnlyEnforcement.ADVISORY` means the server will *not* refuse a write, so
+DQT's own guard is the only thing standing between a `read_only` config and a
+modified production table.
+
+### ⚠️ Upgrading from `0.1.0`
+
+**Delete your `dqt_runs.db` and let DQT recreate it.** The store's schema
+version went from 1 to 3 (`NEW-S`, then `NEW-U`), and DQT refuses a store it
+did not write rather than half-reading one — the store is a local artifact
+meant to be recreated, not migrated. Nothing else in this release requires
+action.
+
+
 ### Deprecated
 
 - **`dqt.sql.cleansing.apply_cleansing`** — superseded by `cleanse_plan()` /
