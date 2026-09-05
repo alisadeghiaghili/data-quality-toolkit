@@ -1,0 +1,16 @@
+{
+  "recorded_at": "2026-09-05T20:40:56.771152+00:00",
+  "rows": 50000,
+  "columns": 20,
+  "repeats": 5,
+  "timings": {
+    "profiling": 0.060680699985823594,
+    "rules": 0.03599940000276547,
+    "cleanse_plan": 0.09496970000327565
+  },
+  "machine": {
+    "python": "3.13.9",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "Intel64 Family 6 Model 142 Stepping 10, GenuineIntel"
+  }
+}
