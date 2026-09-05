@@ -588,7 +588,24 @@ class ConnectionConfig(BaseModel):
     @field_validator("dsn")
     @classmethod
     def dsn_must_not_be_empty(cls, v: str) -> str:
-        """Reject blank or whitespace-only DSNs."""
+        """Reject blank or whitespace-only DSNs.
+
+        A blank DSN fails later, inside a driver, with a message about the
+        driver rather than about the config -- so it is refused here, where
+        the field it came from can be named.
+
+        Args:
+            v: The DSN as written in the config.
+
+        Returns:
+            The DSN unchanged.
+
+        Raises:
+            ValueError: If the DSN is empty or only whitespace.
+
+        Example:
+            ConnectionConfig(id="c", dsn="sqlite:///dev.db")
+        """
         if not v.strip():
             raise ValueError("dsn must not be blank; use a valid connection string or ${ENV_VAR}.")
         return v
@@ -636,7 +653,21 @@ class DQPipelineConfig(BaseModel):
 
     @model_validator(mode="after")
     def check_no_overlap_in_include_exclude(self) -> DQPipelineConfig:
-        """Raise if the same name appears in both include and exclude lists."""
+        """Refuse a config that both includes and excludes the same name.
+
+        Whichever way DQT resolved the contradiction, half the readers of the
+        config would be surprised -- and a table silently skipped is the
+        expensive half of that guess.
+
+        Returns:
+            The validated config.
+
+        Raises:
+            ValueError: If any schema or table name appears in both lists.
+
+        Example:
+            DQPipelineConfig(connection_id="c", include_tables=["orders"])
+        """
         for attr in ("schemas", "tables"):
             inc: list[str] | None = getattr(self, f"include_{attr}")
             exc: list[str] | None = getattr(self, f"exclude_{attr}")
@@ -652,7 +683,24 @@ class DQPipelineConfig(BaseModel):
     @field_validator("metric_thresholds")
     @classmethod
     def thresholds_must_be_in_range(cls, v: dict[str, float] | None) -> dict[str, float] | None:
-        """Ensure all threshold values are in [0.0, 1.0]."""
+        """Refuse thresholds outside the range scores can take.
+
+        Metric scores are normalised to ``[0, 1]``, so a threshold of ``95``
+        can never be met and one of ``-1`` can never be missed. Both are
+        almost always a percentage written where a fraction was meant.
+
+        Args:
+            v: The threshold mapping, or None when none was given.
+
+        Returns:
+            The mapping unchanged, or None.
+
+        Raises:
+            ValueError: If any threshold falls outside ``[0.0, 1.0]``.
+
+        Example:
+            DQPipelineConfig(connection_id="c", metric_thresholds={"completeness": 0.95})
+        """
         if v is None:
             return v
         out_of_range = {k: val for k, val in v.items() if not (0.0 <= val <= 1.0)}
@@ -701,7 +749,24 @@ class RuleConfig(BaseModel):
     @field_validator("name")
     @classmethod
     def name_must_be_slug(cls, v: str) -> str:
-        """Reject names with spaces; they must be slug-style identifiers."""
+        """Refuse rule names containing spaces.
+
+        A rule name is an identifier: it appears in issue records, in the
+        rules screen's URLs, and in CLI output. A space survives none of
+        those cleanly.
+
+        Args:
+            v: The rule name as written in the config.
+
+        Returns:
+            The name unchanged.
+
+        Raises:
+            ValueError: If the name contains a space.
+
+        Example:
+            RuleConfig(name="not-null-email", ...)
+        """
         if " " in v:
             raise ValueError(
                 f"Rule name '{v}' must not contain spaces. Use underscores or hyphens instead."
@@ -719,6 +784,19 @@ class RuleConfig(BaseModel):
         depth alongside parameterization: a string payload cannot reach the
         SQL layer through this field even if a call site were to bind it
         incorrectly.
+
+        Args:
+            v: The rule's params mapping.
+
+        Returns:
+            The mapping unchanged.
+
+        Raises:
+            ValueError: If ``params.min`` or ``params.max`` is present and
+                is not a number.
+
+        Example:
+            RuleConfig(name="age", expression="RANGE", params={"min": 0, "max": 120}, ...)
         """
         for key in ("min", "max"):
             if key not in v:

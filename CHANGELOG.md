@@ -13,6 +13,17 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The documentation gate tolerates nothing (`DOC-02`).** `DOC-01` shipped it
+  in ratchet mode against a baseline of 29 pre-existing violations, which was
+  the right call while the debt was being paid down. It is paid off: five
+  pydantic validators, three constructors and six HTTP endpoints now document
+  what they take, return and raise. The baseline file is **deleted** rather
+  than emptied — an empty exceptions file is an invitation — and CI runs the
+  audit with no `--baseline` flag at all.
+
+
 ## [0.5.0] — 2026-09-06
 
 **Why this is `0.5.0` and not `0.2.0`.** `docs/PROPOSAL-v1.0-roadmap.md` §6

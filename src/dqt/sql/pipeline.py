@@ -101,6 +101,23 @@ class DQTPipeline:
         store_path: Path | str | None = None,
         report_dir: Path | str | None = None,
     ) -> None:
+        """Assemble a pipeline, without connecting to anything.
+
+        Both paths default to the working directory, which is the right
+        default for a CLI run and the wrong one for a library caller -- so
+        both are parameters rather than constants.
+
+        Args:
+            connection_config: The database to read.
+            pipeline_config: What to include, exclude and sample.
+            store_path: Where to persist runs. Defaults to
+                ``dqt_runs.db`` beside the working directory.
+            report_dir: Where to write reports. Defaults to the working
+                directory.
+
+        Example:
+            pipeline = DQTPipeline(connection_config, pipeline_config)
+        """
         self._connection_config = connection_config
         self._pipeline_config = pipeline_config
         self._store_path = Path(store_path) if store_path else Path.cwd() / "dqt_runs.db"
