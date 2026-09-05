@@ -13,6 +13,55 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-09-06
+
+**`1.0.0` means one thing: the public API will not break without a major
+version.** Everything else DQT might claim about maturity is marketing unless
+it reduces to that promise being kept — `docs/PROPOSAL-v1.0-roadmap.md` §1
+says so, and this release is that document's five hard gates being met rather
+than a feature count.
+
+| # | Gate | Met by |
+|---|---|---|
+| 1 | Live database servers run the suite in CI | PostgreSQL **and SQL Server** service containers, each running the dialect suite, the four-hash read-only proof and the cleansing round trip |
+| 2 | A third dialect shipped | `dqt.sql.dialects` with SQLite, PostgreSQL and SQL Server behind one protocol |
+| 3 | A benchmark suite with published budgets | `benchmarks/`, with a committed run measured against `budgets.py` and checked in CI as evidence |
+| 4 | API freeze: written deprecation policy and a changelog | `docs/API-STABILITY.md` and this file |
+| 5 | An explicit decision on every facet | `docs/CONVENTIONS-DQT.md` §2 has no row reading "not started" |
+
+### What is frozen
+
+Four surfaces, each held by a named test rather than by a promise in prose:
+
+- **`dqt.__all__`**, asserted by equality — a name added by accident fails as
+  loudly as one removed on purpose.
+- **The CLI's flags and exit codes.** A CI pipeline is scripted against them,
+  and a changed exit code changes whether a build goes red.
+- **The config file**, keys *and* defaults — and unknown keys are now refused
+  rather than ignored.
+- **The six JSON endpoints.** The HTML screens are deliberately **outside**
+  the freeze: their URLs are stable, their markup is not, because freezing
+  markup would make a clearer table a breaking change.
+
+### Why there was no `0.9.0`
+
+The ladder's `v0.9` rung is a *freeze candidate*, and its gates are met:
+`ARC-01` and `DOC-02` landed, and both audits run with **no baseline at
+all**. It was not tagged, because the only thing a release candidate provides
+is time for people to evaluate it before the promise binds — and cutting one
+minutes before `1.0.0` would be a tag pretending to be a soak period. The
+gates are listed here instead of being performed.
+
+### ⚠️ Upgrading from `0.5.0`
+
+- **Unknown config keys are now an error.** They were silently ignored, so
+  `exclude_tabels` parsed cleanly and DQT profiled every table the author
+  meant to skip. If a config has a typo, this release will tell you.
+- The run store is unchanged since `0.5.0`; no action needed if you already
+  recreated it.
+
+
+
 ### Added
 
 - **The config-file schema is frozen, and now refuses unknown keys.** The

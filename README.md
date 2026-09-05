@@ -4,15 +4,17 @@
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](pyproject.toml)
 [![Coverage gate](https://img.shields.io/badge/coverage%20gate-90%25-brightgreen.svg)](pyproject.toml)
 
-## Status: alpha
+## Status: stable
 
-Version `0.5.0`. The roadmap's release ladder defines four gates between
-`0.1.0` and here, and all four are met: the read-only proof runs against a
-live SQL Server and PostgreSQL, cleansing round-trips on both, the performance
-budgets are published with a committed run against them, and every facet in
-`docs/CONVENTIONS-DQT.md` §2 has a decision rather than a silence. See
-[`CHANGELOG.md`](CHANGELOG.md), including the upgrade note — your
-`dqt_runs.db` must be recreated.
+Version `1.0.0`. `1.0.0` means the public API will not break without a
+major version. Four surfaces are frozen and each is held by a test: the
+export list, the CLI's flags and exit codes, the config file's keys and
+defaults, and the six JSON endpoints. The HTML screens are deliberately
+outside the freeze — their URLs are stable, their markup is not.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the five gates behind the number, and
+[`docs/API-STABILITY.md`](docs/API-STABILITY.md) for what the promise covers
+and how anything leaves it.
 
 What that bar meant, in the plan's own words, was closing everything that was
 either **silently wrong** or **false in a shipped docstring**. Both are now
