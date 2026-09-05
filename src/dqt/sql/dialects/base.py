@@ -319,6 +319,11 @@ class Dialect(Protocol):
             limit: Maximum rows to return. ``None`` means no limit, in which
                 case the result is identical to
                 :meth:`select_aggregates_sql`. Must be positive when given.
+            order_by: Already-quoted ordering terms, or None for no
+                ordering. A bounded read with no ordering returns an
+                arbitrary page, which is fine for issue evidence and
+                useless for paging: "any twenty rows" cannot be
+                resumed from.
 
         Returns:
             A ``SELECT`` statement carrying this dialect's row limit.

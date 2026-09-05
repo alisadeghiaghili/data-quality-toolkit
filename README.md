@@ -125,6 +125,21 @@ lists are overlapping views of the same issues — summing them double-counts. S
 Note that `result.status` is currently always `"success"`: there is no per-stage
 error handling yet, so a failed run raises rather than recording a failure.
 
+## Cleansing on a large table
+
+Cleansing is the one part of DQT that genuinely reads rows: it records a
+before-value for every change so `revert()` can put it back. Everything else
+aggregates inside the database.
+
+Those reads are **paged by the row's primary key**, not taken all at once, so
+the planner's memory is bounded by the page size rather than by the table.
+Each page's query finishes before that page's writes are issued, and the next
+page resumes after the last key seen — an `UPDATE` to some other column does
+not move a primary key, so no row is skipped or read twice.
+
+This is why cleansing refuses a table with no primary key on a dialect
+without a stable row locator. The refusal names the fix: give the table a key.
+
 ## Rules
 
 Rules are declarative, defined in YAML or JSON, and compile to set-based SQL —

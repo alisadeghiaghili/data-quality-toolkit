@@ -85,8 +85,10 @@ Example::
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -305,12 +307,104 @@ def _identity_projection(identity: RowIdentity, dialect: Dialect) -> str:
     Example:
         projection = _identity_projection(identity, dialect)
     """
-    return ", ".join(
+    return ", ".join(_identity_projection_list(identity, dialect))
+
+
+def _identity_projection_list(identity: RowIdentity, dialect: Dialect) -> list[str]:
+    """Return the identity projection as separate expressions.
+
+    ``limited_select_sql`` takes a sequence rather than a joined string, so
+    the paged reader needs the parts. Joining them is
+    :func:`_identity_projection`'s job and is not repeated here.
+
+    Args:
+        identity: How rows of this table are addressed.
+        dialect: Dialect used for quoting.
+
+    Returns:
+        One aliased expression per identity component.
+
+    Example:
+        expressions = _identity_projection_list(identity, dialect)
+    """
+    return [
         f"{expression} AS {dialect.quote_identifier(name)}"
         for expression, name in zip(
             identity.select_expressions(dialect), identity.key_names(), strict=True
         )
-    )
+    ]
+
+
+def _iter_pages(
+    cursor: Any,
+    dialect: Dialect,
+    qualified_table: str,
+    identity: RowIdentity,
+    expressions: list[str],
+    where_clause: str | None,
+    page_size: int,
+) -> Iterator[list[dict[str, Any]]]:
+    """Read a table in identity-ordered pages, one bounded query at a time.
+
+    Each page's query completes before the caller sees it, so a caller that
+    writes while it reads never has an open result set over the table it is
+    modifying. The next page resumes after the last identity seen rather
+    than by offset, so a page is neither skipped nor repeated when rows in
+    front of the cursor change.
+
+    Args:
+        cursor: Open DBAPI cursor. Reused between pages; the caller may
+            issue writes on it between them.
+        dialect: Dialect supplying the row limit, ordering and placeholders.
+        qualified_table: An already-quoted table reference.
+        identity: How rows of this table are addressed and ordered.
+        expressions: The projection. Must include the identity.
+        where_clause: Predicate body without ``WHERE``, or None.
+        page_size: Maximum rows per page, which is also the memory bound.
+
+    Yields:
+        One non-empty page of rows, each a name-keyed dict.
+
+    Example:
+        for page in _iter_pages(cursor, dialect, tbl, identity, cols, None, 1000):
+            for row in page:
+                ...
+    """
+    order_by = identity.order_by_expressions(dialect)
+    after: dict[str, Any] | None = None
+
+    while True:
+        predicate = where_clause
+        binds: tuple[Any, ...] = ()
+        if after is not None:
+            resume = identity.after_clause(dialect)
+            predicate = f"({where_clause}) AND ({resume})" if where_clause else resume
+            binds = identity.after_bind_values(after)
+
+        cursor.execute(
+            dialect.limited_select_sql(
+                qualified_table,
+                expressions,
+                predicate,
+                limit=page_size,
+                order_by=order_by,
+            ),
+            binds,
+        )
+        names = [description[0] for description in cursor.description]
+        rows = [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+        if not rows:
+            return
+
+        yield rows
+
+        # A short page is the last one. A full page might be, so the loop
+        # asks once more and stops on the empty answer -- one extra bounded
+        # query in exchange for never truncating a table whose size happens
+        # to be a multiple of the page size.
+        if len(rows) < page_size:
+            return
+        after = _read_row_key(rows[-1], identity)
 
 
 def _read_row_key(row: dict[str, Any], identity: RowIdentity) -> dict[str, Any]:
@@ -379,52 +473,54 @@ def _standardize(
     case = params.get("case")  # "upper" | "lower" | "title" | None
     tbl = qualified_identifier(schema_name, table_name)
     col = quote_identifier(column_name)
-    identity_projection = _identity_projection(identity, dialect)
     placeholder = dialect.parameter_placeholder
 
-    rows = _fetch_all_dicts(
-        cursor,
-        f"SELECT {identity_projection}, {col} FROM {tbl} WHERE {col} IS NOT NULL",
-    )
-
     logs: list[CleansingLog] = []
-    for row in rows:
-        original: str = str(row[column_name])
-        value = original
+    pages = _iter_pages(
+        cursor,
+        dialect,
+        tbl,
+        identity,
+        [*_identity_projection_list(identity, dialect), col],
+        f"{col} IS NOT NULL",
+        _READ_PAGE_SIZE,
+    )
+    for page in pages:
+        for row in page:
+            original: str = str(row[column_name])
+            value = original
 
-        if trim:
-            value = value.strip()
-        if normalize_spaces:
-            import re
+            if trim:
+                value = value.strip()
+            if normalize_spaces:
+                value = re.sub(r" +", " ", value)
+            if case == "upper":
+                value = value.upper()
+            elif case == "lower":
+                value = value.lower()
+            elif case == "title":
+                value = value.title()
 
-            value = re.sub(r" +", " ", value)
-        if case == "upper":
-            value = value.upper()
-        elif case == "lower":
-            value = value.lower()
-        elif case == "title":
-            value = value.title()
-
-        if value != original:
-            if not dry_run:
-                row_key = _read_row_key(row, identity)
-                cursor.execute(
-                    f"UPDATE {tbl} SET {col} = {placeholder} "
-                    f"WHERE {identity.where_clause(dialect)}",
-                    (value, *identity.bind_values(row_key)),
+            if value != original:
+                if not dry_run:
+                    row_key = _read_row_key(row, identity)
+                    cursor.execute(
+                        f"UPDATE {tbl} SET {col} = {placeholder} "
+                        f"WHERE {identity.where_clause(dialect)}",
+                        (value, *identity.bind_values(row_key)),
+                    )
+                logs.append(
+                    CleansingLog(
+                        run_id=run_id,
+                        operation="standardize",
+                        schema_name=schema_name,
+                        table_name=table_name,
+                        column_name=column_name,
+                        row_key=_read_row_key(row, identity),
+                        before_value=original,
+                        after_value=value,
+                    )
                 )
-            logs.append(
-                CleansingLog(
-                    run_id=run_id,
-                    operation="standardize",
-                    schema_name=schema_name,
-                    table_name=table_name,
-                    column_name=column_name,
-                    row_key=_read_row_key(row, identity),
-                    before_value=original,
-                    after_value=value,
-                )
-            )
     return logs
 
 
@@ -492,14 +588,23 @@ def _deduplicate(
     # PostgreSQL has no aggregate over its ctid equivalent either. A window
     # function is portable across SQLite 3.25+, PostgreSQL and SQL Server, and
     # it handles a composite key without needing an aggregate at all (NEW-M).
-    identity_projection = _identity_projection(identity, dialect)
     order_expr = ", ".join(identity.select_expressions(dialect))
     direction = "ASC" if keep == "first" else "DESC"
+    # Every column comes back with the ranking, not one SELECT * per duplicate
+    # afterwards. A DELETE has no after-value, so revert() needs the whole row,
+    # and the ranked query already visits exactly those rows -- asking again,
+    # once per row, was per-row work over a table.
+    #
+    # The identity is projected separately only where it is not already among
+    # the columns: a primary key is, a physical locator is not.
+    ranked_projection = f"{tbl}.*"
+    if identity.locator is not None:
+        ranked_projection = f"{_identity_projection(identity, dialect)}, {ranked_projection}"
     dup_sql = f"""
-        SELECT {", ".join(dialect.quote_identifier(n) for n in identity.key_names())}
+        SELECT *
         FROM (
             SELECT
-                {identity_projection},
+                {ranked_projection},
                 ROW_NUMBER() OVER (
                     PARTITION BY {key_expr}
                     ORDER BY {order_expr} {direction}
@@ -516,10 +621,7 @@ def _deduplicate(
     for row in rows_to_delete:
         row_key = _read_row_key(row, identity)
         binds = identity.bind_values(row_key)
-        # Capture every column before deleting: a DELETE has no after-value, so
-        # the whole row is what revert() has to put back.
-        full_row = _fetch_all_dicts(cursor, f"SELECT * FROM {tbl} WHERE {where_clause}", binds)
-        before = full_row[0] if full_row else {}
+        before = {name: value for name, value in row.items() if name != "dqt_rank"}
         if not dry_run:
             cursor.execute(f"DELETE FROM {tbl} WHERE {where_clause}", binds)
         logs.append(
@@ -603,12 +705,14 @@ def _lookup_correct(
     tbl = qualified_identifier(schema_name, table_name)
     lookup_tbl = qualified_identifier(lookup_schema, lookup_table)
     col = quote_identifier(column_name)
-    identity_projection = _identity_projection(identity, dialect)
     placeholder = dialect.parameter_placeholder
     from_col_q = quote_identifier(from_col)
     to_col_q = quote_identifier(to_col)
 
-    # Fetch the mapping
+    # The mapping is read whole and deliberately: it is a dictionary the
+    # operation looks every row up in, so paging it would only move the
+    # same rows into memory more slowly. It is bounded by the number of
+    # corrections a DBA has written down, not by the table being cleansed.
     mapping_rows = _fetch_all_dicts(
         cursor,
         f"SELECT {from_col_q}, {to_col_q} FROM {lookup_tbl}",
@@ -618,13 +722,20 @@ def _lookup_correct(
         return []
 
     logs: list[CleansingLog] = []
-    rows = _fetch_all_dicts(
+    pages = _iter_pages(
         cursor,
-        f"SELECT {identity_projection}, {col} FROM {tbl} WHERE {col} IS NOT NULL",
+        dialect,
+        tbl,
+        identity,
+        [*_identity_projection_list(identity, dialect), col],
+        f"{col} IS NOT NULL",
+        _READ_PAGE_SIZE,
     )
-    for row in rows:
-        old_val = row[column_name]
-        if old_val in mapping:
+    for page in pages:
+        for row in page:
+            old_val = row[column_name]
+            if old_val not in mapping:
+                continue
             new_val = mapping[old_val]
             if not dry_run:
                 cursor.execute(

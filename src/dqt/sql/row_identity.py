@@ -85,6 +85,9 @@ class RowIdentity:
     def order_by_expressions(self, dialect: Dialect) -> list[str]:
         """Return the ordering that makes this identity pageable.
 
+        Key order matters: the paging predicate compares the first component
+        first, so ordering by anything else would let a page skip rows.
+
         Args:
             dialect: Dialect used to quote the key columns.
 
@@ -94,10 +97,21 @@ class RowIdentity:
         Example:
             assert identity.order_by_expressions(dialect) == ['"id"']
         """
-        raise NotImplementedError
+        return self.select_expressions(dialect)
 
     def after_clause(self, dialect: Dialect) -> str:
         """Return a predicate matching rows ordered after a given one.
+
+        This is what lets a paged read resume: the next page starts after
+        the last identity of the previous one, rather than at an offset. An
+        offset would re-count the rows in front of it on every page and give
+        a different answer if any of them changed.
+
+        A composite key is expanded lexicographically -- "a later tenant, or
+        the same tenant and a later id" -- rather than written as a row-value
+        comparison. SQLite and PostgreSQL accept ``(a, b) > (?, ?)``; SQL
+        Server does not, and one form for three engines is the point of
+        having a dialect layer instead of three code paths.
 
         Args:
             dialect: Dialect supplying the bind placeholder and quoting.
@@ -108,10 +122,22 @@ class RowIdentity:
         Example:
             assert identity.after_clause(dialect) == '("id" > ?)'
         """
-        raise NotImplementedError
+        placeholder = dialect.parameter_placeholder
+        terms = self.select_expressions(dialect)
+        branches = []
+        for position, term in enumerate(terms):
+            equalities = [f"{earlier} = {placeholder}" for earlier in terms[:position]]
+            comparison = f"{term} > {placeholder}"
+            branches.append(f"({' AND '.join([*equalities, comparison])})")
+        return " OR ".join(branches)
 
     def after_bind_values(self, row_key: dict[str, Any]) -> tuple[Any, ...]:
         """Return the bind values for :meth:`after_clause`, in its order.
+
+        The clause repeats each component once per branch that mentions it,
+        so a two-part key binds three values: the first twice and the second
+        once. Building them here keeps that arithmetic beside the clause it
+        has to agree with.
 
         Args:
             row_key: The identity of the last row of the previous page.
@@ -122,7 +148,11 @@ class RowIdentity:
         Example:
             assert identity.after_bind_values({"id": 42}) == (42,)
         """
-        raise NotImplementedError
+        names = self.key_names()
+        values: list[Any] = []
+        for position in range(len(names)):
+            values.extend(row_key[name] for name in names[: position + 1])
+        return tuple(values)
 
     def where_clause(self, dialect: Dialect) -> str:
         """Return a parameterised predicate matching exactly this row.
