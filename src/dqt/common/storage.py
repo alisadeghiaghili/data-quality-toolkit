@@ -46,6 +46,15 @@ from dqt.common.models import DQIssue, DQMetric, PipelineResult
 _DEFAULT_DB_PATH: Path = Path("dqt_runs.db")
 
 
+#: Schema version written to ``PRAGMA user_version`` and required on open.
+#:
+#: One integer, rather than a growing chain of "does this column exist yet"
+#: probes: each of those only ever detects the specific past it was taught
+#: about. Bump it whenever the DDL below changes -- the store is a local
+#: artifact meant to be recreated rather than migrated.
+SCHEMA_VERSION = 2
+
+
 class RunStore:
     """SQLite-backed store for DQT pipeline run results.
 
@@ -331,6 +340,38 @@ class RunStore:
                 """,
                 [self._issue_row(i) for i in result.issues],
             )
+
+    def load_rule_results(self, run_id: str) -> list[dict[str, Any]]:
+        """Return one summary per rule evaluated in *run_id*.
+
+        Args:
+            run_id: The run to read.
+
+        Returns:
+            Plain dicts in rule-name order, each carrying ``run_id``,
+            ``rule_name``, ``targets_checked``, ``targets_failed`` and
+            ``targets_error``.
+
+        Example:
+            summaries = store.load_rule_results("run-001")
+        """
+        raise NotImplementedError
+
+    def load_rule_history(self, rule_name: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Return one rule's results across runs, newest first.
+
+        Args:
+            rule_name: The rule to follow.
+            limit: Maximum entries returned.
+
+        Returns:
+            Plain dicts carrying the rule's counts plus the run's
+            ``started_at``, newest first.
+
+        Example:
+            history = store.load_rule_history("not-null-email")
+        """
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Read
