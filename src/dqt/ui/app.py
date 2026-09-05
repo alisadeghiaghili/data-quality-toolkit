@@ -54,6 +54,7 @@ from typing import Any
 
 try:
     from fastapi import FastAPI, HTTPException, Query
+    from fastapi.responses import HTMLResponse
 
     _FASTAPI_AVAILABLE = True
 except ImportError:
@@ -61,12 +62,16 @@ except ImportError:
 
 from dqt import __version__
 from dqt.ui.api import (
+    get_dimension_scores,
+    get_issue_counts_by_dimension,
+    get_issue_counts_by_severity,
     get_run_issues,
     get_run_metrics,
     get_run_summary,
     list_runs,
     list_tables_for_run,
 )
+from dqt.ui.pages import ISSUE_PAGE_SIZE, issues_page, overview_page, run_page
 
 _DEFAULT_STORE = Path(os.environ.get("DQT_STORE_PATH", "dqt_runs.db"))
 
@@ -220,3 +225,131 @@ def get_issues(
         severity=severity,
         table_name=table_name,
     )
+
+
+# ---------------------------------------------------------------------------
+# Screens (VIZ-3)
+# ---------------------------------------------------------------------------
+#
+# Server-rendered HTML, added beside the JSON rather than instead of it. The
+# pages are pure functions in dqt.ui.pages; these routes only fetch and hand
+# over, so the part that can go wrong here is routing and nothing else.
+#
+# Read-only, like everything in this module. docs/PLAN-VIZ-UI.md section 7:
+# a button that opens a connection to a production database does not belong
+# on an HTTP surface with no authentication.
+
+
+@app.get("/ui", tags=["screens"], response_class=HTMLResponse)
+def screen_overview() -> str:
+    """Render the overview screen.
+
+    Returns:
+        The page HTML.
+
+    Example::
+
+        GET /ui
+    """
+    store = _store_path()
+    runs = list_runs(store_path=store, limit=20)
+    latest = runs[0] if runs else None
+    if latest is None:
+        return overview_page(
+            runs=[],
+            run=None,
+            dimension_scores={},
+            issues_by_severity={},
+            issues_by_dimension={},
+        )
+    run_id = str(latest["run_id"])
+    return overview_page(
+        runs=runs,
+        run=latest,
+        dimension_scores=dict(get_dimension_scores(store, run_id)),
+        issues_by_severity=get_issue_counts_by_severity(store, run_id),
+        issues_by_dimension=get_issue_counts_by_dimension(store, run_id),
+    )
+
+
+@app.get("/ui/runs/{run_id}", tags=["screens"], response_class=HTMLResponse)
+def screen_run(run_id: str) -> str:
+    """Render one run's explorer screen.
+
+    Args:
+        run_id: The run to show.
+
+    Returns:
+        The page HTML.
+
+    Raises:
+        HTTPException: 404 if the run is unknown. An empty run page reads as
+            a run that went perfectly, so "nothing here" must not render as
+            "nothing wrong".
+
+    Example::
+
+        GET /ui/runs/run-001
+    """
+    store = _store_path()
+    run = _require_run(store, run_id)
+    tables = [
+        {"schema_name": None, "table_name": name, "issue_count": 0}
+        for name in list_tables_for_run(store_path=store, run_id=run_id)
+    ]
+    for issue in get_run_issues(store_path=store, run_id=run_id):
+        for entry in tables:
+            if entry["table_name"] == issue.get("table_name"):
+                entry["issue_count"] = int(entry["issue_count"] or 0) + 1
+    return run_page(
+        run=run,
+        tables=tables,
+        dimension_scores=dict(get_dimension_scores(store, run_id)),
+        issues_by_severity=get_issue_counts_by_severity(store, run_id),
+    )
+
+
+@app.get("/ui/runs/{run_id}/issues", tags=["screens"], response_class=HTMLResponse)
+def screen_issues(run_id: str) -> str:
+    """Render one run's issue list.
+
+    Args:
+        run_id: The run to show.
+
+    Returns:
+        The page HTML.
+
+    Raises:
+        HTTPException: 404 if the run is unknown.
+
+    Example::
+
+        GET /ui/runs/run-001/issues
+    """
+    store = _store_path()
+    run = _require_run(store, run_id)
+    issues = get_run_issues(store_path=store, run_id=run_id)
+    return issues_page(run=run, issues=issues[:ISSUE_PAGE_SIZE], total=len(issues))
+
+
+def _require_run(store: Path, run_id: str) -> dict[str, Any]:
+    """Return a run, or refuse with a 404.
+
+    Args:
+        store: Path to the RunStore file.
+        run_id: The run to look for.
+
+    Returns:
+        The run summary.
+
+    Raises:
+        HTTPException: 404 if no such run exists.
+
+    Example::
+
+        run = _require_run(store, "run-001")
+    """
+    summary = get_run_summary(store_path=store, run_id=run_id)
+    if not summary or summary.get("run_id") is None:
+        raise HTTPException(status_code=404, detail=f"Unknown run: {run_id}")
+    return summary

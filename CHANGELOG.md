@@ -30,6 +30,19 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **The first three screens (`VIZ-3`).** `GET /ui`, `/ui/runs/{id}` and
+  `/ui/runs/{id}/issues` — server-rendered HTML from the same `dqt._html`
+  builder and `dqt.viz` charts the report uses, added *beside* the JSON API
+  rather than instead of it. No JavaScript: plain pages are keyboard
+  accessible and back-button correct by construction. A run that does not
+  exist is a 404, because an empty run page reads as a run that went
+  perfectly.
+- **Set-based dashboard counts.** `RunStore.count_issues_by_severity`,
+  `count_issues_by_dimension` and `average_score_by_dimension` group in the
+  database — one query each — so a page's cost does not grow with how bad the
+  data is. A dimension nothing measured is **absent** rather than zero: the
+  screens rely on that distinction to render "not measured" instead of a
+  measured failure.
 - **The HTML report draws what it reports (`VIZ-2`).** Six dimension
   scorecards — including the five nothing measured, which say "not measured"
   and draw no bar — and an issues-by-dimension chart, both from `dqt.viz`, so

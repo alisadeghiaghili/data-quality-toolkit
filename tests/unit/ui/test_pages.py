@@ -290,3 +290,45 @@ class TestEveryPageIsNavigableAndSafe:
 
         assert "<script>alert(1)</script>" not in html
         assert "&lt;script&gt;" in html
+
+
+class TestTheFirstUseAndTheUnexpected:
+    """Two states a screen has to handle without looking broken."""
+
+    def test_an_empty_store_says_there_are_no_runs_yet(self) -> None:
+        """The first thing a new user sees, and the easiest to get wrong.
+
+        A dashboard with empty charts and blank tables reads as a failure.
+        Saying "no runs recorded yet" says the tool is fine and there is
+        simply nothing to show.
+        """
+        html = overview_page(
+            runs=[],
+            run=None,
+            dimension_scores={},
+            issues_by_severity={},
+            issues_by_dimension={},
+        )
+
+        assert "no runs" in html.lower()
+        assert "<!DOCTYPE html>" in html
+
+    def test_an_unfamiliar_severity_still_renders(self) -> None:
+        """A page is drawn after the fact, so it cannot refuse to draw.
+
+        ``dqt.viz.severity_indicator`` raises on an unknown severity, which
+        is right for a caller building a chart. A screen has to degrade
+        instead: losing the whole page because one row carried an unexpected
+        word would be a far worse outcome than losing the icon.
+        """
+        issue = {
+            "severity": "catastrophic",
+            "dimension": "validity",
+            "table_name": "orders",
+            "column_name": "email",
+            "message": "m",
+        }
+
+        html = issues_page(run=_run(), issues=[issue], total=1)
+
+        assert "catastrophic" in html
