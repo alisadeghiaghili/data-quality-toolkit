@@ -103,7 +103,12 @@ class _MemoryStore:
         self.plans[plan_id].applied_at = applied_at
 
     def save_cleansing_log(self, plan_id: str, changes: Any, applied_at: Any) -> None:
-        """Record what a plan changed.
+        """Record what a plan changed, in the shape a real store returns.
+
+        ``RunStore`` persists to SQLite and reads back plain dicts, so a
+        stand-in that kept the ``CleansingLog`` objects would let ``revert``
+        pass here and fail against the real thing -- a test that makes the
+        code under test easier than production is worse than no test.
 
         Args:
             plan_id: The plan.
@@ -116,7 +121,18 @@ class _MemoryStore:
         Example:
             store.save_cleansing_log("plan-1", changes, moment)
         """
-        self.logs[plan_id] = list(changes)
+        self.logs[plan_id] = [
+            {
+                "operation": change.operation,
+                "schema_name": change.schema_name,
+                "table_name": change.table_name,
+                "column_name": change.column_name,
+                "row_key": change.row_key,
+                "before_value": change.before_value,
+                "after_value": change.after_value,
+            }
+            for change in changes
+        ]
 
     def load_cleansing_log(self, plan_id: str) -> list[Any]:
         """Return a plan's log.

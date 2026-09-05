@@ -268,6 +268,34 @@ what the dashboard in `docs/PLAN-VIZ-UI.md` will be) opens one per request.
 
 ---
 
+### `NEW-U` · `deduplicate` never worked through the supported API — **fixed**
+
+`DQT-05` replaced `apply_cleansing` with `cleanse_plan` / `cleanse_apply` /
+`revert` and deprecated the old one. For `deduplicate`, the replacement had
+three independent breaks, each fatal on its own, on every dialect:
+
+1. `RunStore.save_cleansing_log` wrote `before_value` raw. `deduplicate`'s is
+   the whole deleted row as a dict, which `sqlite3` cannot store.
+2. `cleanse_apply` replayed every change as an `UPDATE` of `column_name`,
+   which is `None` for a table-level deletion — so the statement read
+   `SET "None" = ?`.
+3. `revert` did the same, against a row that no longer existed.
+
+Only the deprecated path handled the operation, because it performs the
+delete inline and returns its log in memory, so nothing had to survive
+storage.
+
+**The process failure is worth more than the bug.** `docs/API-STABILITY.md`
+§4 already says the replacement must exist *and be at least as capable*
+before a deprecation is announced. Nobody checked that for this operation,
+and no test asked. Found only when `GATE-03` demanded a round trip on a real
+server — which is the argument for that rung existing.
+
+Fixed 2026-09-06 with the log stored as JSON (schema version 3), a `DELETE`
+on apply, and an `INSERT` of the recorded row on revert.
+
+---
+
 ### Update 2026-09-05 — all three dialects run against live servers
 
 `DQT-08`'s one admitted gap is closed. Its own PR said no assertion touched a
