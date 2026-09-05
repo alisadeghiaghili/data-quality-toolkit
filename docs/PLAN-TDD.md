@@ -1342,11 +1342,53 @@ re-measure before estimating precisely.
 > by tests rather than left as assumptions: evidence carries counts and never
 > the violating rows, and one connection serves every rule.
 >
-> Still open in this unit: **chunked reads** for the paths that genuinely
-> read rows, and the **approximate-distinct option** — which `UNIQUE` now
-> makes concrete, since `COUNT(DISTINCT ...)` is exactly the expensive
-> operation the dialect protocol's `approximate_distinct_expression()` exists
-> to replace.
+> **2026-09-05, third pass: the approximate-distinct option.** `UNIQUE` made
+> `COUNT(DISTINCT ...)` concrete, and it is the one operation in DQT that can
+> cost real memory *on the server*, since it has to hold every distinct value
+> it sees. A rule may now ask for an estimate with `params: {approximate:
+> true}` — per rule rather than per run, because whether an estimate is
+> acceptable is a property of the check and not of the machine. Only SQL
+> Server has a native form; SQLite has none and PostgreSQL's is an extension
+> rather than core, so both answer exactly. The evidence carries
+> `approximate` whichever happened: an estimate and an exact count are
+> different claims, and rendering them identically would assert a precision
+> DQT does not have. `tests/integration/test_sqlserver.py` runs
+> `APPROX_COUNT_DISTINCT` against a real instance, because the unit suite can
+> only assert the text.
+>
+> **2026-09-05, fourth pass: chunked reads.** Cleansing is the only facet
+> that genuinely reads rows — it records a before-value so `revert()` can put
+> it back — and it read the whole table into a Python list first. Reads are
+> now paged by the row identity.
+>
+> Paged rather than streamed from one open cursor, and the reason is
+> correctness rather than taste: these functions write while they read.
+> SQLite documents that a query running while its own connection modifies the
+> table may return a changed row twice or return a deleted one, and the other
+> engines answer by isolation level — so a streaming rewrite would have
+> bought flat memory by making the result depend on the engine underneath.
+> Each page's `SELECT` completes before that page's writes, and the primary
+> key an `UPDATE` does not move is what makes the next page resumable. A full
+> last page costs one extra empty read, which is the price of never
+> truncating a table whose size is a multiple of the page size.
+>
+> `_deduplicate`'s one `SELECT *` per duplicate row is gone; the ranked query
+> already visits those rows and now returns their columns with the ranking.
+> That was the last per-row round trip in cleansing.
+>
+> Supporting surface, all internal: `RowIdentity.order_by_expressions` /
+> `after_clause` / `after_bind_values`, with the composite-key comparison
+> expanded lexicographically because SQL Server does not accept `(a, b) > (?,
+> ?)`; and `order_by` on `limited_select_sql`, because a bounded read with no
+> ordering returns an arbitrary page and "any twenty rows" cannot be resumed
+> from.
+>
+> **This unit is now closed.** Every scope item is either implemented and
+> gated or pinned as already true. One limit is recorded rather than fixed:
+> the deduplicate delete list is still materialised in full, because it *is*
+> the list of rows to delete and the plan has to hold it to be reviewable.
+> On a table that is mostly duplicates that list is large — a real bound, and
+> an honest one to state rather than to leave implied.
 
 ### 16. New unit, added 2026-09-04 — Performance and scale
 
