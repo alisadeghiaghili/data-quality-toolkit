@@ -218,22 +218,20 @@ def _eval_unique(
     """
     tbl = dialect.qualified_identifier(schema_name, table_name)
     col = dialect.quote_identifier(column_name)
-    cursor.execute(f"SELECT COUNT({col}) FROM {tbl}")
-    total = int(cursor.fetchone()[0])
-    cursor.execute(
-        f"""
-        SELECT COALESCE(SUM(cnt - 1), 0)
-        FROM (
-            SELECT COUNT({col}) AS cnt
-            FROM {tbl}
-            WHERE {col} IS NOT NULL
-            GROUP BY {col}
-            HAVING COUNT({col}) > 1
-        ) AS dupes
-        """
+    # COUNT(col) counts non-NULL values and COUNT(DISTINCT col) counts the
+    # values that exist, so the difference is how many rows are duplicates of
+    # some other row -- exactly what the old GROUP BY subquery summed, in one
+    # pass instead of a grouped scan plus a separate count.
+    #
+    # COUNT(DISTINCT ...) is expensive at scale; an approximate-distinct path
+    # is a separate scope item of this unit, and the dialect protocol already
+    # carries approximate_distinct_expression() for it.
+    statement = dialect.select_aggregates_sql(
+        tbl, [f"COUNT({col})", f"COUNT({col}) - COUNT(DISTINCT {col})"]
     )
-    duplicate_extra = int(cursor.fetchone()[0])
-    return total, duplicate_extra
+    cursor.execute(statement)
+    row = cursor.fetchone()
+    return int(row[0]), int(row[1] or 0)
 
 
 def _eval_range(
@@ -274,9 +272,6 @@ def _eval_range(
         raise ValueError("range rule requires at least one of params.min or params.max.")
     tbl = dialect.qualified_identifier(schema_name, table_name)
     col = dialect.quote_identifier(column_name)
-    cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
-    total = int(cursor.fetchone()[0])
-
     ph = dialect.parameter_placeholder
     bind_params: list[float]
     if min_val is not None and max_val is not None:
@@ -290,9 +285,17 @@ def _eval_range(
         where = f"{col} IS NOT NULL AND {col} > {ph}"
         bind_params = [max_val]
 
-    cursor.execute(f"SELECT COUNT(*) FROM {tbl} WHERE {where}", bind_params)
-    out_of_range = int(cursor.fetchone()[0])
-    return total, out_of_range
+    # One scan for both numbers. The denominator and the violation count come
+    # from the same rows, so asking separately reads the table twice to learn
+    # one thing. SUM(CASE ...) is the portable form of a filtered count --
+    # FILTER (WHERE ...) is standard but SQL Server does not have it.
+    statement = dialect.select_aggregates_sql(
+        tbl, ["COUNT(*)", f"SUM(CASE WHEN {where} THEN 1 ELSE 0 END)"]
+    )
+    cursor.execute(statement, bind_params)
+    row = cursor.fetchone()
+    # SUM over no rows is NULL, not 0.
+    return int(row[0]), int(row[1] or 0)
 
 
 def _eval_regex(

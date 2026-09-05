@@ -30,11 +30,10 @@ from typing import Any
 
 import pytest
 
-from tests.counting import CountingConnection
-
 from dqt.common.models import ConnectionConfig
 from dqt.sql.profiling import SqlProfiler
 from dqt.sql.schema_discovery import discover_schema
+from tests.counting import CountingConnection
 
 
 def _wide_table(column_count: int) -> str:

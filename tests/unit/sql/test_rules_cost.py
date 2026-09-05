@@ -172,8 +172,7 @@ class TestTheTableIsReadOncePerRuleAtMost:
         statements, _ = run_rules_and_count(rules)
 
         assert len(statements) == len(rules), (
-            f"budget is one query per rule ({len(rules)}), "
-            f"ran {len(statements)}: {statements}"
+            f"budget is one query per rule ({len(rules)}), ran {len(statements)}: {statements}"
         )
 
     def test_no_rule_issues_a_bare_row_count(
