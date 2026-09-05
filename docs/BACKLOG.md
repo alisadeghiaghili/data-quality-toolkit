@@ -244,7 +244,7 @@ No CLI-level rule-file flag exists; this fix only closes the config-file path.
 
 ---
 
-### `NEW-M` · Cleansing addresses rows by SQLite's `rowid`
+### `NEW-M` · Cleansing addresses rows by SQLite's `rowid` — **fixed**
 
 **Severity:** high — cleansing is unusable on PostgreSQL · **Found:** 2026-09-05,
 by the first CI run that ever pointed DQT at a real PostgreSQL server
@@ -281,9 +281,19 @@ dialect-provided physical locator only for tables without one, and say plainly
 in the docs that cleansing such a table is best-effort. Refuse rather than
 generate invalid SQL where a dialect cannot express the operation at all.
 
-Tracked by an `xfail(strict=True)` in
-`tests/integration/test_postgresql.py`, so fixing this forces the marker off
-rather than leaving it to rot.
+**Fixed 2026-09-05** on branch `new-m-row-identity`, by the proposed route.
+`src/dqt/sql/row_identity.py` resolves identity to the primary key where the
+table has one; SQLite falls back to `rowid`, and PostgreSQL and SQL Server
+report no locator at all, so cleansing a keyless table there refuses with a
+message naming the table and the fix rather than failing inside a query.
+
+All three problems above are addressed rather than worked around.
+Deduplication's `MIN(rowid)` ordering became a `ROW_NUMBER()` window
+function, which is portable across SQLite 3.25+, PostgreSQL and SQL Server
+and handles a composite key without an aggregate. Primary-key discovery was
+added to all three dialects, `LEFT JOIN`ed so a keyless table is still
+discovered rather than vanishing. The `xfail(strict=True)` that tracked this
+is gone, as intended.
 
 ### `NEW-K` · `expression` is documented as accepting SQL, but does not
 

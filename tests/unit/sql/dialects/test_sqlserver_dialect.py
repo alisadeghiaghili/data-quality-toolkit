@@ -227,15 +227,33 @@ class TestReadOnlyAttributes:
 
 class TestIntrospectionSql:
     def test_column_metadata_sql_selects_base_tables_only(self):
+        """Views are excluded, because DQT profiles what is stored.
+
+        Asserted as properties rather than as a frozen string: `NEW-M`
+        extended this query, and a snapshot test of SQL that is expected to
+        grow only ever reports that it grew.
+        """
         normalised = " ".join(COLUMN_METADATA_SQL.split())
-        assert normalised == (
-            "SELECT c.TABLE_SCHEMA, c.TABLE_NAME, c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE "
-            "FROM INFORMATION_SCHEMA.COLUMNS AS c "
-            "JOIN INFORMATION_SCHEMA.TABLES AS t "
-            "ON t.TABLE_CATALOG = c.TABLE_CATALOG "
-            "AND t.TABLE_SCHEMA = c.TABLE_SCHEMA "
-            "AND t.TABLE_NAME = c.TABLE_NAME "
-            "WHERE t.TABLE_TYPE = 'BASE TABLE' "
-            "AND c.TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCHEMA') "
-            "ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION"
-        )
+
+        assert "WHERE t.TABLE_TYPE = 'BASE TABLE'" in normalised
+        assert "NOT IN ('sys', 'INFORMATION_SCHEMA')" in normalised
+        assert "ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION" in normalised
+
+    def test_column_metadata_sql_reports_primary_keys(self):
+        """`NEW-M` addresses rows by key, so discovery has to find the key."""
+        normalised = " ".join(COLUMN_METADATA_SQL.split())
+
+        assert "IS_PRIMARY_KEY" in normalised
+        assert "'PRIMARY KEY'" in normalised
+
+    def test_a_table_without_a_primary_key_is_not_dropped_from_discovery(self):
+        """The key joins are LEFT JOINs, which is load-bearing.
+
+        Inner joins would hide every keyless table, so DQT would profile a
+        database and silently omit tables -- and cleansing could not report
+        that a table has no key if it never saw the table.
+        """
+        normalised = " ".join(COLUMN_METADATA_SQL.split())
+
+        assert "LEFT JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS" in normalised
+        assert "LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE" in normalised

@@ -36,11 +36,30 @@ from dqt.sql.dialects.base import (
 
 # One query returns every user column, already ordered, so discovery costs a
 # single round trip regardless of how many tables the database holds.
+# The primary-key columns are LEFT JOINed rather than fetched by a subquery so
+# that a table without a primary key still returns its columns instead of
+# vanishing from discovery. Cleansing needs to know a table has no key
+# (NEW-M); it cannot learn that from a table it never sees.
 COLUMN_METADATA_SQL = """
-                SELECT table_schema, table_name, column_name, data_type, is_nullable
-                FROM information_schema.columns
-                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
-                ORDER BY table_schema, table_name, ordinal_position
+                SELECT
+                    c.table_schema,
+                    c.table_name,
+                    c.column_name,
+                    c.data_type,
+                    c.is_nullable,
+                    (k.column_name IS NOT NULL) AS is_primary_key
+                FROM information_schema.columns AS c
+                LEFT JOIN information_schema.table_constraints AS tc
+                    ON tc.table_schema = c.table_schema
+                    AND tc.table_name = c.table_name
+                    AND tc.constraint_type = 'PRIMARY KEY'
+                LEFT JOIN information_schema.key_column_usage AS k
+                    ON k.constraint_name = tc.constraint_name
+                    AND k.table_schema = c.table_schema
+                    AND k.table_name = c.table_name
+                    AND k.column_name = c.column_name
+                WHERE c.table_schema NOT IN ('information_schema', 'pg_catalog')
+                ORDER BY c.table_schema, c.table_name, c.ordinal_position
                 """
 
 
@@ -65,6 +84,11 @@ class PostgresqlDialect:
     """
 
     name = "postgresql"
+    #: ctid is a physical address: it moves when a row is updated and under
+    #: VACUUM FULL. A stored plan holding ctids could address different rows
+    #: when applied, so cleansing requires a primary key here instead.
+    physical_row_locator: str | None = None
+
     parameter_placeholder = "%s"
     read_only_enforcement = ReadOnlyEnforcement.DRIVER_ENFORCED
 
@@ -183,8 +207,16 @@ class PostgresqlDialect:
                 column_name=column_name,
                 data_type=data_type,
                 nullable=(is_nullable == "YES"),
+                is_primary_key=bool(is_primary_key),
             )
-            for schema_name, table_name, column_name, data_type, is_nullable in rows
+            for (
+                schema_name,
+                table_name,
+                column_name,
+                data_type,
+                is_nullable,
+                is_primary_key,
+            ) in rows
         ]
 
     def select_aggregates_sql(

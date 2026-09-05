@@ -104,6 +104,7 @@ class ColumnMetadata:
             (SQLite reports ``"main"``).
         table_name: Table the column belongs to.
         column_name: Column name, exactly as the database reports it.
+        is_primary_key: Whether the column is part of the primary key.
         data_type: Database-reported type name, uppercased or lowercased
             exactly as the database returns it — DQT does not normalise it.
         nullable: ``True`` when the column accepts ``NULL``.
@@ -124,6 +125,7 @@ class ColumnMetadata:
     column_name: str
     data_type: str
     nullable: bool
+    is_primary_key: bool = False
 
 
 @runtime_checkable
@@ -141,6 +143,8 @@ class Dialect(Protocol):
         name: Canonical dialect name (``"sqlite"``, ``"postgresql"``,
             ``"sqlserver"``). This is the key used by
             :func:`dqt.sql.dialects.get_dialect_by_name`.
+        physical_row_locator: Row-address expression for keyless tables,
+            or None where the dialect has none that is stable.
         parameter_placeholder: The DBAPI bind-parameter placeholder this
             database's driver expects — ``"?"`` for ``qmark`` drivers,
             ``"%s"`` for ``pyformat``/``format`` drivers. Literal values
@@ -226,6 +230,14 @@ class Dialect(Protocol):
             assert "orders" in reference
         """
         ...
+
+    #: Expression naming a row's physical address, for tables with no primary
+    #: key, or None where the dialect has none stable enough to substitute for
+    #: one. SQLite's ``rowid`` is stable for a row's lifetime; PostgreSQL's
+    #: ``ctid`` is not -- it moves on UPDATE and under VACUUM FULL -- so
+    #: PostgreSQL reports None and cleansing refuses rather than addressing
+    #: whatever now sits at a recorded position (`NEW-M`).
+    physical_row_locator: str | None
 
     def fetch_column_metadata(self, connection: Any) -> list[ColumnMetadata]:
         """Read every user column from the database's catalogue.
