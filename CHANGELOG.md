@@ -13,6 +13,21 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Deprecated
+
+- **`dqt.sql.cleansing.apply_cleansing`** — superseded by `cleanse_plan()` /
+  `cleanse_apply()` / `revert()`. It writes its log to memory and returns it,
+  so a caller who drops the return value loses the before-values permanently
+  and the change cannot be undone: the defect `DQT-05` exists to fix. It now
+  emits a `DeprecationWarning`. See [`docs/API-STABILITY.md`](docs/API-STABILITY.md)
+  for the removal schedule.
+
+### Removed
+
+- **`dqt.sql.cleansing.cleanse`** — the pipeline adapter, orphaned when `Q1`
+  removed the cleansing stage from `DQTPipeline.run()`. Nothing called it.
+
+
 ### Added
 
 - **SQL Server exercised against a live server in CI.** `DQT-08` shipped the

@@ -54,8 +54,11 @@ from dqt.common.models import (
     RunStatus,
     SamplingConfig,
     SchemaResult,
+    StageError,
     TableResult,
 )
+from dqt.exceptions import ReadOnlyViolationError
+from dqt.exit_codes import FAIL_ON_CHOICES, ExitCode, decide_exit_code
 from dqt.sql.pipeline import DQTPipeline
 
 __version__ = "0.1.0"
@@ -113,7 +116,11 @@ def from_yaml_config(path: str | Path) -> DQTPipeline:
 
 
 __all__ = [
+    "FAIL_ON_CHOICES",
+    "ExitCode",
+    "ReadOnlyViolationError",
     "__version__",
+    "decide_exit_code",
     # Literal / enum types
     "IssueSeverity",
     "RuleStatus",
@@ -125,6 +132,7 @@ __all__ = [
     "DQIssue",
     "DQDimension",
     "DQMetric",
+    "StageError",
     "DQTPipeline",
     "PipelineResult",
     "Rule",

@@ -86,11 +86,12 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+import warnings
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from dqt.common.models import ConnectionConfig, PipelineResult
+from dqt.common.models import ConnectionConfig
 from dqt.exceptions import ReadOnlyViolationError
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql._identifiers import qualified_identifier, quote_identifier
@@ -718,6 +719,16 @@ def apply_cleansing(
         )
         print(result.total_changes)
     """
+    warnings.warn(
+        "apply_cleansing() is superseded by cleanse_plan() / cleanse_apply() / "
+        "revert(). It writes a log to memory and returns it, so a caller who "
+        "drops the return value loses the before-values permanently and the "
+        "change cannot be undone -- the defect DQT-05 exists to fix. The "
+        "replacement persists the log against a plan_id and can undo "
+        "automatically. See docs/API-STABILITY.md for the removal schedule.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if connection_config.read_only:
         raise ReadOnlyViolationError(
             f"Connection '{connection_config.id}' has read_only=True; "
@@ -809,28 +820,6 @@ def apply_cleansing(
 
     cleansing_result.tables_affected = len(tables_modified)
     return cleansing_result
-
-
-def cleanse(result: PipelineResult) -> PipelineResult:
-    """Pipeline adapter for the cleansing stage.
-
-    Called by :class:`~dqt.sql.pipeline.DQTPipeline` as stage 5.  When no
-    :class:`CleansingConfig` objects are attached to the pipeline config,
-    this is a pass-through.  Full wiring of
-    :attr:`~dqt.common.models.DQPipelineConfig` → cleansing configs is a
-    follow-up task.
-
-    Args:
-        result: :class:`~dqt.common.models.PipelineResult` from earlier stages.
-
-    Returns:
-        Unchanged :class:`~dqt.common.models.PipelineResult`.
-
-    Example::
-
-        result = cleanse(result)
-    """
-    return result
 
 
 def _resolve_identities(
@@ -1207,3 +1196,15 @@ def revert(
     result.total_changes = len(entries)
     result.tables_affected = len({e["table_name"] for e in entries})
     return result
+
+
+__all__ = [
+    "CleansingConfig",
+    "CleansingLog",
+    "CleansingPlan",
+    "CleansingResult",
+    "apply_cleansing",
+    "cleanse_apply",
+    "cleanse_plan",
+    "revert",
+]
