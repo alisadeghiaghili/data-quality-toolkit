@@ -411,6 +411,7 @@ class SqlServerDialect:
         expressions: Sequence[str],
         where_clause: str | None = None,
         limit: int | None = None,
+        order_by: Sequence[str] | None = None,
     ) -> str:
         """Build a ``SELECT`` bounded by T-SQL's ``TOP (n)`` prefix.
 
@@ -424,6 +425,11 @@ class SqlServerDialect:
             expressions: Expressions to project. Must not be empty.
             where_clause: Optional predicate body, without ``WHERE``.
             limit: Maximum rows, or ``None`` for no limit.
+            order_by: Already-quoted ordering terms, or None for no
+                ordering. A bounded read with no ordering returns an
+                arbitrary page, which is fine for issue evidence and
+                useless for paging: "any twenty rows" cannot be
+                resumed from.
 
         Returns:
             ``SELECT TOP (<n>) <expressions> FROM <table> [WHERE ...]`` when
@@ -438,12 +444,15 @@ class SqlServerDialect:
         """
         validate_row_limit(limit)
         if limit is None:
-            return ansi_select_aggregates_sql(qualified_table, expressions, where_clause)
-        if not expressions:
-            raise ValueError("A SELECT needs at least one expression to project.")
-        statement = f"SELECT TOP ({limit}) {', '.join(expressions)} FROM {qualified_table}"
-        if where_clause:
-            statement = f"{statement} WHERE {where_clause}"
+            statement = ansi_select_aggregates_sql(qualified_table, expressions, where_clause)
+        else:
+            if not expressions:
+                raise ValueError("A SELECT needs at least one expression to project.")
+            statement = f"SELECT TOP ({limit}) {', '.join(expressions)} FROM {qualified_table}"
+            if where_clause:
+                statement = f"{statement} WHERE {where_clause}"
+        if order_by:
+            statement = f"{statement} ORDER BY {', '.join(order_by)}"
         return statement
 
     def regex_not_matching_predicate(self, quoted_column: str, pattern: str) -> str:

@@ -250,6 +250,7 @@ class PostgresqlDialect:
         expressions: Sequence[str],
         where_clause: str | None = None,
         limit: int | None = None,
+        order_by: Sequence[str] | None = None,
     ) -> str:
         """Build a ``SELECT`` bounded by PostgreSQL's trailing ``LIMIT`` clause.
 
@@ -258,6 +259,11 @@ class PostgresqlDialect:
             expressions: Expressions to project. Must not be empty.
             where_clause: Optional predicate body, without ``WHERE``.
             limit: Maximum rows, or ``None`` for no limit.
+            order_by: Already-quoted ordering terms, or None for no
+                ordering. A bounded read with no ordering returns an
+                arbitrary page, which is fine for issue evidence and
+                useless for paging: "any twenty rows" cannot be
+                resumed from.
 
         Returns:
             The assembled statement with ``LIMIT <n>`` appended when *limit*
@@ -272,6 +278,8 @@ class PostgresqlDialect:
         """
         validate_row_limit(limit)
         statement = ansi_select_aggregates_sql(qualified_table, expressions, where_clause)
+        if order_by:
+            statement = f"{statement} ORDER BY {', '.join(order_by)}"
         if limit is None:
             return statement
         return f"{statement} LIMIT {limit}"
