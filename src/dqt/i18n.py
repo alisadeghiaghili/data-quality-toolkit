@@ -28,6 +28,7 @@ Example:
 
 from __future__ import annotations
 
+import html
 from typing import Literal
 
 __all__ = [
@@ -115,17 +116,25 @@ def translate(key: str, language: Language) -> str:
         The translated word.
 
     Raises:
-        KeyError: If *key* is not in the glossary.
-        ValueError: If *language* is not one DQT renders.
+        KeyError: If *key* is not in the glossary. Falling back to the key
+            would print an internal identifier at a reader.
+        ValueError: If *language* is not one DQT renders. The set is closed,
+            and guessing would pick a language on someone's behalf.
 
     Example:
         assert translate("error", "en") == "error"
     """
-    raise NotImplementedError
+    if language not in LANGUAGES:
+        raise ValueError(f"Unknown language {language!r}; DQT renders {', '.join(LANGUAGES)}.")
+    if key not in TRANSLATIONS:
+        raise KeyError(f"No translation for {key!r}.")
+    return TRANSLATIONS[key][language]
 
 
 def is_rtl(language: Language) -> bool:
     """Report whether *language* reads right to left.
+
+    Decided in one place so a report and a screen cannot disagree about it.
 
     Args:
         language: One of :data:`LANGUAGES`.
@@ -136,11 +145,18 @@ def is_rtl(language: Language) -> bool:
     Example:
         assert is_rtl("fa") is True
     """
-    raise NotImplementedError
+    return language == "fa"
 
 
 def ltr_span(value: object) -> str:
     """Wrap *value* so it stays left-to-right inside right-to-left text.
+
+    Identifiers, SQL and numbers are data, not prose. Inside an RTL block a
+    browser's bidirectional algorithm reorders bare Latin text, so this is
+    what keeps ``orders.customer_id`` readable rather than merely present.
+
+    The value is escaped, because identifiers come from the database like
+    everything else.
 
     Args:
         value: Text or a number to keep in reading order.
@@ -151,4 +167,4 @@ def ltr_span(value: object) -> str:
     Example:
         assert ltr_span("orders") == '<span dir="ltr">orders</span>'
     """
-    raise NotImplementedError
+    return f'<span dir="ltr">{html.escape(str(value))}</span>'
