@@ -836,3 +836,166 @@ __all__ = [
     "DQPipelineConfig",
     "RuleConfig",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Cleansing
+# ---------------------------------------------------------------------------
+#
+# These are domain types rather than SQL machinery: a config is what was
+# asked for, a plan is what a reviewer approved, a log entry is what was
+# done, and a result is what came back. None of them knows a dialect.
+#
+# `ARC-01` is what moved them here. RunStore has to reconstruct a stored plan,
+# and reaching into dqt.sql.cleansing to do it made persistence depend on an
+# adapter -- an outward dependency, written as a deferred import so a
+# module-scope reading of the file did not show it. dqt.sql.cleansing
+# re-exports all four, so nothing a caller imports has moved.
+
+
+@dataclass
+class CleansingConfig:
+    """Declarative configuration for one cleansing operation.
+
+    A :class:`CleansingConfig` describes a single cleansing step to apply to
+    a specific table (and optionally column).  Multiple configs are combined
+    into a list and passed to :func:`apply_cleansing`.
+
+    Attributes:
+        table_name: Target table name.
+        column_name: Target column name, or ``None`` for table-level operations
+            (e.g. deduplication).
+        operation: One of ``"standardize"``, ``"deduplicate"``,
+            ``"lookup_correct"``.
+        params: Operation-specific parameters (see each operation's docstring).
+        schema_name: Optional schema qualifier.  Defaults to ``None``.
+        enabled: Set to ``False`` to skip this config without removing it.
+
+    Example::
+
+        cfg = CleansingConfig(
+            table_name="users",
+            column_name="email",
+            operation="standardize",
+            params={"case": "lower", "trim": True},
+        )
+    """
+
+    table_name: str
+    column_name: str | None
+    operation: Literal["standardize", "deduplicate", "lookup_correct"]
+    params: dict[str, Any] = field(default_factory=dict)
+    schema_name: str | None = None
+    enabled: bool = True
+
+
+@dataclass
+class CleansingLog:
+    """Audit record for a single value change produced by a cleansing operation.
+
+    A :class:`CleansingLog` entry is created for every row affected by a
+    cleansing step.  The log contains enough information to reproduce or undo
+    the change manually.
+
+    Attributes:
+        run_id: Pipeline run identifier.
+        operation: Cleansing operation that produced this entry.
+        schema_name: Schema of the affected table (may be ``None``).
+        table_name: Table where the change occurred.
+        column_name: Column where the change occurred (``None`` for
+            row-level operations such as deduplication).
+        row_key: Dict representing the identifying column(s) and their values
+            for the affected row (e.g. ``{"id": 42}``).
+        before_value: Value before the change (``None`` for deleted rows).
+        after_value: Value after the change (``None`` for deleted rows).
+
+    Example::
+
+        entry = CleansingLog(
+            run_id="run-001",
+            operation="standardize",
+            table_name="users",
+            column_name="email",
+            row_key={"id": 7},
+            before_value="  Alice@Example.COM  ",
+            after_value="alice@example.com",
+        )
+    """
+
+    run_id: str
+    operation: str
+    table_name: str
+    schema_name: str | None = None
+    column_name: str | None = None
+    row_key: dict[str, Any] = field(default_factory=dict)
+    before_value: Any = None
+    after_value: Any = None
+
+
+@dataclass
+class CleansingResult:
+    """Summary of all changes applied during one cleansing run.
+
+    Attributes:
+        run_id: Pipeline run identifier.
+        log: Ordered list of all :class:`CleansingLog` entries produced
+            during this run. When ``dry_run`` is ``True``, these entries
+            describe changes that *would* be made — the database was not
+            touched.
+        total_changes: Total number of value-level changes (UPDATE + DELETE).
+            When ``dry_run`` is ``True``, this counts planned changes, not
+            changes actually applied.
+        tables_affected: Number of distinct tables that were modified (or,
+            in dry-run mode, that would have been modified).
+        errors: List of error messages for operations that could not be
+            applied (non-fatal; the run continues).
+        dry_run: ``True`` if this result came from a preview run that
+            executed no mutating SQL and committed nothing (the default for
+            :func:`apply_cleansing`); ``False`` if the changes described by
+            ``log`` were actually written and committed.
+
+    Example::
+
+        result = apply_cleansing(run_id="run-001", ..., dry_run=False)
+        print(result.total_changes, result.tables_affected)
+    """
+
+    run_id: str
+    log: list[CleansingLog] = field(default_factory=list)
+    total_changes: int = 0
+    tables_affected: int = 0
+    errors: list[str] = field(default_factory=list)
+    dry_run: bool = True
+
+
+@dataclass
+class CleansingPlan:
+    """What a cleansing run would change, computed and stored before it runs.
+
+    A plan is the addressable unit `Q2` chose over a discarded ``--dry-run``
+    preview: what a reviewer approved and what is later executed are the same
+    object, retrieved by ``plan_id`` rather than reconstructed.
+
+    Attributes:
+        plan_id: Identifier assigned at planning time.
+        connection_id: Connection the plan was computed against.
+        configs: The cleansing configs it covers.
+        created_at: When planning ran.
+        changes: One entry per row that would change, with its before-value.
+        fingerprint: Digest of the affected rows as they were at planning
+            time, used to refuse a stale plan.
+        run_id: Pipeline run that produced it, or None for an ad hoc call.
+        applied_at: When it was executed, or None if it has not been.
+
+    Example:
+        plan = cleanse_plan(connection_config, configs, store=store)
+    """
+
+    plan_id: str
+    connection_id: str
+    configs: list[CleansingConfig]
+    created_at: datetime
+    changes: list[CleansingLog] = field(default_factory=list)
+    fingerprint: str = ""
+    run_id: str | None = None
+    applied_at: datetime | None = None

@@ -13,8 +13,26 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Added
+
+- **An architecture gate (`ARC-01`).** `tools/arch_audit.py` checks what
+  `CLAUDE.md` §2 states in prose: dependencies point inward, drivers live only
+  in `sql/dialects/`, no module outside that package branches on a dialect
+  name, `missingly` is reached only through a bridge, the visualisation facet
+  touches no database, and `run()` cannot reach a write. Each rule is handed a
+  synthetic violation in the tests before it is trusted — an audit that would
+  report zero on a broken tree turns an unchecked assumption into a green
+  tick. No baseline, for the same reason as `DOC-02`'s.
+
 ### Changed
 
+- **The four cleansing types moved to `dqt.common.models`** — the first thing
+  the architecture gate found. `RunStore` reconstructs a stored plan, and
+  reaching into `dqt.sql.cleansing` to do it made persistence depend on an
+  adapter; the import was deferred inside a function, which is why a
+  module-scope reading never showed it. They are domain types anyway: a plan
+  is what a reviewer approved, a log entry is what was done. `dqt.sql.cleansing`
+  re-exports all four, so **nothing a caller imports has moved.**
 - **The documentation gate tolerates nothing (`DOC-02`).** `DOC-01` shipped it
   in ratchet mode against a baseline of 29 pre-existing violations, which was
   the right call while the debt was being paid down. It is paid off: five

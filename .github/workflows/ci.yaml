@@ -6,7 +6,8 @@
 #
 #   lint          ruff check + ruff format --check
 #   typecheck     mypy --strict on src/
-#   docs          tools/doc_audit.py, zero tolerated violations (DOC-01, DOC-02)
+#   docs          tools/doc_audit.py and tools/arch_audit.py, zero tolerated
+#                 violations in either (DOC-01, DOC-02, ARC-01)
 #   test-unit     pytest tests/unit/ with coverage (threshold 80 %)
 #   test-integration  pytest tests/integration/ (SQLite; no coverage gate)
 #
@@ -98,7 +99,7 @@ jobs:
   # docstring text parsed via `ast`, not of the interpreter running it, so a
   # 3.11/3.12 matrix here would duplicate work for zero additional signal.
   docs:
-    name: "Documentation gate (doc_audit)"
+    name: "Documentation and architecture gates"
     runs-on: ubuntu-latest
 
     steps:
@@ -109,6 +110,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Run architecture gate
+        # ARC-01. CLAUDE.md section 2 states these rules in prose; this is
+        # where they are checked. No baseline, for the reason DOC-02 gave: a
+        # list of tolerated exceptions is where the next violation gets filed
+        # instead of fixed.
+        #
+        # Same job as the documentation gate, and the same single Python
+        # version, because both read source text with `ast` rather than
+        # running it -- a matrix would duplicate work for no extra signal.
+        run: python tools/arch_audit.py --root . --path src/dqt
 
       - name: Run documentation gate
         run: |

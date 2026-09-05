@@ -37,7 +37,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from dqt.common.models import DQIssue, DQMetric, PipelineResult
+from dqt.common.models import (
+    CleansingConfig,
+    CleansingLog,
+    CleansingPlan,
+    DQIssue,
+    DQMetric,
+    PipelineResult,
+)
 
 # ---------------------------------------------------------------------------
 # Default database path (can be overridden via RunStore constructor)
@@ -746,8 +753,6 @@ class RunStore:
         Example:
             plan = store.load_cleansing_plan("plan-abc")
         """
-        from dqt.sql.cleansing import CleansingConfig, CleansingLog, CleansingPlan
-
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM cleansing_plans WHERE plan_id = ?", (plan_id,)
