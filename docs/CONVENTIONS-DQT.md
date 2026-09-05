@@ -220,7 +220,7 @@ Every feature MUST map to at least one facet, or be rejected as out of scope.
 | Missingness (internal) | within profiling/metrics | Null counts, ratios, co-occurrence patterns. | counts and ratios only |
 | Imputation (external) | `bridges/` | Delegated to `missingly` et al. Never reimplemented. | bridge built (`B1`-`B3`); imputation itself still external by design |
 | Reports | `sql/reports.py` | HTML/PDF scorecards, bilingual EN/FA. | HTML only, untested |
-| Viz/UI | `viz.py`, `ui/` | Charts, dashboards, DBA-facing screens. | decided, not built: `docs/PLAN-VIZ-UI.md` (2026-09-05) settles the stack — inline SVG from `viz.py`, Jinja2 templates shared by a static report and server-rendered pages, no plotting library and no SPA. `ui/api.py` and `ui/app.py` exist and are tested; `viz.py` does not exist yet. |
+| Viz/UI | `viz.py`, `ui/` | Charts, dashboards, DBA-facing screens. | `viz.py` built and tested (`VIZ-1`, 100% covered): chart primitives returning SVG plus a text equivalent, pure, no plotting library. Screens still to come — `docs/PLAN-VIZ-UI.md` sequences them. Earlier note: `docs/PLAN-VIZ-UI.md` (2026-09-05) settles the stack — inline SVG from `viz.py`, Jinja2 templates shared by a static report and server-rendered pages, no plotting library and no SPA. `ui/api.py` and `ui/app.py` exist and are tested; `viz.py` does not exist yet. |
 
 Out of scope, permanently:
 

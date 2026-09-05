@@ -173,6 +173,57 @@ class TestPackagingDeclaresOneDriverPerDatabase:
         assert not [name for name in required if name.startswith(("psycopg", "pyodbc", "pymssql"))]
 
 
+class TestTheVizFacetIsPure:
+    """`dqt.viz` takes numbers and returns strings, and must keep doing so.
+
+    ``CLAUDE.md`` §2: dependencies point inward and I/O stays at the edges.
+    The chart primitives are the innermost thing in the UI stack -- if they
+    stay pure, every consumer can be tested without a database, a browser, or
+    a rendering engine, which is the property `VIZ-1` was built for.
+
+    Read as source text rather than by importing, deliberately: an import
+    that has already happened elsewhere in the session would not show up.
+    """
+
+    def _source(self) -> str:
+        """Return ``dqt/viz.py``'s text.
+
+        Returns:
+            The module source.
+
+        Example:
+            assert "import sqlite3" not in self._source()
+        """
+        return (pathlib.Path(__file__).resolve().parents[2] / "src" / "dqt" / "viz.py").read_text(
+            encoding="utf-8"
+        )
+
+    def test_it_reaches_no_database_and_no_dialect(self):
+        """A chart function that queried anything would be untestable offline."""
+        source = self._source()
+
+        for forbidden in ("sqlite3", "psycopg", "pyodbc", "dqt.sql", "dqt.common"):
+            assert forbidden not in source, f"viz.py must not reference {forbidden!r}"
+
+    def test_it_performs_no_io(self):
+        """No files, no network, no clock.
+
+        A timestamp would also break determinism, which is what makes the
+        geometry assertions in ``test_viz.py`` possible at all.
+        """
+        source = self._source()
+
+        for forbidden in ("open(", "requests", "urllib", "datetime", "random"):
+            assert forbidden not in source, f"viz.py must not use {forbidden!r}"
+
+    def test_it_adds_no_third_party_dependency(self):
+        """The whole point of hand-written SVG over a plotting library."""
+        source = self._source()
+
+        for forbidden in ("matplotlib", "plotly", "seaborn", "altair", "pygal"):
+            assert forbidden not in source
+
+
 class TestProfilingCannotMutate:
     """Q1, settled 2026-08-26: `run()` must be structurally incapable of writing.
 
