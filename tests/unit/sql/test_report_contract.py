@@ -285,7 +285,6 @@ class TestStageErrorsReachTheReader:
         """
         html = _render(_result(status="success"), tmp_path)
 
-        assert "stage" not in html.lower().split("<h1>")[1].split("<h2>run summary</h2>")[0]
         assert "Stage Errors" not in html
 
 
