@@ -125,6 +125,34 @@ lists are overlapping views of the same issues — summing them double-counts. S
 Note that `result.status` is currently always `"success"`: there is no per-stage
 error handling yet, so a failed run raises rather than recording a failure.
 
+## Rules
+
+Rules are declarative, defined in YAML or JSON, and compile to set-based SQL —
+one query per rule, never a row-by-row loop. Four expressions:
+`NOT NULL`, `UNIQUE`, `RANGE`, `REGEX`.
+
+`UNIQUE` counts duplicates with `COUNT(DISTINCT ...)`, which has to hold every
+distinct value it sees. On a high-cardinality column of a very large table
+that is the one operation in DQT that can cost real memory on the server, so a
+rule may opt into an estimate:
+
+```yaml
+- name: unique-customer-email
+  dimension: uniqueness
+  severity: error
+  expression: UNIQUE
+  scope: { table_pattern: customers, column_pattern: email }
+  params: { approximate: true }
+```
+
+Whether an estimate is acceptable is a property of the check, not of the run,
+which is why it is set per rule. Only SQL Server has a native estimating form
+(`APPROX_COUNT_DISTINCT`); SQLite has none and PostgreSQL's is an extension
+rather than core, so on those the rule answers exactly. **Either way the
+issue's evidence carries `approximate`**, so a reader never has to guess which
+kind of number they are looking at — an estimate and an exact count are
+different claims.
+
 ## Exit codes
 
 `dqt profile` is meant to be usable as a data-quality gate in CI, which means
