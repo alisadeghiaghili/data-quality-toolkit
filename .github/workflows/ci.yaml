@@ -6,7 +6,7 @@
 #
 #   lint          ruff check + ruff format --check
 #   typecheck     mypy --strict on src/
-#   docs          tools/doc_audit.py ratchet gate against .doc_audit_baseline.json (DOC-01)
+#   docs          tools/doc_audit.py, zero tolerated violations (DOC-01, DOC-02)
 #   test-unit     pytest tests/unit/ with coverage (threshold 80 %)
 #   test-integration  pytest tests/integration/ (SQLite; no coverage gate)
 #
@@ -87,11 +87,14 @@ jobs:
         run: mypy src/dqt/
 
   # --------------------------------------------------------------------------
-  # Job 3: Documentation gate (DOC-01)
+  # Job 3: Documentation gate (DOC-01, hardened by DOC-02)
   # --------------------------------------------------------------------------
-  # Enforces ENGINEERING-STANDARDS.md §2 in ratchet mode: pre-existing debt
-  # recorded in .doc_audit_baseline.json is tolerated, any *new* violation
-  # fails the build. Single Python version only -- the result is a function of
+  # Enforces ENGINEERING-STANDARDS.md §2 with no tolerance: every public
+  # function and class carries Args, Returns, Raises and an Example, and any
+  # violation fails the build. Ratchet mode was right while the debt was being
+  # paid down -- it stopped new violations without demanding the old ones be
+  # fixed first -- and DOC-02 paid it off, so the baseline is gone rather than
+  # empty. An empty exceptions file is an invitation. Single Python version only -- the result is a function of
   # docstring text parsed via `ast`, not of the interpreter running it, so a
   # 3.11/3.12 matrix here would duplicate work for zero additional signal.
   docs:
@@ -113,8 +116,7 @@ jobs:
             --root . \
             --path src/dqt \
             --style google \
-            --require-example \
-            --baseline .doc_audit_baseline.json
+            --require-example
 
   # --------------------------------------------------------------------------
   # Job 4: Unit tests + coverage

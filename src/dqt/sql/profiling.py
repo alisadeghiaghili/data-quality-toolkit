@@ -100,6 +100,19 @@ class SqlProfiler:
     """
 
     def __init__(self, connection_config: ConnectionConfig) -> None:
+        """Resolve the dialect once, for every table this profiler reads.
+
+        The dialect is chosen from the DSN here rather than per query, so a
+        profiler cannot end up quoting one table one way and the next
+        another.
+
+        Args:
+            connection_config: Connection to profile through. May be
+                read-only; profiling never writes.
+
+        Example:
+            profiler = SqlProfiler(ConnectionConfig(id="c", dsn="sqlite:///dev.db"))
+        """
         self._connection_config = connection_config
         self._dialect: Dialect = get_dialect_for(connection_config)
 

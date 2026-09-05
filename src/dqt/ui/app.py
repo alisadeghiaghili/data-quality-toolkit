@@ -111,7 +111,15 @@ def _store_path() -> Path:
 
 @app.get("/health", tags=["infra"])
 def health() -> dict[str, Any]:
-    """Liveness probe. Returns ``{\"status\": \"ok\"}``.
+    """Report that the process is up, and which store it is serving.
+
+    The store path is included deliberately. A health check that only says
+    "ok" cannot distinguish a server reading the right database from one
+    reading an empty file it created itself, and the second failure looks
+    exactly like a quiet week of clean data.
+
+    Returns:
+        ``status`` and the resolved store path.
 
     Example::
 
@@ -134,6 +142,16 @@ def get_runs(
 ) -> list[dict[str, Any]]:
     """List recent pipeline runs, newest first.
 
+    Args:
+        connection_id: Only runs against this logical connection.
+        status: Only runs with this outcome -- ``success``, ``failed`` or
+            ``partial``.
+        limit: Maximum runs returned, between 1 and 500. Bounded because an
+            unbounded list grows with how long DQT has been in use.
+
+    Returns:
+        One dict per run, newest first.
+
     Example::
 
         GET /runs?status=success&limit=10
@@ -150,10 +168,19 @@ def get_runs(
 def get_run(
     run_id: str,
 ) -> dict[str, Any]:
-    """Get summary for a single run.
+    """Summarise one run.
 
-    Returns run metadata plus aggregated ``metric_count``, ``issue_count``,
-    and ``overall_completeness``.
+    Args:
+        run_id: The run to summarise.
+
+    Returns:
+        The run's metadata plus aggregated ``metric_count``,
+        ``issue_count`` and ``overall_completeness``.
+
+    Raises:
+        HTTPException: 404 if no such run. An empty summary would be
+            indistinguishable from a run that found nothing, which is the
+            more reassuring of the two answers and the wrong one.
 
     Example::
 
@@ -174,7 +201,16 @@ def get_run(
 def get_tables(
     run_id: str,
 ) -> list[str]:
-    """List tables that were profiled in a run.
+    """List the tables a run profiled.
+
+    Args:
+        run_id: The run to read.
+
+    Returns:
+        Qualified table names, sorted and de-duplicated. An unknown run
+        yields an empty list rather than an error: "profiled nothing" is a
+        true answer about a run that does not exist, and the caller asking
+        this question is usually iterating rather than navigating.
 
     Example::
 
@@ -195,7 +231,15 @@ def get_metrics(
     table_name: str | None = Query(None, description="Filter by table name"),
     dimension: str | None = Query(None, description="Filter by DQ dimension, e.g. completeness"),
 ) -> list[dict[str, Any]]:
-    """Get data-quality metrics for a run.
+    """Return the metrics a run recorded.
+
+    Args:
+        run_id: The run to read.
+        table_name: Only metrics for this table.
+        dimension: Only metrics for this dimension, e.g. ``completeness``.
+
+    Returns:
+        One dict per metric.
 
     Example::
 
@@ -222,7 +266,17 @@ def get_issues(
     ),
     table_name: str | None = Query(None, description="Filter by table name"),
 ) -> list[dict[str, Any]]:
-    """Get data-quality issues detected in a run.
+    """Return the issues a run found.
+
+    Args:
+        run_id: The run to read.
+        severity: Only issues at this severity -- ``info``, ``warning``,
+            ``error`` or ``critical``.
+        table_name: Only issues about this table.
+
+    Returns:
+        One dict per issue, each carrying counts as evidence rather than the
+        offending rows.
 
     Example::
 

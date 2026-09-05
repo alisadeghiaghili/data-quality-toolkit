@@ -95,6 +95,20 @@ class RunStore:
     """
 
     def __init__(self, db_path: str | Path = _DEFAULT_DB_PATH) -> None:
+        """Point the store at a SQLite file, without opening it.
+
+        The path is resolved eagerly so that a later relative call, or a
+        process that changed directory in between, still reaches the same
+        file. Nothing is created here: :meth:`init_schema` does that, and it
+        is where the schema-version guard runs.
+
+        Args:
+            db_path: Where the store lives. Created on first
+                :meth:`init_schema`.
+
+        Example:
+            store = RunStore(db_path="dqt_runs.db")
+        """
         self._db_path: Path = Path(db_path).expanduser().resolve()
 
     # ------------------------------------------------------------------
