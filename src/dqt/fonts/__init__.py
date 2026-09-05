@@ -22,6 +22,7 @@ Example:
 
 from __future__ import annotations
 
+import base64
 import pathlib
 
 from dqt.i18n import Language
@@ -52,4 +53,19 @@ def embedded_font_face(language: Language) -> str:
     Example:
         assert "@font-face" in embedded_font_face("fa")
     """
-    raise NotImplementedError
+    if language != "fa":
+        return ""
+
+    payload = base64.b64encode(FONT_FILE.read_bytes()).decode("ascii")
+    # A fallback is named even though the face is embedded: if it ever fails
+    # to load, the browser picks for itself, and for Persian its pick is
+    # often a font with no shaping at all.
+    return (
+        "@font-face {\n"
+        f"    font-family: '{FONT_FAMILY}';\n"
+        f"    src: url(data:font/woff2;base64,{payload}) format('woff2');\n"
+        "    font-weight: 400;\n"
+        "    font-display: swap;\n"
+        "}\n"
+        f"body {{ font-family: '{FONT_FAMILY}', Tahoma, sans-serif; }}\n"
+    )

@@ -30,6 +30,11 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **Vazirmatn embedded in Persian pages (`VIZ-4`).** SIL OFL, vendored with
+  its licence and inlined as a `data:` URI — never fetched, so a report still
+  renders on an air-gapped machine, which is exactly where a DBA opens one.
+  Persian without Arabic-script shaping is not slightly off, it is
+  unreadable. English pages carry none of it.
 - **Persian, and right-to-left layout (`VIZ-4`).** `dqt.i18n` holds a fixed
   English↔Persian glossary — a closed table, proved complete by a test, so a
   missing translation fails CI instead of shipping an English word into a

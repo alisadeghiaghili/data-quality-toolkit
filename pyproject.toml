@@ -79,7 +79,10 @@ dqt = "dqt.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-dqt = ["py.typed"]
+# The font and its licence are data, not code, and must reach an installed
+# wheel: a file that exists only in a source checkout works in every test and
+# fails for every user. The OFL requires the licence to travel with the font.
+dqt = ["py.typed", "fonts/*.woff2", "fonts/OFL.txt"]
 
 # ---------------------------------------------------------------------------
 # Ruff
