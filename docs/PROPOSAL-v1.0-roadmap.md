@@ -396,10 +396,32 @@ from that line being complete.
 
 | Rung | Contents | Exit bar (single falsifiable condition) |
 |---|---|---|
+> **Reordered 2026-09-05, by the owner: SQL Server leads every rung.**
+>
+> The ladder below was written before SQL Server was named DQT's primary
+> target. It put PostgreSQL at `v0.2` and SQL Server at `v0.4` as "the third
+> dialect", and the work followed that order without anyone checking it
+> against the priority the owner had already stated. That was my mistake to
+> carry rather than flag.
+>
+> The gates themselves do not change — what changes is which engine has to
+> pass them first. SQL Server now leads at every rung, PostgreSQL follows in
+> the same rung, and SQLite is the floor throughout.
+>
+> The reorder makes `v0.2` **stronger**, not weaker, and that is worth
+> stating. SQL Server is the dialect where DQT's read-only promise is
+> weakest: `ReadOnlyEnforcement.ADVISORY` means the ODBC access-mode hint is
+> a request and a write that reaches the server lands. On SQLite the driver
+> refuses and on PostgreSQL the server refuses; on SQL Server **only DQT's
+> own guard stands between a read-only config and a modified production
+> table.** Proving that guard against a live SQL Server is therefore the
+> single most load-bearing safety test in the project, and it belonged at the
+> first rung all along.
+
 | **v0.1** | `docs/PLAN-TDD.md` units 1–9, unchanged | All nine units are merged to `main`, and `ruff check`, `ruff format --check`, `mypy --strict`, and `pytest --cov=src/dqt --cov-fail-under=80` are all green on that state. |
-| **v0.2 — Safety proven** | Gate 1 (§5): PostgreSQL in CI. `DQT-09` exception hierarchy (`docs/PLAN-TDD.md` unit 13, already sequenced right after `DQT-05`). | `tests/unit/sql/test_read_only.py`'s four-hash checksum proof runs and passes against a live PostgreSQL service container in CI, on both Python versions, in addition to SQLite. |
-| **v0.3 — The wedge is real** | `cleanse_plan()` / `cleanse_apply()` / `revert(plan_id)` per `docs/PLAN-TDD.md`'s unit 6 reshaped design (§3.3 above). `cleanse` made structurally unreachable from `DQTPipeline.run()`'s call graph — not just unreachable by default. | A round-trip checksum test (before-mutation and after-revert states byte-identical) passes for both `standardize` and `deduplicate`, against both SQLite and PostgreSQL, and a static call-graph or import-scan test proves `run()` cannot reach `cleanse_plan`/`cleanse_apply`. |
-| **v0.4 — Third dialect and a measured performance budget** | `docs/PLAN-TDD.md` unit 9a (SQL Server via `dqt/sql/dialects/`) and unit 16 (performance/scale), both cited not re-planned. | SQL Server passes the same `discover_schema`/rules/read-only test suite SQLite and PostgreSQL already pass, and a committed benchmark run reports profiling, rule-evaluation, and cleanse-plan timings each under a published budget for a stated fixture size. |
+| **v0.2 — Safety proven, on the engine where it matters most** | Gate 1 (§5), reordered: **SQL Server first**, then PostgreSQL, both already in CI. `DQT-09` exception hierarchy (`docs/PLAN-TDD.md` unit 13). | The four-hash checksum proof runs and passes against a live **SQL Server** service container and a live **PostgreSQL** one, in addition to SQLite. On SQL Server the proof is the only thing standing between a `read_only` config and a modified table, because `ReadOnlyEnforcement.ADVISORY` means the server will not refuse the write itself — so that engine's proof must additionally show the guard refusing where the server would have allowed. |
+| **v0.3 — The wedge is real** | `cleanse_plan()` / `cleanse_apply()` / `revert(plan_id)` per `docs/PLAN-TDD.md`'s unit 6 reshaped design (§3.3 above). `cleanse` made structurally unreachable from `DQTPipeline.run()`'s call graph — not just unreachable by default. | A round-trip checksum test (before-mutation and after-revert states identical) passes for both `standardize` and `deduplicate`, against **SQL Server first**, then PostgreSQL and SQLite, and a static call-graph or import-scan test proves `run()` cannot reach `cleanse_plan`/`cleanse_apply`. |
+| **v0.4 — A measured performance budget** | `docs/PLAN-TDD.md` unit 16 (performance/scale), cited not re-planned. Unit 9a's SQL Server dialect has already landed and moved up to `v0.2`. | A committed benchmark run reports profiling, rule-evaluation, and cleanse-plan timings each under a published budget for a stated fixture size. |
 | **v0.5 — Every facet has a decision, not a silence** | Gate 5 (§5): `knowledge.py`, `classification.py`, `viz.py`, `bridges/` — each either built-and-tested (§3.4's regional-classification proposal, if accepted, lands here) or formally marked cut. | `docs/CONVENTIONS-DQT.md` §2's facet table carries no row still reading "not started" with no owner decision recorded next to it. |
 | **v0.9 — Freeze candidate** | `CHANGELOG.md` with a full `[Unreleased]` history since `0.1.0`; a written SemVer/deprecation policy; `docs/PLAN-TDD.md` units 14–15 (`ARC-01`, `DOC-02`) landed so the architecture and docstring gates are at a clean baseline going into the freeze. | `doc_audit.py` and `arch_audit.py` both run against an empty baseline (zero tolerated violations), and every symbol in `dqt/__init__.py`'s export list, every CLI flag, and — unless explicitly exempted per §4's UI recommendation — every `ui/api.py` endpoint has a docstring/help text backed by a passing test. |
 | **1.0.0** | Every gate in §5 met; every rung above shipped in order. | The owner explicitly signs off, in writing, that the frozen surface (Python exports, CLI flags and exit codes, config-file schema, and the UI HTTP contract if not exempted) is a promise DQT will not break without a major-version bump. |
