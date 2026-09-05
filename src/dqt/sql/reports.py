@@ -14,10 +14,13 @@ The output is a single HTML file with inline CSS; no external dependencies.
 from __future__ import annotations
 
 import html
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dqt.common.models import DQMetric, PipelineResult
+from dqt._html import Raw, document, element, table
+from dqt.common.models import DQMetric, PipelineResult, get_args_of_dq_dimension
+from dqt.viz import Chart, bar_chart, scorecard, severity_indicator
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -109,31 +112,50 @@ tr:nth-child(even) td { background: #f9f9f9; }
 .ok { background: #d4edda; color: #155724; }
 .warn { background: #fff3cd; color: #856404; }
 .err { background: #f8d7da; color: #721c24; }
-.score-bar-wrap {
-    background: #e0e0e0; border-radius: 6px; height: 10px; width: 120px;
-    display: inline-block; vertical-align: middle;
+
+/* Charts from dqt.viz. The SVG carries no colour of its own so that the page
+   decides how a chart looks -- which is what lets one set of primitives serve
+   both the report and the pages that read from the same store. */
+.dqt-track { fill: #e0e0e0; }
+.dqt-fill, .dqt-bar { fill: #0f3460; }
+.dqt-scorecard, .dqt-score-bar { vertical-align: middle; }
+.dqt-unmeasured { display: none; }
+.dqt-bar-label, .dqt-bar-value { font-size: 11px; fill: #1a1a2e; }
+.dqt-figure { margin: 0 0 12px 0; }
+/* The text equivalent is shown, not hidden. A sighted reader gets the numbers
+   without hovering, and nothing has to be maintained twice. */
+.dqt-chart-text { font-size: 0.78rem; color: #4a4a5e; margin-top: 2px; }
+.dqt-cards {
+    display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px;
 }
-.score-bar { height: 10px; border-radius: 6px; }
-.score-good { background: #28a745; }
-.score-warn { background: #ffc107; }
-.score-bad { background: #dc3545; }
+.dqt-severity { vertical-align: middle; margin-right: 4px; }
+.dqt-severity-info { fill: #17a2b8; }
+.dqt-severity-warning { fill: #ffc107; }
+.dqt-severity-error { fill: #dc3545; }
+.dqt-severity-critical { fill: #721c24; }
 """
 
 
-def _score_badge(score: float) -> str:
-    pct = round(score * 100, 1)
-    if score >= 0.95:
-        cls = "ok"
-    elif score >= 0.80:
-        cls = "warn"
-    else:
-        cls = "err"
-    bar_cls = "score-good" if score >= 0.95 else ("score-warn" if score >= 0.80 else "score-bad")
-    bar_w = round(score * 120)
-    return (
-        f'<span class="score-bar-wrap"><span class="score-bar {bar_cls}" '
-        f'style="width:{bar_w}px"></span></span> '
-        f'<span class="badge {cls}">{pct}%</span>'
+def _score_badge(score: float) -> Raw:
+    """Render a score as a bar and a percentage.
+
+    Drawn by :func:`dqt.viz.scorecard` rather than by hand, so the report and
+    the pages that come later cannot drift apart. The text equivalent rides
+    beside the bar, which is where the accessibility requirement is actually
+    met.
+
+    Args:
+        score: A value in ``[0, 1]``.
+
+    Returns:
+        The badge markup.
+
+    Example:
+        assert "50%" in _score_badge(0.5)
+    """
+    card = scorecard("score", score=score)
+    return Raw(
+        card.svg + element("span", card.text.removeprefix("score: "), attrs={"class": "badge"})
     )
 
 
@@ -164,9 +186,29 @@ def _status_badge(status: str) -> str:
     return f'<span class="badge {_STATUS_CLASSES.get(status, "err")}">{html.escape(status)}</span>'
 
 
-def _severity_badge(severity: str) -> str:
-    cls = {"error": "err", "warning": "warn", "info": "ok"}.get(severity, "ok")
-    return f'<span class="badge {cls}">{html.escape(severity)}</span>'
+def _severity_badge(severity: str) -> Raw:
+    """Render a severity as a shape and its word.
+
+    Colour alone is unreadable to roughly 8% of men, and DBAs are exactly the
+    audience that stares at these tables all day, so the mark and the label
+    both carry the meaning. Unknown severities fall back to a plain label
+    rather than raising: a report is rendered after the run, and refusing to
+    draw one because a severity was unfamiliar would lose the whole page.
+
+    Args:
+        severity: The issue's severity.
+
+    Returns:
+        The badge markup.
+
+    Example:
+        assert "error" in _severity_badge("error")
+    """
+    try:
+        indicator = severity_indicator(severity)
+    except ValueError:
+        return element("span", severity, attrs={"class": "badge"})
+    return Raw(indicator.svg + element("span", severity, attrs={"class": "badge"}))
 
 
 def _duration(started: datetime | None, ended: datetime | None) -> str:
@@ -303,158 +345,231 @@ def _stage_error_section(result: PipelineResult) -> str:
     )
 
 
+def _chart_block(chart: Chart) -> Raw:
+    """Place a chart and its text equivalent on the page together.
+
+    :class:`~dqt.viz.Chart` returns them as one value so the pair cannot be
+    split; this is the other half of that -- putting the equivalent into the
+    document rather than keeping it.
+
+    Args:
+        chart: The chart to place.
+
+    Returns:
+        The figure markup.
+
+    Example:
+        block = _chart_block(bar_chart([("a", 1)], title="t"))
+    """
+    return element(
+        "figure",
+        Raw(chart.svg),
+        element("figcaption", chart.text, attrs={"class": "dqt-chart-text"}),
+        attrs={"class": "dqt-figure"},
+    )
+
+
+def _dimension_scores(result: PipelineResult) -> dict[str, float | None]:
+    """Average each dimension's metrics, or report that none exist.
+
+    Derived from ``PipelineResult.metrics`` -- the flat canonical list --
+    rather than from the nested per-table views, which are navigation and
+    would double-count.
+
+    Every dimension in the vocabulary gets an entry, including the ones
+    nothing measured. A report that lists only what it measured lets a reader
+    assume the rest was fine, and DQT measures completeness today and little
+    else.
+
+    Args:
+        result: The completed run.
+
+    Returns:
+        A score in ``[0, 1]`` per dimension, or None where nothing measured
+        it.
+
+    Example:
+        scores = _dimension_scores(result)
+    """
+    scores: dict[str, float | None] = {}
+    for dimension in sorted(get_args_of_dq_dimension()):
+        measured = [
+            metric.score
+            for metric in result.metrics
+            if metric.dimension == dimension and metric.score is not None
+        ]
+        scores[dimension] = sum(measured) / len(measured) if measured else None
+    return scores
+
+
+def _dimension_section(result: PipelineResult) -> Raw:
+    """Render one scorecard per dimension.
+
+    Args:
+        result: The completed run.
+
+    Returns:
+        The section markup.
+
+    Example:
+        section = _dimension_section(result)
+    """
+    cards = [
+        _chart_block(scorecard(dimension, score=score))
+        for dimension, score in _dimension_scores(result).items()
+    ]
+    return element(
+        "section",
+        element("h2", "Quality by dimension"),
+        element("div", *cards, attrs={"class": "dqt-cards"}),
+    )
+
+
+def _issue_chart_section(result: PipelineResult) -> Raw:
+    """Chart how many issues each dimension produced.
+
+    Answers "where do I look first", which is the question an overview exists
+    for. Counted from the canonical issue list.
+
+    Args:
+        result: The completed run.
+
+    Returns:
+        The section markup.
+
+    Example:
+        section = _issue_chart_section(result)
+    """
+    counts = Counter(issue.dimension for issue in result.issues)
+    chart = bar_chart(
+        [(dimension, float(count)) for dimension, count in sorted(counts.items())],
+        title="Issues by dimension",
+    )
+    return element("section", element("h2", "Issues by dimension"), _chart_block(chart))
+
+
 def _render(result: PipelineResult) -> str:
+    """Assemble the whole report.
+
+    Every fragment is built through :mod:`dqt._html`, which escapes content
+    unless it is declared markup -- so a table named ``<b>`` stays a table
+    name without anyone remembering to say so.
+
+    Args:
+        result: The completed run.
+
+    Returns:
+        The document text.
+
+    Example:
+        html = _render(result)
+    """
     started_str = (
         result.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") if result.started_at else "n/a"
     )
     ended_str = result.ended_at.strftime("%Y-%m-%d %H:%M:%S UTC") if result.ended_at else "n/a"
-    duration = _duration(result.started_at, result.ended_at)
-    status_badge = _status_badge(result.status)
 
-    # ---- run summary -------------------------------------------------------
-    summary_rows = [
-        ("Run ID", html.escape(result.run_id)),
-        ("Status", status_badge),
-        ("Started", html.escape(started_str)),
-        ("Ended", html.escape(ended_str)),
-        ("Duration", html.escape(duration)),
-        ("Tables scanned", str(len(result.tables))),
-        ("Total issues", str(len(result.issues))),
-        ("Total metrics", str(len(result.metrics))),
-    ]
-    summary_html = (
-        "<table><tr><th>Field</th><th>Value</th></tr>"
-        + "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in summary_rows)
-        + "</table>"
+    summary = table(
+        ["Field", "Value"],
+        [
+            ["Run ID", result.run_id],
+            ["Status", _status_badge(result.status)],
+            ["Started", started_str],
+            ["Ended", ended_str],
+            ["Duration", _duration(result.started_at, result.ended_at)],
+            ["Tables scanned", len(result.tables)],
+            ["Total issues", len(result.issues)],
+            ["Total metrics", len(result.metrics)],
+        ],
     )
 
-    # ---- table-level metrics -----------------------------------------------
-    table_rows_html = ""
+    table_rows: list[list[object]] = []
     for _key, table_result in sorted(result.tables.items()):
         schema = table_result.schema_name
-        table = table_result.table_name
-        row_count_m = _metric_lookup(result.metrics, "row_count", schema=schema, table=table)
+        name = table_result.table_name
+        row_count_metric = _metric_lookup(result.metrics, "row_count", schema=schema, table=name)
         row_count = (
-            int(row_count_m.value) if row_count_m and row_count_m.value is not None else "n/a"
+            int(row_count_metric.value)
+            if row_count_metric and row_count_metric.value is not None
+            else "n/a"
         )
-
-        col_completeness_scores = [
-            m.score
-            for m in result.metrics
-            if m.dimension == "completeness"
-            and m.schema_name == schema
-            and m.table_name == table
-            and m.column_name is not None
-            and m.score is not None
+        column_scores = [
+            metric.score
+            for metric in result.metrics
+            if metric.dimension == "completeness"
+            and metric.schema_name == schema
+            and metric.table_name == name
+            and metric.column_name is not None
+            and metric.score is not None
         ]
-        avg_completeness = (
-            sum(col_completeness_scores) / len(col_completeness_scores)
-            if col_completeness_scores
-            else 1.0
-        )
+        average = sum(column_scores) / len(column_scores) if column_scores else 1.0
         issue_count = sum(
-            1 for i in result.issues if i.schema_name == schema and i.table_name == table
+            1 for issue in result.issues if issue.schema_name == schema and issue.table_name == name
         )
-        table_rows_html += (
-            f"<tr>"
-            f"<td>{html.escape(schema)}</td>"
-            f"<td>{html.escape(table)}</td>"
-            f"<td>{row_count}</td>"
-            f"<td>{_score_badge(avg_completeness)}</td>"
-            f"<td>{issue_count}</td>"
-            f"</tr>"
-        )
+        table_rows.append([schema, name, row_count, _score_badge(average), issue_count])
 
-    table_header = (
-        "<tr><th>Schema</th><th>Table</th><th>Rows</th>"
-        "<th>Avg Completeness</th><th>Issues</th></tr>"
-    )
-    table_section = "<h2>Table Summary</h2><table>" + table_header + table_rows_html + "</table>"
-
-    # ---- column-level metrics ----------------------------------------------
-    col_rows_html = ""
+    column_rows: list[list[object]] = []
     for _key, table_result in sorted(result.tables.items()):
-        for col in table_result.columns:
-            null_m = _metric_lookup(
+        for column in table_result.columns:
+            metric = _metric_lookup(
                 result.metrics,
                 "completeness",
-                schema=col.schema_name,
-                table=col.table_name,
-                column=col.column_name,
+                schema=column.schema_name,
+                table=column.table_name,
+                column=column.column_name,
             )
-            null_count = int(null_m.value) if null_m and null_m.value is not None else "n/a"
-            score = null_m.score if null_m and null_m.score is not None else 1.0
-            col_rows_html += (
-                f"<tr>"
-                f"<td>{html.escape(col.schema_name)}</td>"
-                f"<td>{html.escape(col.table_name)}</td>"
-                f"<td>{html.escape(col.column_name)}</td>"
-                f"<td>{null_count}</td>"
-                f"<td>{_score_badge(score)}</td>"
-                f"</tr>"
+            null_count = int(metric.value) if metric and metric.value is not None else "n/a"
+            score = metric.score if metric and metric.score is not None else 1.0
+            column_rows.append(
+                [
+                    column.schema_name,
+                    column.table_name,
+                    column.column_name,
+                    null_count,
+                    _score_badge(score),
+                ]
             )
 
-    col_header = (
-        "<tr><th>Schema</th><th>Table</th><th>Column</th>"
-        "<th>Null Count</th><th>Completeness</th></tr>"
-    )
-    col_section = (
-        ("<h2>Column Completeness</h2><table>" + col_header + col_rows_html + "</table>")
-        if col_rows_html
-        else ""
-    )
-
-    # ---- issues ------------------------------------------------------------
-    issue_rows_html = ""
-    for issue in sorted(
-        result.issues, key=lambda i: (i.severity, i.table_name or "", i.column_name or "")
-    ):
-        issue_rows_html += (
-            f"<tr>"
-            f"<td>{_severity_badge(issue.severity)}</td>"
-            f"<td>{html.escape(issue.schema_name or '')}</td>"
-            f"<td>{html.escape(issue.table_name or '')}</td>"
-            f"<td>{html.escape(issue.column_name or '')}</td>"
-            f"<td>{html.escape(issue.message)}</td>"
-            f"</tr>"
-        )
-
+    issue_rows: list[list[object]] = [
+        [
+            _severity_badge(issue.severity),
+            issue.schema_name or "",
+            issue.table_name or "",
+            issue.column_name or "",
+            issue.message,
+        ]
+        for issue in result.issues
+    ]
     issue_section = (
-        (
-            "<h2>Issues</h2>"
-            "<table>"
-            "<tr><th>Severity</th><th>Schema</th><th>Table</th>"
-            "<th>Column</th><th>Message</th></tr>" + issue_rows_html + "</table>"
+        element(
+            "section",
+            element("h2", "Issues"),
+            table(["Severity", "Schema", "Table", "Column", "Message"], issue_rows),
         )
-        if issue_rows_html
-        else "<h2>Issues</h2><p>No issues detected.</p>"
+        if issue_rows
+        else element("section", element("h2", "Issues"), element("p", "No issues detected."))
     )
-
-    stage_error_section = _stage_error_section(result)
-    external_section = _external_section(result)
 
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-    run_id_escaped = html.escape(result.run_id)
-    meta_line = f"Generated {generated_at} &nbsp;|&nbsp; Run: {run_id_escaped}"
+    body = element(
+        "div",
+        element("h1", "DQT Data Quality Report"),
+        element(
+            "p",
+            f"Generated {generated_at} | Run: {result.run_id}",
+            attrs={"class": "meta"},
+        ),
+        element("h2", "Run Summary"),
+        summary,
+        Raw(_stage_error_section(result)),
+        _dimension_section(result),
+        _issue_chart_section(result),
+        element("h2", "Table Summary"),
+        table(["Schema", "Table", "Rows", "Avg Completeness", "Issues"], table_rows),
+        element("h2", "Column Metrics"),
+        table(["Schema", "Table", "Column", "Null Count", "Completeness"], column_rows),
+        issue_section,
+        Raw(_external_section(result)),
+    )
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DQT Report — {run_id_escaped}</title>
-<style>{_CSS}</style>
-</head>
-<body>
-<h1>DQT Data Quality Report</h1>
-<p class="meta">{meta_line}</p>
-<h2>Run Summary</h2>
-{summary_html}
-{stage_error_section}
-{table_section}
-{col_section}
-{issue_section}
-{external_section}
-</body>
-</html>
-"""
+    return document(title=f"DQT Report - {result.run_id}", body=body, css=_CSS)

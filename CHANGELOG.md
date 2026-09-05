@@ -30,6 +30,12 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **The HTML report draws what it reports (`VIZ-2`).** Six dimension
+  scorecards — including the five nothing measured, which say "not measured"
+  and draw no bar — and an issues-by-dimension chart, both from `dqt.viz`, so
+  the static artifact and the pages that come later render the same charts
+  from the same code. Every chart's text equivalent is shown on the page, not
+  hidden.
 - **`dqt.viz` — the chart primitives (`VIZ-1`).** Score bars, bar charts,
   trend lines, severity indicators and scorecards, as inline SVG produced by
   pure functions. No plotting library: a raster image can only be
@@ -65,6 +71,12 @@ Dates are the merge dates on `main`.
 
 ### Changed
 
+- **Report HTML is built through an escape-by-default builder**
+  (`dqt/_html.py`) instead of twenty-odd hand-placed `html.escape` calls.
+  Text is escaped, markup is explicit; the one call that would eventually be
+  forgotten now cannot be. No new dependency: the plan's Jinja2 proposal was
+  reversed because `docs/BACKLOG.md` §4 rules out new hard dependencies and
+  the Reports facet must work with no extras installed.
 - **The run store records what each rule did (`NEW-S`).** `save_run` was
   dropping `PipelineResult.rules_run` on every run, so the count that says a
   rule matched **zero targets** — the usual way a rule set rots unnoticed —
