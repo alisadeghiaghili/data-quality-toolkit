@@ -16,7 +16,7 @@ deterministic, and it is also the thing that actually scales badly: the cost
 that matters here grows with the number of columns, and counting round trips
 measures exactly that.
 
-Timings are reported separately by ``benchmarks/profile_benchmark.py``, which
+Timings are reported separately by ``benchmarks/benchmark.py``, which
 is not a gate. Numbers that vary by machine belong in a report, not an
 assertion.
 """

@@ -1326,7 +1326,7 @@ re-measure before estimating precisely.
 > The cost property is gated by query count rather than wall time
 > (`tests/unit/sql/test_profiling_cost.py`). A clock budget in CI is a flaky
 > test wearing a performance costume; a query count is deterministic and is
-> also the thing that actually scaled badly. `benchmarks/profile_benchmark.py`
+> also the thing that actually scaled badly. `benchmarks/benchmark.py`
 > reports the timings and is deliberately not a gate.
 >
 > **2026-09-05, second pass: the rule engine.** Measured rather than assumed,
