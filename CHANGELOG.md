@@ -13,6 +13,8 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-09-07
+
 ### Added
 
 - **`dqt serve` and `dqt check` (`F14`).** The CLI had one subcommand, which
