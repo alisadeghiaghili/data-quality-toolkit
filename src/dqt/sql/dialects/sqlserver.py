@@ -455,6 +455,33 @@ class SqlServerDialect:
             statement = f"{statement} ORDER BY {', '.join(order_by)}"
         return statement
 
+    def sampled_table_expression(
+        self,
+        qualified_table: str,
+        strategy: str,
+        limit: int,
+        seed: int | None,
+    ) -> str:
+        """Return a table reference yielding at most *limit* rows.
+
+        Args:
+            qualified_table: An already-quoted table reference.
+            strategy: ``"random"`` or ``"first_n"``.
+            limit: Maximum rows. Must be positive.
+            seed: Requested random seed, or None.
+
+        Returns:
+            An aliased subquery usable as a table reference.
+
+        Raises:
+            ValueError: If the strategy is unknown, the limit is not
+                positive, or a seed is given for a random sample.
+
+        Example:
+            expression = dialect.sampled_table_expression('"t"', "first_n", 10, None)
+        """
+        raise NotImplementedError
+
     def regex_not_matching_predicate(self, quoted_column: str, pattern: str) -> str:
         """Refuse: SQL Server has no regular-expression operator.
 

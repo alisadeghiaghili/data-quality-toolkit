@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from dqt.common.models import ConnectionConfig, DQMetric
+from dqt.common.models import ConnectionConfig, DQMetric, SamplingConfig
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.dialects import Dialect
 from dqt.sql.schema_discovery import DiscoveredTable
@@ -66,8 +66,13 @@ class TableProfile:
     Attributes:
         schema_name: Schema name.
         table_name: Table name.
-        row_count: Number of rows in the table.
+        row_count: Number of rows read. **The sample's size when *sampling*
+            is set**, not the table's -- which is why the next attribute is
+            not optional decoration.
         columns: Column-level profiles for the table.
+        sampling: How the sample was taken, or None when every row was read.
+            Absent rather than a falsy placeholder, so that a profile stored
+            before sampling existed reads correctly as unsampled.
 
     Example:
         profile = TableProfile(
@@ -82,6 +87,7 @@ class TableProfile:
     table_name: str
     row_count: int
     columns: list[ColumnProfile]
+    sampling: dict[str, object] | None = None
 
 
 class SqlProfiler:
@@ -99,7 +105,11 @@ class SqlProfiler:
         profiles = profiler.profile_tables(discovered_tables)
     """
 
-    def __init__(self, connection_config: ConnectionConfig) -> None:
+    def __init__(
+        self,
+        connection_config: ConnectionConfig,
+        sampling: SamplingConfig | None = None,
+    ) -> None:
         """Resolve the dialect once, for every table this profiler reads.
 
         The dialect is chosen from the DSN here rather than per query, so a
@@ -109,12 +119,14 @@ class SqlProfiler:
         Args:
             connection_config: Connection to profile through. May be
                 read-only; profiling never writes.
+            sampling: How to sample, or None to read every row.
 
         Example:
             profiler = SqlProfiler(ConnectionConfig(id="c", dsn="sqlite:///dev.db"))
         """
         self._connection_config = connection_config
         self._dialect: Dialect = get_dialect_for(connection_config)
+        self._sampling = sampling
 
     def profile_tables(self, tables: list[DiscoveredTable]) -> list[TableProfile]:
         """Profile discovered tables with simple aggregate queries.
