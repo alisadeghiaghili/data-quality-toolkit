@@ -13,6 +13,27 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Added
+
+- **An exception hierarchy rooted in `DQTError` (`DQT-09`).** The last open
+  task on the authoritative roadmap's DQT track. Every module raised built-in
+  `ValueError` and `ImportError`, so a caller had no way to ask the question
+  that matters in a scheduled job: *did DQT fail, or did Python?*
+
+  `DQTError` is the root, with `ConfigurationError` (and its narrower
+  `ConnectionConfigError`), `RuleEvaluationError`, `CleansingError` and the
+  existing `ReadOnlyViolationError` beneath it.
+
+  **Every new type also inherits the built-in it replaced**, so a caller
+  catching `ValueError` around `cleanse_apply` keeps working. Without that,
+  making the types more specific would have been a breaking change dressed as
+  a minor -- an exception type is as much a part of the public surface as a
+  signature.
+
+  Argument errors deliberately stay `ValueError`: a score outside `[0, 1]`
+  handed to `viz.score_bar` is a bug in the caller's code, not a data-quality
+  condition, and wrapping it would tell a scheduled job the data had a problem.
+
 ## [1.2.0] — 2026-09-07
 
 ### Added

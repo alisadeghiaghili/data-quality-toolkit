@@ -75,6 +75,7 @@ from dqt.common.models import (
     RuleConfig,
     RuleRunResult,
 )
+from dqt.exceptions import RuleEvaluationError
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.dialects.base import Dialect
 from dqt.sql.knowledge import reference_set_from_params, unmatched_count_fragment
@@ -296,7 +297,7 @@ def _fragment_range(
         expressions, binds = _fragment_range('"age"', dialect, 0, 120)
     """
     if min_val is None and max_val is None:
-        raise ValueError("range rule requires at least one of params.min or params.max.")
+        raise RuleEvaluationError("range rule requires at least one of params.min or params.max.")
 
     placeholder = dialect.parameter_placeholder
     bind_params: tuple[Any, ...]
@@ -592,7 +593,7 @@ def _compile_check(
     if expression == "REGEX":
         pattern = rule.params.get("pattern")
         if not pattern:
-            raise ValueError("regex rule requires params.pattern.")
+            raise RuleEvaluationError("regex rule requires params.pattern.")
         expressions, binds = _fragment_regex(quoted_column, dialect, str(pattern))
 
         def decode_regex(values: Sequence[Any]) -> list[DQIssue]:

@@ -147,4 +147,11 @@ class ReadOnlyViolationError(DQTError):
     """
 
 
-__all__ = ["ReadOnlyViolationError"]
+__all__ = [
+    "CleansingError",
+    "ConfigurationError",
+    "ConnectionConfigError",
+    "DQTError",
+    "ReadOnlyViolationError",
+    "RuleEvaluationError",
+]

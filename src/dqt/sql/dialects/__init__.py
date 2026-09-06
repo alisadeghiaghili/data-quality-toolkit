@@ -28,6 +28,7 @@ Public surface::
 
 from __future__ import annotations
 
+from dqt.exceptions import ConnectionConfigError
 from dqt.sql.dialects.base import ColumnMetadata, Dialect, ReadOnlyEnforcement
 from dqt.sql.dialects.postgresql import POSTGRESQL
 from dqt.sql.dialects.sqlite import SQLITE
@@ -83,7 +84,7 @@ def get_dialect(dsn: str) -> Dialect:
         if normalised.startswith(prefixes):
             return dialect
     schemes = [prefix for prefixes, _ in _DSN_PREFIXES for prefix in prefixes]
-    raise ValueError(
+    raise ConnectionConfigError(
         f"Cannot detect a supported dialect from DSN: {dsn!r}. "
         f"Supported schemes: {', '.join(schemes)}."
     )
@@ -111,7 +112,7 @@ def get_dialect_by_name(name: str) -> Dialect:
     try:
         return _DIALECTS_BY_NAME[name]
     except KeyError as exc:
-        raise ValueError(
+        raise ConnectionConfigError(
             f"Unsupported dialect name: {name!r}. Supported: {', '.join(SUPPORTED_DIALECT_NAMES)}."
         ) from exc
 

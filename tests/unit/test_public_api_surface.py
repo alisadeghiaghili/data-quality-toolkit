@@ -74,7 +74,16 @@ TOP_LEVEL_API = {
     "classify_value",
     "normalize_persian_text",
     # Failure and CI gating
+    # Added 2026-09-07 by DQT-09. Additive: every one of these also inherits
+    # the built-in it replaced, so nothing that caught ValueError stops
+    # working, and DQTError gives a caller the question they could not ask
+    # before -- "did DQT fail, or did Python?"
+    "CleansingError",
+    "ConfigurationError",
+    "ConnectionConfigError",
+    "DQTError",
     "ReadOnlyViolationError",
+    "RuleEvaluationError",
     "ExitCode",
     "FAIL_ON_CHOICES",
     "decide_exit_code",
@@ -96,7 +105,14 @@ SUBMODULE_API = {
     },
     "dqt.bridges": {"ColumnMissingness", "MissingnessBridge", "MissingnessReport"},
     "dqt.common.storage": {"RunStore"},
-    "dqt.exceptions": {"ReadOnlyViolationError"},
+    "dqt.exceptions": {
+        "CleansingError",
+        "ConfigurationError",
+        "ConnectionConfigError",
+        "DQTError",
+        "ReadOnlyViolationError",
+        "RuleEvaluationError",
+    },
     "dqt.exit_codes": {"ExitCode", "FAIL_ON_CHOICES", "decide_exit_code"},
 }
 

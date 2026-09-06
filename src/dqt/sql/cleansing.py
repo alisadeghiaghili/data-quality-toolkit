@@ -105,7 +105,7 @@ from dqt.common.models import (
     CleansingResult,
     ConnectionConfig,
 )
-from dqt.exceptions import ReadOnlyViolationError
+from dqt.exceptions import CleansingError, ReadOnlyViolationError
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql._identifiers import qualified_identifier, quote_identifier
 from dqt.sql.dialects.base import Dialect
@@ -1053,9 +1053,9 @@ def cleanse_apply(
     """
     plan = store.load_cleansing_plan(plan_id)
     if plan is None:
-        raise ValueError(f"No cleansing plan with id {plan_id!r}.")
+        raise CleansingError(f"No cleansing plan with id {plan_id!r}.")
     if plan.applied_at is not None:
-        raise ValueError(
+        raise CleansingError(
             f"Plan {plan_id!r} was already applied at {plan.applied_at.isoformat()}. "
             "A plan is a one-shot authorisation: re-running it would write a second "
             "log for the same intent, and the two would disagree about the original "
@@ -1082,7 +1082,7 @@ def cleanse_apply(
             _resolve_identities(connection_config, plan.configs, dialect),
         )
         if _fingerprint(current) != plan.fingerprint:
-            raise ValueError(
+            raise CleansingError(
                 f"The data changed since plan {plan_id!r} was computed. Applying it "
                 "would record before-values that no longer describe what is there, so "
                 "the log would lie and a revert built on it would corrupt rather than "
@@ -1203,9 +1203,9 @@ def revert(
     """
     plan = store.load_cleansing_plan(plan_id)
     if plan is None:
-        raise ValueError(f"No cleansing plan with id {plan_id!r}.")
+        raise CleansingError(f"No cleansing plan with id {plan_id!r}.")
     if plan.applied_at is None:
-        raise ValueError(f"Plan {plan_id!r} has not been applied, so there is nothing to undo.")
+        raise CleansingError(f"Plan {plan_id!r} has not been applied, so there is nothing to undo.")
     if connection_config.read_only:
         raise ReadOnlyViolationError(
             f"Connection {connection_config.id!r} has read_only=True; revert writes."

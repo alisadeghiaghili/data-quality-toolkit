@@ -114,8 +114,23 @@ class TestTheRaisesActuallyUseThem:
         with pytest.raises(ConnectionConfigError):
             get_dialect("mysql://user:pw@host/db")
 
-    def test_a_malformed_rule_raises_a_rule_evaluation_error(self) -> None:
-        """A regex rule with no pattern cannot be compiled into SQL."""
+    def test_a_malformed_rule_becomes_an_error_issue_not_a_silent_pass(self) -> None:
+        """A regex rule with no pattern cannot be compiled into SQL.
+
+        It does **not** propagate, and that is deliberate rather than a gap:
+        `apply_rules` catches a failed compilation per target and records it
+        as an error-severity issue, so one malformed rule cannot abort a run
+        across twenty tables. `RuleEvaluationError` types that internal
+        failure and its message reaches the issue.
+
+        The assertion this test originally made -- that the error reaches
+        the caller as an exception -- was simply wrong about the code, and
+        asserting it would have forced a worse design to satisfy the test.
+        What matters to a user is the property below: a rule that could not
+        run is reported as a problem rather than counted as a pass, which is
+        the same false-clean-bill-of-health failure `DQT-04` and `GATE-02`
+        both exist to prevent.
+        """
         from dqt.common.models import ConnectionConfig, RuleConfig, RuleScope
         from dqt.sql.rules import apply_rules
         from dqt.sql.schema_discovery import DiscoveredColumn, DiscoveredTable
@@ -143,13 +158,29 @@ class TestTheRaisesActuallyUseThem:
             ],
         )
 
-        with pytest.raises(RuleEvaluationError):
-            apply_rules(
-                "run-1",
-                ConnectionConfig(id="c", dsn="sqlite:///:memory:"),
-                [rule],
-                [table],
-            )
+        issues, _ = apply_rules(
+            "run-1",
+            ConnectionConfig(id="c", dsn="sqlite:///:memory:"),
+            [rule],
+            [table],
+        )
+
+        assert [issue.severity for issue in issues] == ["error"]
+        assert "regex rule requires params.pattern" in issues[0].message
+
+    def test_a_dialect_that_cannot_express_a_rule_raises(self) -> None:
+        """SQL Server has no regular-expression operator, and says so.
+
+        This is the one rule failure that does reach a caller directly, and
+        the module's own docstring named `DQT-09` as the task that should
+        re-home it off ``ValueError``. Refusing rather than mapping `regex`
+        onto ``LIKE`` is the point: a wildcard matcher would answer a
+        different question while looking like it answered this one.
+        """
+        from dqt.sql.dialects import get_dialect_by_name
+
+        with pytest.raises(RuleEvaluationError, match="no regular-expression"):
+            get_dialect_by_name("sqlserver").regex_not_matching_predicate('"email"', "^a")
 
     def test_an_unknown_cleansing_plan_raises_a_cleansing_error(self) -> None:
         """The plan lifecycle is where a caller most needs to branch.

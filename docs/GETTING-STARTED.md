@@ -370,6 +370,23 @@ permanently. Use the three-step cycle.
 **A `RuntimeWarning` about read-only being advisory on SQL Server** — that is
 DQT telling you the truth from §1, not a bug. Use a read-only login.
 
+**Telling a DQT failure from a bug in your script** — every error DQT raises
+for a condition of its own descends from `DQTError`:
+
+```python
+from dqt import DQTError, ConfigurationError, ReadOnlyViolationError
+
+try:
+    pipeline.run()
+except ConfigurationError:
+    ...   # the run never happened; fix the config
+except DQTError:
+    ...   # DQT failed; alert
+```
+
+Each type also inherits the built-in it replaced, so `except ValueError`
+around older code keeps working.
+
 **`import dqt` picks up the wrong copy** — if you have DQT checked out in more
 than one place, an old editable install can shadow the one you are working in.
 Check with:
