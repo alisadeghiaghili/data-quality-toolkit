@@ -6,9 +6,17 @@
 
 ## 0. The honest answer first: no such roadmap existed
 
-The `aghili-engineering-standards` skill is installed now — it was not on
-2026-09-04, which is why `ROADMAP-DERIVED.md` had to be reconstructed by
-grepping this repo. `ROADMAP.md` has now been read directly.
+The engineering-standards skill is installed now — it was not when
+`ROADMAP-DERIVED.md` was written, which is why that file had to be
+reconstructed by grepping this repo. `ROADMAP.md` has now been read directly.
+
+**Two editions are installed and both were checked**, because reading only one
+would leave which-edition an open question behind every claim below:
+`aghili-engineering-standards` (`ROADMAP.md`, 77,710 bytes) and
+`consilient-engineering-standards` (85,747 bytes), the latter a rebrand and
+superset. **The DQT track is identical in both** — same eight task IDs, and
+`DQT-09`'s body diffs clean between them. Every statement here holds against
+the newer edition, which is the one to prefer.
 
 **It contains no task for any floor item.** The DQT track is `DQT-01` … `DQT-06`,
 `DQT-08`, `DQT-09` (there is no `DQT-07`), and every one is about correctness or
