@@ -25,14 +25,19 @@ a third implementation rather than a configuration of an existing one:
    spelling of one — none. See
    :meth:`SqlServerDialect.regex_not_matching_predicate`.
 
-Unexercised against a real server. No SQL Server instance and no ``pyodbc``
-installation exist in this repository's CI or development environment.
-Everything here that constructs SQL or makes a decision is unit-tested as a
-pure function against hand-written expected strings; everything that requires
-a live connection — :meth:`SqlServerDialect.connect` and
-:meth:`SqlServerDialect.fetch_column_metadata` — has never been run against
-SQL Server. That gap is stated here, in the module that carries it, and not
-only in a pull-request description that a future reader will not have.
+Exercised against a real server. `GATE-02` added a live SQL Server 2022
+service to CI, with the ODBC driver and the ``sqlserver`` extra installed, and
+runs ``tests/integration/test_sqlserver.py`` plus the four-hash read-only
+proof against it on every push. So :meth:`SqlServerDialect.connect` and
+:meth:`SqlServerDialect.fetch_column_metadata` are covered by a live
+connection, not only by unit tests over hand-written expected strings.
+
+What that proof establishes is narrower than "SQL Server is safe", and the
+distinction is the point of this module. The four-hash test asserts that a
+write **does land** through an advisory read-only connection here — it
+documents the hole rather than closing it. Read
+:attr:`~dqt.sql.dialects.base.ReadOnlyEnforcement.ADVISORY` and connect with
+a read-only login.
 """
 
 from __future__ import annotations
