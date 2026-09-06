@@ -62,7 +62,11 @@ computed with SQL, against the live database, without extracting the data.
 ## What it does
 
 - **Schema discovery** — enumerate schemas, tables, and columns.
-- **Profiling** — row counts, null counts, completeness scores per column.
+- **Profiling** — row counts, and per column: null count, minimum, maximum,
+  mean and distinct count, with completeness scored from them. All of it in
+  **one aggregate query per table**, whatever the column count. `MIN`/`MAX`/
+  `AVG` are asked for only where the column's type supports them, so a text
+  column reports no mean rather than a misleading zero.
 - **Diagnostics** — turn statistics into structured, evidence-carrying issues.
   Currently `completeness` only.
 - **Rules** — declarative `NOT NULL`, `UNIQUE`, `RANGE`, and `REGEX` checks from

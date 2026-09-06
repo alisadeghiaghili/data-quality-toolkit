@@ -28,6 +28,23 @@ max", and "distinct" do not appear in it in a DQT context at all.
 So this document is a **new plan**, not the recovery of a lost one. Nothing was
 dropped; the floor was never scheduled.
 
+### 0.0 Owner decisions, 2026-09-07
+
+Two were taken after this document was first written, and both are recorded
+here rather than left implicit:
+
+1. **DQT is the primary work.** `ROADMAP.md` §10 scopes DQT as risk reduction
+   and names `missingly` the flagship to protect if attention must be rationed
+   (§0.1 below). The owner has reversed that: the floor is the priority, and
+   the ecosystem's flagship path is not what this repository is optimising for.
+   §0.1 is kept because the recorded strategy still says otherwise, and a
+   reversal is worth being able to find.
+2. **`F12` (PDF) moves to the end.** It was already the item this document
+   argued hardest against on its merits -- it buys a format at the cost of a
+   runtime dependency, against a lean footprint the competitor analysis names
+   as one of only three real differentiators. It is now explicitly last, and
+   may simply not happen.
+
 ### 0.1 And the roadmap deliberately deprioritizes DQT
 
 This has to be stated before any sequencing, because it outranks everything
@@ -115,15 +132,17 @@ honesty gate. Version numbers assume nothing else lands between.
 
 ### Wave 1 — cheap, unblocking, and visible to a DBA tomorrow
 
-| | Item | Size | Why first |
-|---|---|---|---|
-| 1 | **`DQT-09`** exception hierarchy | S | The only open authoritative task. Closes the roadmap's own DQT track. |
-| 2 | **`F10`** call `classify_column` during a run | S | The code exists, is locale-aware, and is tested. Nothing calls it. This is wiring, not building — the cheapest `PARTIAL → MET` on the board. |
-| 3 | **`F14`** `dqt check` and `dqt serve` | M | `serve` is what makes the dashboard startable without Python — and it is the only way the loopback-bind rule stops being a docstring nobody reads and becomes a refusal. |
-| 4 | **`F1`** column statistics | M | The keystone. Must stay **one aggregate query per table** — `min`/`max`/`avg` are free to add to the existing single pass; `COUNT(DISTINCT)` is not, so it goes behind the approximate-distinct path already built for `UNIQUE`. |
+| | Item | Size | Why first | Status |
+|---|---|---|---|---|
+| 1 | **`F1`** column statistics | M | The keystone. Highest value on its own and the input three other rows need. | **Done 2026-09-07.** One query per table, type-gated by the dialect, distinct declinable. Surfaced in metric metadata and the HTML report, so it is not a statistic that stops at the profiler. |
+| 2 | **`F10`** call `classify_column` during a run | S | The code exists, is locale-aware, and is tested. Nothing calls it. Wiring, not building — the cheapest `PARTIAL → MET` on the board. | |
+| 3 | **`F14`** `dqt check` and `dqt serve` | M | `serve` is what makes the dashboard startable without Python — and the only way the loopback-bind rule stops being a docstring nobody reads and becomes a refusal. | |
+| 4 | **`DQT-09`** exception hierarchy | S | The only open authoritative task. Not a feature, so it follows the ones that are. | |
 
 Target: **`1.2.0`**. After this wave: **8 met**, and the DBA-facing story is
 whole — real profiling numbers, semantic types, and a command to start the UI.
+
+`F1` has landed, so the score is already **6 of 15**.
 
 ### Wave 2 — the analysis depth a DBA judges the tool by
 
@@ -147,10 +166,12 @@ Target: **`1.5.0`**, then **`2.0.0`** for the migration-gated half.
 
 ### Wave 4 — the last two, both carrying a trap
 
+Ordered by the owner's decision of 2026-09-07: `F12` is last, and optional.
+
 | | Item | Size | The trap |
 |---|---|---|---|
-| 11 | **`F12`** PDF export | M | **Adds a runtime dependency.** Every PDF library is heavy, and DQT's lean footprint is one of only three differentiators the competitor analysis credits it with. This belongs behind an extra, or not at all — "no PDF" may be the better answer than a dependency that costs more than the feature. |
-| 12 | **`F11`** internal missingness patterns | M | **Boundary risk.** Co-occurrence patterns are what `missingly` does. `AGENTS.md` forbids re-implementing its algorithms, and the floor's wording ("null stats and patterns") does not say how deep. Scope this against `missingly` before writing a line, or it becomes the duplication the bridge exists to prevent. |
+| 12 | **`F12`** PDF export — **last, and may not happen** | M | **Adds a runtime dependency.** Every PDF library is heavy, and DQT's lean footprint is one of only three differentiators the competitor analysis credits it with. This belongs behind an extra, or not at all — "no PDF" may be the better answer than a dependency that costs more than the feature. |
+| 11 | **`F11`** internal missingness patterns | M | **Boundary risk.** Co-occurrence patterns are what `missingly` does. `AGENTS.md` forbids re-implementing its algorithms, and the floor's wording ("null stats and patterns") does not say how deep. Scope this against `missingly` before writing a line, or it becomes the duplication the bridge exists to prevent. |
 
 ---
 

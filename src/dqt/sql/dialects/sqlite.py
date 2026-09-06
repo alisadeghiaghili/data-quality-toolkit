@@ -31,6 +31,7 @@ from dqt.sql.dialects.base import (
     ColumnMetadata,
     ReadOnlyEnforcement,
     ansi_select_aggregates_sql,
+    normalized_type_name,
     quote_with_doubled_delimiter,
     validate_row_limit,
 )
@@ -146,6 +147,40 @@ def sqlite_regexp(pattern: str, value: object) -> bool | None:
         return None
     compiled = compile_regex_pattern(pattern)
     return compiled.search(str(value)) is not None
+
+
+#: Types this dialect can average. SQLite's declared types are freeform -- it stores affinities, not
+#: constraints -- so this covers the spellings ``CREATE TABLE`` statements
+#: actually use rather than a closed type system.
+_NUMERIC_TYPES: frozenset[str] = frozenset(
+    {
+        "int",
+        "integer",
+        "tinyint",
+        "smallint",
+        "mediumint",
+        "bigint",
+        "int2",
+        "int8",
+        "unsigned big int",
+        "real",
+        "double",
+        "double precision",
+        "float",
+        "numeric",
+        "decimal",
+        "boolean",
+    }
+)
+
+#: Types this dialect cannot order. ``TEXT`` is deliberately absent: it is SQLite's ordinary string
+#: type and ``MIN`` over it is both legal and useful. That is the opposite of
+#: what the same four letters mean on SQL Server.
+_UNORDERED_TYPES: frozenset[str] = frozenset(
+    {
+        "blob",
+    }
+)
 
 
 class SqliteDialect:
@@ -448,6 +483,34 @@ class SqliteDialect:
             f"{quoted_column} IS NOT NULL AND {quoted_column} NOT REGEXP "
             f"{self.parameter_placeholder}"
         )
+
+    def supports_min_max(self, data_type: str) -> bool:
+        """Whether ``MIN``/``MAX`` are meaningful over this type.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``True`` unless the type is one this engine cannot order.
+
+        Example:
+            assert dialect.supports_min_max("integer") is True
+        """
+        return normalized_type_name(data_type) not in _UNORDERED_TYPES
+
+    def supports_mean(self, data_type: str) -> bool:
+        """Whether ``AVG`` is meaningful over this type.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``True`` only for genuinely averageable types.
+
+        Example:
+            assert dialect.supports_mean("varchar") is False
+        """
+        return normalized_type_name(data_type) in _NUMERIC_TYPES
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Report that SQLite has no approximate distinct count.

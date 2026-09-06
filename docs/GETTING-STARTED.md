@@ -124,8 +124,16 @@ dqt profile --dsn "sqlite:///C:/data/mydb.db"
 
 ## 4. What you get back
 
-A table of metrics and issues in the terminal, plus a **self-contained HTML
-report** — one file, no external assets, safe to email:
+Per column: **null count, distinct count, minimum, maximum and mean**, plus a
+completeness score. A cell reading `n/a` means the statistic was not produced
+rather than that it is zero — a text column has no mean, and saying `0` would
+be a number DQT never computed.
+
+All of it costs **one query per table**, whatever the column count, so a wide
+table is not a slow one.
+
+You get a table of metrics and issues in the terminal, plus a **self-contained
+HTML report** — one file, no external assets, safe to email:
 
 ```
 Report: reports/dqt_report_run-4681e24c.html

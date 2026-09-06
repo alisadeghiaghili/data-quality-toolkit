@@ -51,6 +51,7 @@ from dqt.sql.dialects.base import (
     ColumnMetadata,
     ReadOnlyEnforcement,
     ansi_select_aggregates_sql,
+    normalized_type_name,
     validate_row_limit,
 )
 
@@ -219,6 +220,44 @@ def read_only_connect_attributes(read_only: bool) -> dict[int, int]:
     if not read_only:
         return {}
     return {ODBC_SQL_ATTR_ACCESS_MODE: ODBC_SQL_MODE_READ_ONLY}
+
+
+#: Types this dialect can average. ``integer`` is accepted as a synonym for ``int``;
+#: ``INFORMATION_SCHEMA`` reports ``int``, but a hand-written config may not.
+_NUMERIC_TYPES: frozenset[str] = frozenset(
+    {
+        "tinyint",
+        "smallint",
+        "int",
+        "integer",
+        "bigint",
+        "decimal",
+        "numeric",
+        "float",
+        "real",
+        "money",
+        "smallmoney",
+    }
+)
+
+#: Types this dialect cannot order. ``text`` and ``ntext`` are the deprecated LOB types, and ``MIN``
+#: over either is an error -- which is why this question is asked of the
+#: dialect at all. Use ``varchar(max)`` instead; that one orders fine.
+_UNORDERED_TYPES: frozenset[str] = frozenset(
+    {
+        "varbinary",
+        "binary",
+        "image",
+        "text",
+        "ntext",
+        "xml",
+        "geography",
+        "geometry",
+        "hierarchyid",
+        "sql_variant",
+        "blob",
+    }
+)
 
 
 class SqlServerDialect:
@@ -545,6 +584,34 @@ class SqlServerDialect:
             "question while looking like it answered this one. Use a 'range', "
             "'NOT NULL' or 'UNIQUE' rule here instead."
         )
+
+    def supports_min_max(self, data_type: str) -> bool:
+        """Whether ``MIN``/``MAX`` are meaningful over this type.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``True`` unless the type is one this engine cannot order.
+
+        Example:
+            assert dialect.supports_min_max("integer") is True
+        """
+        return normalized_type_name(data_type) not in _UNORDERED_TYPES
+
+    def supports_mean(self, data_type: str) -> bool:
+        """Whether ``AVG`` is meaningful over this type.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``True`` only for genuinely averageable types.
+
+        Example:
+            assert dialect.supports_mean("varchar") is False
+        """
+        return normalized_type_name(data_type) in _NUMERIC_TYPES
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Return SQL Server's built-in approximate distinct count.

@@ -17,6 +17,7 @@ import html
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from dqt._html import Raw, document, element, table
 from dqt._theme import STYLESHEET
@@ -139,6 +140,32 @@ def _status_badge(status: str) -> str:
         assert "failed" in _status_badge("failed")
     """
     return f'<span class="badge {_STATUS_CLASSES.get(status, "err")}">{html.escape(status)}</span>'
+
+
+def _statistic(metadata: dict[str, Any], key: str) -> object:
+    """Render one column statistic, or ``n/a`` when it was not produced.
+
+    A missing statistic is not a zero. A text column has no mean and a
+    declined distinct count has no value, and rendering either as ``0``
+    would state a number the profiler deliberately did not compute --
+    indistinguishable, to a reader, from a column that genuinely averages
+    zero or holds no distinct values.
+
+    ``n/a`` is reused rather than invented here: the null-count cell already
+    uses it for the same "not known" meaning.
+
+    Args:
+        metadata: The completeness metric's metadata mapping.
+        key: Which statistic to read.
+
+    Returns:
+        The value, or the string ``"n/a"``.
+
+    Example:
+        assert _statistic({}, "mean_value") == "n/a"
+    """
+    value = metadata.get(key)
+    return "n/a" if value is None else value
 
 
 def _severity_badge(severity: str) -> Raw:
@@ -475,12 +502,17 @@ def _render(result: PipelineResult) -> str:
             )
             null_count = int(metric.value) if metric and metric.value is not None else "n/a"
             score = metric.score if metric and metric.score is not None else 1.0
+            statistics = metric.metadata if metric and metric.metadata else {}
             column_rows.append(
                 [
                     column.schema_name,
                     column.table_name,
                     column.column_name,
                     null_count,
+                    _statistic(statistics, "distinct_count"),
+                    _statistic(statistics, "min_value"),
+                    _statistic(statistics, "max_value"),
+                    _statistic(statistics, "mean_value"),
                     _score_badge(score),
                 ]
             )
@@ -522,7 +554,20 @@ def _render(result: PipelineResult) -> str:
         element("h2", "Table Summary"),
         table(["Schema", "Table", "Rows", "Avg Completeness", "Issues"], table_rows),
         element("h2", "Column Metrics"),
-        table(["Schema", "Table", "Column", "Null Count", "Completeness"], column_rows),
+        table(
+            [
+                "Schema",
+                "Table",
+                "Column",
+                "Null Count",
+                "Distinct",
+                "Min",
+                "Max",
+                "Mean",
+                "Completeness",
+            ],
+            column_rows,
+        ),
         issue_section,
         Raw(_external_section(result)),
     )

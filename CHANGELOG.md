@@ -13,6 +13,33 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Added
+
+- **Column statistics: minimum, maximum, mean and distinct count (`F1`).**
+  Profiling produced a NULL count and a row count; it now produces five
+  statistics per column, and still in **one aggregate query per table**
+  whatever the column count. Two tests count the statements SQLite actually
+  executes, because a per-column implementation returns identical numbers and
+  only the clock would tell.
+
+  `MIN`/`MAX`/`AVG` are asked for only where the column's type supports them,
+  and the **dialect** decides that: `TEXT` is SQLite's ordinary string type and
+  orders fine, while on SQL Server `text` is the deprecated LOB type and `MIN`
+  over it errors. Without the gate, `AVG` over text raises on PostgreSQL and
+  silently returns `0.0` on SQLite -- a wrong mean being worse than an absent
+  one, since a reader cannot tell it from a column that genuinely averages
+  zero.
+
+  Distinct counting is on by default and can be declined through the new
+  `ProfilingConfig`, because it is the one statistic that can cost real memory
+  server-side. Where a dialect offers an estimator (`APPROX_COUNT_DISTINCT` on
+  SQL Server) it can be requested; the profile records whether the number is an
+  estimate, set from what was built rather than what was asked for.
+
+  The statistics reach the metric metadata and the HTML report, not only the
+  profiler -- a statistic that stops at the profiler is the failure `F10` is
+  currently recorded as.
+
 ### Changed
 
 - **The architecture and performance rules now live in `AGENTS.md` (`NEW-AA`).**
