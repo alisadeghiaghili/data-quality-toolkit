@@ -31,12 +31,21 @@ class TestThereIsOnlyOneCoverageFloor:
 
         The failure this prevents is not a low gate -- it is a gate that
         disagrees with the file everyone reads to find out what the gate is.
-        """
-        workflow = _WORKFLOW.read_text(encoding="utf-8")
 
-        assert "--cov-fail-under" not in workflow, (
+        Comment lines are stripped before the check. The workflow explains in
+        a comment why the flag is absent, and a test that could not tell a
+        comment from a command would forbid the explanation along with the
+        thing it explains.
+        """
+        commands = [
+            line
+            for line in _WORKFLOW.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith("#") and "--cov-fail-under" in line
+        ]
+
+        assert commands == [], (
             "CI passes --cov-fail-under, which overrides pyproject.toml. "
-            "Set the floor in pyproject.toml alone."
+            f"Set the floor in pyproject.toml alone. Found: {commands}"
         )
 
     def test_the_configured_floor_is_the_one_that_was_agreed(self) -> None:
