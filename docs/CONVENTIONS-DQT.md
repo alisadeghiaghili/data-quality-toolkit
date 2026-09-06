@@ -19,7 +19,7 @@
 > assuming it was decided.
 
 **Package:** `dqt` · **Repository:** `alisadeghiaghili/data-quality-toolkit` ·
-**Version:** 0.1.0 (pre-alpha) · **Statuses verified:** 2026-08-17 at `4629925`
+**Version:** 1.1.0 · **Statuses verified:** 2026-08-17 at `4629925`
 
 Sibling packages:
 
