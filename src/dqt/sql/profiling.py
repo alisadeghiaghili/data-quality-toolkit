@@ -281,6 +281,14 @@ class SqlProfiler:
                         metadata={
                             "null_count": column.null_count,
                             "row_count": column.row_count,
+                            # None is carried through rather than defaulted.
+                            # A text column has no mean, and a zero here
+                            # could not be told from one that averages zero.
+                            "min_value": column.min_value,
+                            "max_value": column.max_value,
+                            "mean_value": column.mean_value,
+                            "distinct_count": column.distinct_count,
+                            "distinct_is_approximate": column.distinct_is_approximate,
                         },
                     )
                 )

@@ -27,7 +27,7 @@ Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 
 | # | Floor requirement | Aug 17 | **Now** | Where DQT actually is, at `1.1.0` |
 |---|---|---|---|---|
-| F1 | **Profiling** — column stats (min, max, mean, distinct, null count/ratio) | PARTIAL | **PARTIAL** | Unchanged. `ColumnProfile` carries `null_count` and `row_count` and nothing else — no min, max, mean, distinct or patterns. The single largest gap against what a DBA expects from the word "profiling". |
+| F1 | **Profiling** — column stats (min, max, mean, distinct, null count/ratio) | PARTIAL | **MET** | All five, in **one aggregate query per table** whatever the column count — a test counts the statements SQLite actually executes, because a per-column implementation returns identical numbers. `MIN`/`MAX`/`AVG` are gated on the column's type by the **dialect**, since `TEXT` orders fine on SQLite and errors on SQL Server. Distinct counting is on by default and can be declined; an estimate is flagged as one. Patterns are still absent — see F11. |
 | F2 | **Profiling** — table stats (row counts, orphan FK rows, referential integrity) | NOT MET | **NOT MET** | Row counts, plus sampling metadata when a sample was taken. Still no orphan-FK detection and no FK discovery. |
 | F3 | **Diagnostics** — all six canonical dimensions with structured issue objects | NOT MET | **NOT MET** | `completeness` only, one of six. `DQDiagnostics` says so in its own docstring. Issue objects remain well-structured. |
 | F4 | **Rules** — column rules (range, regex, type, uniqueness, NOT NULL) | PARTIAL | **MET** | Five expressions, all working and tested: `NOT NULL`, `UNIQUE`, `RANGE`, `REGEX`, `REFERENCE`. `DQT-04` fixed `regex` on SQLite. Rules compile to grouped aggregate SQL, one scan per table. **`REGEX` is refused on SQL Server** — T-SQL has no such operator, and refusing is deliberate rather than reporting zero violations. |
@@ -43,7 +43,8 @@ Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 | F14 | **CLI** — profile, check rules, generate reports | PARTIAL | **PARTIAL** | `dqt profile` only, and it does run rules when a config supplies `rule_files`. There is still no `check` subcommand and **no `serve`**, so starting the dashboard needs a `uvicorn` command rather than a DQT one. |
 | F15 | **Read-only query/API surface** for downstream consumers | PARTIAL | **MET** | Six JSON endpoints and five server-rendered HTML screens, tested, and frozen under the `1.0` API contract. No JS and no build step. **No authentication** — by design, and the reason the documented way to run it binds loopback. |
 
-**Score: 5 of 15 met, 7 partial, 3 not met** — up from 0 of 15 in August.
+**Score: 6 of 15 met, 6 partial, 3 not met** — up from 0 of 15 in August.
+F1 closed on 2026-09-07.
 
 A sequenced plan for the remaining ten, with its dependencies and the one
 decision that blocks a full score, is in
@@ -64,6 +65,10 @@ Two rows deserve reading twice:
   invokes it during a run. That is precisely the failure this document's own
   release rule was written to catch, and it is caught here rather than scored
   as `MET`.
+* **F1 was the keystone, and closing it changes what F3, F5 and F7 cost.**
+  A distinct count is what a uniqueness *diagnostic* needs; bounds are what a
+  validity diagnostic needs. Those rows are now "expose what exists" rather
+  than "build it".
 * **F8 improved by accident of the UI, not by design.** Rule history charts
   because someone built a rules screen, not because a monitoring facet was
   built. `monitor()` is still the identity function.
