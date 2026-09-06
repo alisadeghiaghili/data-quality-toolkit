@@ -40,11 +40,11 @@ Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 | F11 | **Missingness (internal)** — null stats and patterns | PARTIAL | **PARTIAL** | Counts and ratios internally. Co-occurrence patterns exist only through the optional `missingly` bridge, which is external by design. |
 | F12 | **Reports** — HTML/PDF, per-table/column metrics, issues, trends | PARTIAL | **PARTIAL** | Self-contained HTML — verified to contain zero external references, so it survives being emailed. Bilingual EN/FA with RTL, an embedded font, and WCAG AA contrast computed in CI. A trend chart exists on the rule-history screen. **No PDF.** |
 | F13 | **Code quality** — English docstrings, unit + integration tests, CI (pytest/mypy/ruff) | PARTIAL | **MET** | 1079 tests passing, coverage 95.51% against a 95 floor, `mypy --strict` clean, `ruff` clean, `doc_audit` and `arch_audit` at zero. Python 3.11 / 3.12 / 3.14, and **all three databases exercised against live servers in CI** — including SQL Server, which is what closed the biggest hole in this row. |
-| F14 | **CLI** — profile, check rules, generate reports | PARTIAL | **PARTIAL** | `dqt profile` only, and it does run rules when a config supplies `rule_files`. There is still no `check` subcommand and **no `serve`**, so starting the dashboard needs a `uvicorn` command rather than a DQT one. |
+| F14 | **CLI** — profile, check rules, generate reports | PARTIAL | **MET** | `dqt profile`, `dqt check` (rules only, for CI — no column statistics computed) and `dqt serve`. `serve` is what makes the dashboard startable without Python, and it is where the loopback rule stopped being a docstring: it binds `127.0.0.1` and **refuses** a reachable address unless told something authenticates in front. |
 | F15 | **Read-only query/API surface** for downstream consumers | PARTIAL | **MET** | Six JSON endpoints and five server-rendered HTML screens, tested, and frozen under the `1.0` API contract. No JS and no build step. **No authentication** — by design, and the reason the documented way to run it binds loopback. |
 
-**Score: 7 of 15 met, 5 partial, 3 not met** — up from 0 of 15 in August.
-F1 and F10 closed on 2026-09-07.
+**Score: 8 of 15 met, 4 partial, 3 not met** — up from 0 of 15 in August.
+F1, F10 and F14 closed on 2026-09-07, along with the roadmap's own `DQT-09`.
 
 A sequenced plan for the remaining ten, with its dependencies and the one
 decision that blocks a full score, is in

@@ -36,6 +36,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -51,9 +53,13 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
+from dqt.common.config_loader import load_rules
 from dqt.common.models import ConnectionConfig, DQPipelineConfig, PipelineResult
+from dqt.exceptions import ConfigurationError
 from dqt.exit_codes import FAIL_ON_CHOICES, ExitCode, decide_exit_code
 from dqt.sql.pipeline import DQTPipeline
+from dqt.sql.rules import apply_rules
+from dqt.sql.schema_discovery import discover_schema
 
 _err = Console(stderr=True)
 _out = Console()
@@ -62,6 +68,17 @@ _out = Console()
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
+
+
+#: Shared by ``profile`` and ``check`` so the contract is described once.
+#: `tests/unit/test_documented_surface.py` requires a choice-bounded flag to
+#: name its choices in its own help, and two copies of that prose would drift.
+_FAIL_ON_HELP = (
+    "Severity at which findings make the process exit non-zero. "
+    "'error' (default) fails on error and critical; 'warning' also "
+    "fails on warnings; 'none' never gates on findings. A broken run "
+    "still exits non-zero whatever this is set to."
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -125,14 +142,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # scripts pass it and its intent is now simply unconditional.
     profile.add_argument(
         "--fail-on",
-        choices=FAIL_ON_CHOICES,
+        choices=list(FAIL_ON_CHOICES),
         default="error",
-        help=(
-            "Severity at which findings make the process exit non-zero. "
-            "'error' (default) fails on error and critical; 'warning' also "
-            "fails on warnings; 'none' never gates on findings. A broken run "
-            "still exits non-zero whatever this is set to."
-        ),
+        help=_FAIL_ON_HELP,
     )
     profile.add_argument(
         "--dry-run",
@@ -143,18 +155,56 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    serve = sub.add_parser("serve", help="Serve the read-only dashboard over HTTP.")
-    serve.add_argument("--store", default="dqt_runs.db")
-    serve.add_argument("--host", default=LOOPBACK_HOST)
-    serve.add_argument("--port", type=int, default=8000)
-    serve.add_argument("--allow-unauthenticated-remote-access", action="store_true")
+    # -- serve subcommand
+    serve = sub.add_parser(
+        "serve",
+        help="Serve the read-only dashboard over HTTP.",
+    )
+    serve.add_argument(
+        "--store",
+        default="dqt_runs.db",
+        help="Path to the RunStore SQLite file the dashboard reads.",
+    )
+    serve.add_argument(
+        "--host",
+        default=LOOPBACK_HOST,
+        help=(
+            "Address to bind. Defaults to 127.0.0.1, which is reachable only "
+            "from this machine. Any other address is refused unless "
+            "--allow-unauthenticated-remote-access is also given."
+        ),
+    )
+    serve.add_argument("--port", type=int, default=8000, help="Port to bind (default 8000).")
+    serve.add_argument(
+        "--allow-unauthenticated-remote-access",
+        action="store_true",
+        help=(
+            "Permit binding an address other machines can reach. The dashboard "
+            "has no login, so only use this behind a reverse proxy or tunnel "
+            "that authenticates."
+        ),
+    )
 
-    check = sub.add_parser("check", help="Evaluate rules only, without profiling.")
-    check.add_argument("--dsn", required=True)
-    check.add_argument("--rules", action="append", default=None)
-    check.add_argument("--config", default=None)
-    check.add_argument("--connection-id", default="cli")
-    check.add_argument("--fail-on", choices=list(FAIL_ON_CHOICES), default="error")
+    # -- check subcommand
+    check = sub.add_parser(
+        "check",
+        help="Evaluate rules only, without profiling. A CI gate.",
+    )
+    check.add_argument("--dsn", required=True, help="SQLAlchemy-style DSN.")
+    check.add_argument(
+        "--rules",
+        action="append",
+        default=None,
+        help="Path to a YAML or JSON rule file. Repeatable.",
+    )
+    check.add_argument("--config", default=None, help="Config file supplying rule_files.")
+    check.add_argument("--connection-id", default="cli", help="Logical connection identifier.")
+    check.add_argument(
+        "--fail-on",
+        choices=list(FAIL_ON_CHOICES),
+        default="error",
+        help=_FAIL_ON_HELP,
+    )
 
     return parser
 
@@ -481,12 +531,30 @@ def _cmd_profile(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-#: The address the dashboard binds unless told otherwise.
+#: The address the dashboard binds unless told otherwise. Reachable only from
+#: the machine running it.
 LOOPBACK_HOST = "127.0.0.1"
+
+#: Addresses that reach no further than this machine. ``localhost`` is
+#: included by name because that is what people type; the two IPs are its
+#: IPv4 and IPv6 forms.
+_LOOPBACK_ADDRESSES = frozenset({LOOPBACK_HOST, "localhost", "::1"})
 
 
 def resolve_bind_host(host: str, *, allow_remote: bool) -> str:
     """Return *host* if it is safe to bind, or refuse.
+
+    The dashboard has **no authentication**, and what it serves is not the
+    stored numbers so much as the shape of the database behind them: schema
+    names, table names, column names, and a ranked list of where the data is
+    weakest. That is reconnaissance, and binding it to a reachable address
+    publishes it to everyone who can open the port.
+
+    ``dqt.ui.app`` has always said so in its docstring, and `VIZ-0` tests
+    that it does. But a docstring is read by people editing DQT, not by the
+    person starting a server -- and until this command existed, DQT never
+    called ``uvicorn.run``, so there was no moment at which to refuse. This
+    is that moment.
 
     Args:
         host: The address the operator asked to bind.
@@ -495,14 +563,30 @@ def resolve_bind_host(host: str, *, allow_remote: bool) -> str:
     Returns:
         *host*, unchanged, when binding it is permitted.
 
+    Raises:
+        ConfigurationError: When *host* is reachable from other machines and
+            *allow_remote* is False.
+
     Example:
         assert resolve_bind_host("127.0.0.1", allow_remote=False) == "127.0.0.1"
     """
-    raise NotImplementedError
+    if allow_remote or host in _LOOPBACK_ADDRESSES:
+        return host
+
+    raise ConfigurationError(
+        f"Refusing to bind {host!r}: the dashboard has no authentication, and "
+        "that address is reachable from other machines. What it would publish "
+        "is your schema -- table names, column names, and a list of exactly "
+        "where the data is weakest -- to anyone who can open the port. "
+        "Bind 127.0.0.1 and reach it through an SSH tunnel, or put a reverse "
+        "proxy that authenticates in front of it. If something already "
+        "authenticates in front of DQT, pass "
+        "--allow-unauthenticated-remote-access to say so."
+    )
 
 
 def _run_server(host: str, port: int, store: str) -> None:
-    """Start the dashboard.
+    """Start the dashboard. Separated so the refusal can be tested without binding a port.
 
     Args:
         host: Already-validated bind address.
@@ -510,16 +594,32 @@ def _run_server(host: str, port: int, store: str) -> None:
         store: Path to the RunStore the dashboard reads.
 
     Returns:
-        None.
+        None. Blocks until the server stops.
 
     Example:
         _run_server("127.0.0.1", 8000, "dqt_runs.db")
     """
-    raise NotImplementedError
+    import os
+
+    os.environ["DQT_STORE_PATH"] = store
+    try:
+        import uvicorn
+    except ImportError as error:  # pragma: no cover - exercised by the message test
+        raise ConfigurationError(
+            "The dashboard needs the 'ui' extra, which is not installed. "
+            "Install it with: pip install 'dqt[ui]'"
+        ) from error
+
+    from dqt.ui.app import app
+
+    uvicorn.run(app, host=host, port=port)
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
     """Validate the bind address, then serve.
+
+    Validation happens **before** anything binds. A guard that fired after
+    the port was open would already have failed.
 
     Args:
         args: Parsed ``serve`` arguments.
@@ -530,22 +630,77 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     Example:
         code = _cmd_serve(args)
     """
-    raise NotImplementedError
+    host = resolve_bind_host(args.host, allow_remote=args.allow_unauthenticated_remote_access)
+    if host not in _LOOPBACK_ADDRESSES:
+        _err.print(
+            f"[yellow]Warning:[/yellow] serving on {host} with no authentication. "
+            "Anyone who can reach this port can read your schema."
+        )
+    _err.print(f"[bold]Dashboard:[/bold] http://{host}:{args.port}/ui  (store: {args.store})")
+    _run_server(host, args.port, args.store)
+    return int(ExitCode.SUCCESS)
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
     """Evaluate rules against the database, without profiling.
 
+    Rules need discovered tables, not profiles, so this is genuinely cheaper
+    than a profile run -- which is the only reason it is worth having as a
+    separate CI step.
+
     Args:
         args: Parsed ``check`` arguments.
 
     Returns:
-        The process exit code.
+        The process exit code, from the same contract ``profile`` uses.
+
+    Raises:
+        ConfigurationError: When no rules were supplied. A gate that checks
+            nothing must not report success.
 
     Example:
         code = _cmd_check(args)
     """
-    raise NotImplementedError
+    rule_paths = list(args.rules or [])
+    if args.config:
+        rule_paths.extend(_load_config_file(args.config).get("rule_files", []))
+
+    rules: list[Any] = []
+    for path in rule_paths:
+        rules.extend(load_rules(path))
+
+    if not rules:
+        raise ConfigurationError(
+            "No rules to check. `dqt check` gates a build on rules, so running "
+            "it with none would report a clean bill of health for a check that "
+            "never happened. Pass --rules PATH, or a --config naming rule_files."
+        )
+
+    connection_config = ConnectionConfig(id=args.connection_id, dsn=args.dsn)
+    tables = discover_schema(connection_config)
+    run_id = f"check-{uuid.uuid4().hex[:12]}"
+    issues, rule_runs = apply_rules(run_id, connection_config, rules, tables)
+
+    moment = datetime.now(UTC)
+    result = PipelineResult(
+        run_id=run_id,
+        connection_id=connection_config.id,
+        started_at=moment,
+        ended_at=moment,
+        status="success",
+        issues=issues,
+        rules_run=rule_runs,
+    )
+
+    _err.rule("[bold]Rule check[/bold]")
+    for rule_run in rule_runs:
+        _err.print(
+            f"  {rule_run.rule_name}: {rule_run.targets_checked} target(s), "
+            f"{rule_run.targets_failed} failed, {rule_run.targets_error} error(s)"
+        )
+    _print_issues_table(result)
+
+    return int(decide_exit_code(result, fail_on=args.fail_on))
 
 
 def main() -> None:
@@ -560,12 +715,23 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    handlers = {"profile": _cmd_profile, "serve": _cmd_serve, "check": _cmd_check}
+    handlers = {
+        "profile": _cmd_profile,
+        "serve": _cmd_serve,
+        "check": _cmd_check,
+    }
     handler = handlers.get(args.command)
     if handler is None:
         parser.print_help()
         sys.exit(1)
-    sys.exit(handler(args))
+
+    try:
+        sys.exit(handler(args))
+    except ConfigurationError as error:
+        # Exit 3, never 1. `NEW-V` was config errors exiting 1, which tells a
+        # CI job the data has problems when the run never happened.
+        _err.print(f"[red]Configuration error:[/red] {error}")
+        sys.exit(int(ExitCode.CONFIGURATION_ERROR))
 
 
 if __name__ == "__main__":

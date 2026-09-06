@@ -266,29 +266,34 @@ The web UI is **read-only and has no authentication.**
 
 ```bash
 pip install -e ".[ui]"
-python -m uvicorn dqt.ui.app:app --host 127.0.0.1 --port 8000
+dqt serve --store C:\dqt\dqt_runs.db
 ```
 
-Then open <http://127.0.0.1:8000/ui>.
+Then open <http://127.0.0.1:8000/ui>. Use `--port` for a different port.
 
-Set `DQT_STORE_PATH` if your store is not `dqt_runs.db` in the working
-directory:
+### DQT refuses to publish itself, and you should know why
+
+`dqt serve` binds `127.0.0.1` — reachable only from the machine it runs on —
+and **refuses any other address** unless you say explicitly that something
+authenticates in front of it:
+
+```
+$ dqt serve --host 0.0.0.0
+Configuration error: Refusing to bind '0.0.0.0': the dashboard has no
+authentication, and that address is reachable from other machines...
+```
+
+That is not caution for its own sake. What these pages return is schema names,
+table names, column names, and a ranked list of exactly where your data is
+weakest. Read-only does not mean harmless — that is a map of a production
+schema and its soft spots, served without a login to anyone who can open the
+port.
+
+If a reverse proxy or tunnel already authenticates in front of DQT, say so:
 
 ```bash
-set DQT_STORE_PATH=C:\dqt\dqt_runs.db
+dqt serve --host 0.0.0.0 --allow-unauthenticated-remote-access
 ```
-
-### Read this before making it reachable from other machines
-
-**Bind the loopback address, as above.** What these pages return is schema
-names, table names, column names, and a list of exactly where your data is
-weakest. Read-only does not mean harmless — that is a map of a production
-schema and its soft spots.
-
-Serving it on `0.0.0.0` publishes that to every network the host can reach,
-with no login in front of it. If people need to reach it from elsewhere, put
-it behind something that authenticates — a reverse proxy with access control,
-or an SSH tunnel — and make that a deliberate decision.
 
 ### What the dashboard cannot do
 
@@ -298,6 +303,22 @@ The dashboard shows runs that already happened.
 That is not a problem in practice, and the answer is the next section.
 
 ---
+
+## 6b. `dqt check` — rules only, for CI
+
+`dqt profile` computes statistics and writes a report. When all you want is a
+gate, `dqt check` evaluates the rules and nothing else:
+
+```bash
+dqt check --dsn "mssql://sqlprod01/SalesDW" --rules rules.yaml --fail-on warning
+```
+
+It is genuinely cheaper: rules need the table list, not the profile, so no
+column statistics are computed. Same exit codes as `profile`.
+
+**Running it with no rules exits `3`, not `0`.** A gate that checks nothing
+must not report success — that failure would be silent, in CI, exactly where
+nobody is watching.
 
 ## 7. Giving it to someone who does not use Python
 
@@ -318,6 +339,13 @@ Start in:  C:\dqt
 
 Every morning the dashboard has fresh numbers, and the rule-history page shows
 each rule's pass rate over time.
+
+Run the dashboard the same way — as a service, on their machine:
+
+```
+Program:   C:\Python313\Scripts\dqt.exe
+Arguments: serve --store C:\dqt\dqt_runs.db
+```
 
 ---
 

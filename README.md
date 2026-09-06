@@ -124,8 +124,14 @@ Requires Python 3.11 or newer.
 ## Run
 
 ```bash
-dqt profile --dsn "sqlite:///path/to/database.db"
+dqt profile --dsn "sqlite:///path/to/database.db"   # profile, rules, report
+dqt check   --dsn "..." --rules rules.yaml          # rules only, for CI
+dqt serve   --store dqt_runs.db                     # the read-only dashboard
 ```
+
+`dqt serve` binds `127.0.0.1` and **refuses** any address other machines can
+reach, unless told that something authenticates in front of it. The dashboard
+has no login, and what it serves is a map of your schema.
 
 From Python:
 

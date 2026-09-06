@@ -15,6 +15,23 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **`dqt serve` and `dqt check` (`F14`).** The CLI had one subcommand, which
+  meant starting the dashboard required a `uvicorn` invocation -- out of reach
+  of the DBA the dashboard is for -- and left the loopback rule unenforceable.
+
+  **`dqt serve` makes that rule a refusal.** It binds `127.0.0.1` and refuses
+  any address other machines can reach, exiting `3` *before anything binds*,
+  unless `--allow-unauthenticated-remote-access` says something authenticates
+  in front of it. What the dashboard serves is not the stored numbers so much
+  as the schema behind them -- table names, column names, and a ranked list of
+  where the data is weakest -- without a login.
+
+  **`dqt check`** evaluates rules and nothing else. Rules need discovered
+  tables rather than profiles, so it computes no column statistics, which is
+  the only reason it is worth having as a separate CI step. Running it with no
+  rules exits `3`: a gate that checks nothing must not report success.
+
+
 - **An exception hierarchy rooted in `DQTError` (`DQT-09`).** The last open
   task on the authoritative roadmap's DQT track. Every module raised built-in
   `ValueError` and `ImportError`, so a caller had no way to ask the question
