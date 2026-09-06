@@ -197,6 +197,33 @@ class TestTheNormativeDocumentStatesTheCurrentVersion:
             f"docs/CONVENTIONS-DQT.md does not state version {dqt.__version__}."
         )
 
+    def test_it_does_not_call_the_sqlite_regex_operator_dead(self) -> None:
+        """`DQT-04` shipped it, and the document still said it was dead.
+
+        This one is singled out from the document's status tables because of
+        which way it is wrong. A stale "not done" tells a DBA that a working
+        capability is unusable, and the cost is silent: they route around it
+        and never report a bug, so nothing brings the claim back up for
+        review.
+
+        ``dqt.sql.dialects.sqlite`` registers the ``REGEXP`` callback and
+        owns the compiled-pattern cache behind it. The scaling caveat is
+        real and documented -- a per-row Python callback will not scale, so
+        PostgreSQL's native operator is preferred at size -- but "slow" and
+        "dead" are different claims and only one of them is true.
+        """
+        conventions = (_ROOT / "docs" / "CONVENTIONS-DQT.md").read_text(encoding="utf-8")
+        stale = [
+            line
+            for line in conventions.splitlines()
+            if re.search(r"regex.{0,40}dead|dead.{0,40}(on )?SQLite", line, re.IGNORECASE)
+        ]
+
+        assert stale == [], (
+            "docs/CONVENTIONS-DQT.md still calls the SQLite REGEXP operator dead, "
+            f"which DQT-04 fixed. Stale lines: {stale}"
+        )
+
 
 class TestTheMaturityClaimMatchesTheVersion:
     """``Development Status`` is what PyPI shows before anyone reads a word."""
