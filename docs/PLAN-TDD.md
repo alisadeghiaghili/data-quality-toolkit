@@ -1386,7 +1386,7 @@ re-measure before estimating precisely.
 > **Correction, and then the work.** The paragraph below originally declared
 > this unit closed. That was wrong in the way the honesty gate exists to
 > catch — a status marker running ahead of the work — and two scope items
-> from `CLAUDE.md` §3 were still open: rules on the same table were scanned
+> from `AGENTS.md` "Performance rules" were still open: rules on the same table were scanned
 > once *per rule* rather than once per table, and `regex` still cost two
 > queries because the budget test never parametrised it.
 >
@@ -1414,7 +1414,7 @@ re-measure before estimating precisely.
 > the "how many did we check" denominator and making a column look cleaner
 > than it was.
 >
-> **Now the unit is closed**, and this time every scope item in `CLAUDE.md`
+> **Now the unit is closed**, and this time every scope item in `AGENTS.md`
 > §3 has a gate behind it. One limit is recorded rather than fixed:
 > the deduplicate delete list is still materialised in full, because it *is*
 > the list of rows to delete and the plan has to hold it to be reviewable.

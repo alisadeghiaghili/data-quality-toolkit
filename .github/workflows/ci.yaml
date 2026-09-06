@@ -112,7 +112,7 @@ jobs:
           python-version: "3.12"
 
       - name: Run architecture gate
-        # ARC-01. CLAUDE.md section 2 states these rules in prose; this is
+        # ARC-01. AGENTS.md "Architecture rules" states these rules in prose; this is
         # where they are checked. No baseline, for the reason DOC-02 gave: a
         # list of tolerated exceptions is where the next violation gets filed
         # instead of fixed.

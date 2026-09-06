@@ -167,7 +167,7 @@ def _matches_scope(
 #
 # A check compiles to aggregate *expressions* rather than to a statement, so
 # that checks against the same table can be concatenated into one SELECT and
-# read back from one row. `CLAUDE.md` section 3 asks for exactly that: a table
+# read back from one row. `AGENTS.md` "Performance rules" asks for exactly that: a table
 # is scanned once, not once per rule.
 #
 # The invariant that makes it safe: a fragment never carries a WHERE. A
@@ -889,7 +889,7 @@ def apply_rules(
                     targets_error[rule_index] += 1
 
     # Checks reading the same table reference share one scan. That is the
-    # whole point: `CLAUDE.md` section 3 asks for a table to be read once, not
+    # whole point: `AGENTS.md` "Performance rules" asks for a table to be read once, not
     # once per rule, and a DBA writes the most rules against the table they
     # care about most.
     groups: dict[str, list[_CompiledCheck]] = {}

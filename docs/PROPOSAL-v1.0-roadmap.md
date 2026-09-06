@@ -116,9 +116,8 @@ cleansing, core metrics, a monitoring/trend layer, HTML reports, and tested
 public APIs — nearly the entire facet model, all at "solid" before even
 v0.1. Read together, the two documents commit DQT to being strong
 everywhere rather than to being the best available option for one
-well-defined job. With a single maintainer (per `CLAUDE.md`'s own delegation
-model — one person plans, reviews, and implements this entire codebase),
-that is not an ambitious plan, it is a plan for twelve mediocre facets and
+well-defined job. With a single maintainer — one person planning, reviewing
+and implementing this entire codebase — that is not an ambitious plan, it is a plan for twelve mediocre facets and
 zero excellent ones. Say this plainly rather than softening it: the target
 row's own numbers are the evidence against the target row's own framing.
 
