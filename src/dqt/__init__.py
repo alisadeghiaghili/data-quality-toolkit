@@ -58,7 +58,14 @@ from dqt.common.models import (
     StageError,
     TableResult,
 )
-from dqt.exceptions import ReadOnlyViolationError
+from dqt.exceptions import (
+    CleansingError,
+    ConfigurationError,
+    ConnectionConfigError,
+    DQTError,
+    ReadOnlyViolationError,
+    RuleEvaluationError,
+)
 from dqt.exit_codes import FAIL_ON_CHOICES, ExitCode, decide_exit_code
 from dqt.sql.pipeline import DQTPipeline
 
@@ -117,7 +124,12 @@ def from_yaml_config(path: str | Path) -> DQTPipeline:
 __all__ = [
     "FAIL_ON_CHOICES",
     "ExitCode",
+    "CleansingError",
+    "ConfigurationError",
+    "ConnectionConfigError",
+    "DQTError",
     "ReadOnlyViolationError",
+    "RuleEvaluationError",
     "__version__",
     "decide_exit_code",
     # Literal / enum types

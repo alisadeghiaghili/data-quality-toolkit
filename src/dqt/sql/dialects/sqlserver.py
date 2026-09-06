@@ -47,6 +47,7 @@ from typing import Any
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 from dqt.common.models import ConnectionConfig
+from dqt.exceptions import ConnectionConfigError, RuleEvaluationError
 from dqt.sql.dialects.base import (
     ColumnMetadata,
     ReadOnlyEnforcement,
@@ -149,12 +150,14 @@ def odbc_connection_string(dsn: str) -> str:
     """
     parts = urlsplit(dsn)
     if parts.scheme not in ("mssql", "sqlserver"):
-        raise ValueError(f"SQL Server DSN must use the 'mssql' or 'sqlserver' scheme, got {dsn!r}.")
+        raise ConnectionConfigError(
+            f"SQL Server DSN must use the 'mssql' or 'sqlserver' scheme, got {dsn!r}."
+        )
     if not parts.hostname:
-        raise ValueError(f"SQL Server DSN names no host: {dsn!r}.")
+        raise ConnectionConfigError(f"SQL Server DSN names no host: {dsn!r}.")
     database = parts.path.lstrip("/")
     if not database:
-        raise ValueError(f"SQL Server DSN names no database: {dsn!r}.")
+        raise ConnectionConfigError(f"SQL Server DSN names no database: {dsn!r}.")
 
     options = {key.lower(): value for key, value in parse_qsl(parts.query, keep_blank_values=True)}
     unsupported = sorted(set(options) - set(SUPPORTED_DSN_QUERY_KEYS))
@@ -567,17 +570,18 @@ class SqlServerDialect:
             Never returns.
 
         Raises:
-            ValueError: Always. (``ValueError`` matches what the rule engine
-                already raises for unsupported rule configuration; `DQT-09`
-                should re-home this on the package exception hierarchy.)
+            RuleEvaluationError: Always. Re-homed onto the package
+                hierarchy by `DQT-09`; it still inherits ``ValueError``, so
+                callers written against the previous behaviour are
+                unaffected.
 
         Example:
             import pytest
 
-            with pytest.raises(ValueError, match="no regular-expression"):
+            with pytest.raises(RuleEvaluationError, match="no regular-expression"):
                 SqlServerDialect().regex_not_matching_predicate("[e]", "^a")
         """
-        raise ValueError(
+        raise RuleEvaluationError(
             "SQL Server has no regular-expression operator, so DQT cannot evaluate a "
             "'regex' rule against it. T-SQL's LIKE is a wildcard matcher, not a regular "
             "expression, and mapping one onto the other would answer a different "
