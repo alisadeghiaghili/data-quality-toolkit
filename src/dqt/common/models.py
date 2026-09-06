@@ -553,6 +553,46 @@ class SamplingConfig(BaseModel):
     seed: int | None = Field(default=None, description="Random seed for reproducibility.")
 
 
+class ClassificationConfig(BaseModel):
+    """Whether to infer each column's semantic type, and from how many rows.
+
+    **This is the only stage that reads real values.** Everything else in DQT
+    aggregates inside the database and brings back numbers; a checksum
+    validator cannot work that way, because it has to see the value.
+
+    That is why it is **off by default**, and the reason is what it reads
+    rather than what it costs. The validators exist to recognise national
+    IDs, IBANs and phone numbers -- so the stage is at its most useful
+    exactly when the values are the ones least suitable for copying
+    anywhere. Enabling it should be a decision someone made, not a default
+    they inherited.
+
+    When enabled it costs **one bounded query per table**: a single
+    ``SELECT`` over every candidate column with a row limit, never one query
+    per column and never an unbounded read.
+
+    Attributes:
+        enabled: Whether to classify at all. Defaults to ``False``.
+        sample_size: Maximum rows to read per table. Defaults to ``1000``.
+            Bounding this is what keeps the stage's memory flat regardless
+            of table size.
+        persian_normalization: Whether to fold Persian and Arabic digit and
+            letter variants before matching. Defaults to ``False``. Useful
+            where the same national ID is stored with Persian digits in one
+            row and ASCII in the next.
+
+    Example::
+
+        cfg = ClassificationConfig(enabled=True, sample_size=500)
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    sample_size: int = Field(default=1000, gt=0, description="Maximum rows read per table.")
+    persian_normalization: bool = False
+
+
 class ProfilingConfig(BaseModel):
     """Which column statistics to compute, and how exactly.
 
@@ -704,6 +744,11 @@ class DQPipelineConfig(BaseModel):
         include_tables: If set, only these table names (unqualified) are profiled.
         exclude_tables: Table names to skip.
         sampling: Optional :class:`SamplingConfig` for large-table sampling.
+        profiling: Optional :class:`ProfilingConfig` choosing which column
+            statistics to compute.
+        classification: Optional :class:`ClassificationConfig` enabling
+            semantic typing. Off unless given, because it is the only stage
+            that reads real values rather than aggregates.
         metric_thresholds: Minimum acceptable score per dimension, e.g.
             ``{"completeness": 0.95, "validity": 0.99}``.  Scores below
             threshold will raise issues.
@@ -735,6 +780,8 @@ class DQPipelineConfig(BaseModel):
     include_tables: list[str] | None = None
     exclude_tables: list[str] | None = None
     sampling: SamplingConfig | None = None
+    profiling: ProfilingConfig | None = None
+    classification: ClassificationConfig | None = None
     metric_thresholds: dict[str, float] | None = None
     rule_files: list[str] = Field(default_factory=list)
 
@@ -917,6 +964,7 @@ __all__ = [
     # Domain objects
     "DQMetric",
     "DQIssue",
+    "ClassificationConfig",
     "ColumnResult",
     "TableResult",
     "SchemaResult",
