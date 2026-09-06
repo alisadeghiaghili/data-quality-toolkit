@@ -13,6 +13,28 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-09-06
+
+### Fixed
+
+- **`SamplingConfig`'s docstring described SQL DQT never generates
+  (`NEW-X`).** It said DQT "can sample rows instead of scanning full tables"
+  and named `TABLESAMPLE`, `ORDER BY RANDOM()` and `LIMIT`. Nothing under
+  `src/dqt` reads the setting — a run configured with `sampling` does a full
+  scan.
+
+  Worse than a stale docstring, because the config schema is **strict**: an
+  unknown key is refused, so `sampling` being *accepted* reads as a promise
+  that it works. A key DQT refused would tell the user immediately; a key it
+  accepts and ignores tells them nothing, and they believe their overnight
+  job sampled.
+
+  The type stays in the public API — removing it would be a major break, and
+  it is the right shape for the feature. The docstring, the README and a test
+  now say it is not honoured, and that test **fails the day sampling lands**,
+  so the caveat cannot outlive the limitation.
+
+
 ## [1.0.1] — 2026-09-06
 
 ### Fixed

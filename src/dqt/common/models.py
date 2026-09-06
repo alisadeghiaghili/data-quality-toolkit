@@ -502,20 +502,34 @@ class Rule:
 
 
 class SamplingConfig(BaseModel):
-    """Configuration for table sampling used during profiling and bridges.
+    """How a caller asks for sampling. **Not yet honoured** (`NEW-X`).
 
-    When profiling large tables or when calling external analyzers (e.g.
-    ``missingly``), DQT can sample rows instead of scanning full tables.
-    This model defines the sampling strategy and limits.
+    .. warning::
+
+       DQT accepts this setting and currently **ignores** it. Profiling,
+       rules and cleansing all read the whole table regardless of what is
+       set here. A run configured with ``sampling`` produces a full-scan
+       answer, not a sampled one.
+
+       This is stated rather than quietly implied because the config schema
+       is strict: an unknown key is refused, so ``sampling`` being *accepted*
+       reads as a promise that it works. It does not yet.
+
+    The type stays in the public API because it is the right shape for the
+    feature and removing it would be a major-version break for a name callers
+    may already reference. `CLAUDE.md` §3 asks for the behaviour -- "honour
+    SamplingConfig; don't force a full scan when a sample answers the
+    question" -- and ``tests/unit/test_sampling_is_not_implemented.py`` fails
+    the day it lands, so this warning cannot outlive the limitation it
+    describes.
 
     Attributes:
-        strategy: Sampling method.  ``"random"`` uses ``TABLESAMPLE`` or
-            ``ORDER BY RANDOM()``; ``"first_n"`` takes the first ``limit``
-            rows via ``LIMIT``.  Defaults to ``"random"``.
-        limit: Maximum number of rows to sample.  Must be a positive integer.
-            Defaults to ``10_000``.
-        seed: Optional random seed for reproducible sampling.  Only used
-            when ``strategy`` is ``"random"``.
+        strategy: Sampling method a future release will honour.
+            ``"random"`` or ``"first_n"``. Defaults to ``"random"``.
+        limit: Maximum rows to sample. Must be a positive integer. Defaults
+            to ``10_000``.
+        seed: Optional seed, for a reproducible sample. Meaningful only when
+            *strategy* is ``"random"``.
 
     Example::
 

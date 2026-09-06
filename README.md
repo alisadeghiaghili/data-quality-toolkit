@@ -219,6 +219,16 @@ issue's evidence carries `approximate`**, so a reader never has to guess which
 kind of number they are looking at — an estimate and an exact count are
 different claims.
 
+## Known limitation: sampling is not honoured
+
+`SamplingConfig` and the `sampling` config key are accepted and **currently
+ignored**. Profiling, rules and cleansing read the whole table regardless.
+
+This is called out rather than left implicit because the config schema is
+strict — an unknown key is refused, so a key being *accepted* reads as a
+promise that it works. It does not yet. Implementing it is the first item of
+the roadmap toward `2.0`.
+
 ## Exit codes
 
 `dqt profile` is meant to be usable as a data-quality gate in CI, which means
