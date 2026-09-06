@@ -169,12 +169,15 @@ def _load_config_file(path: str) -> dict[str, Any]:
     p = Path(path)
     if not p.exists():
         _err.print(f"[red]Config file not found:[/red] {path}")
-        sys.exit(1)
+        # 3, not 1. A missing file means DQT never reached a database, and a
+        # pipeline branching on the contract must not read that as "your data
+        # has errors" -- the two failures demand opposite responses.
+        sys.exit(int(ExitCode.CONFIGURATION_ERROR))
     raw = p.read_text(encoding="utf-8")
     if p.suffix in (".yaml", ".yml"):
         if not _YAML_AVAILABLE:
             _err.print("[red]PyYAML is not installed.[/red] Run: pip install pyyaml")
-            sys.exit(1)
+            sys.exit(int(ExitCode.CONFIGURATION_ERROR))
         yaml_cfg: dict[str, Any] = yaml.safe_load(raw) or {}
         return yaml_cfg
     try:
@@ -182,7 +185,7 @@ def _load_config_file(path: str) -> dict[str, Any]:
         return json_cfg
     except json.JSONDecodeError as exc:
         _err.print(f"[red]Failed to parse config JSON:[/red] {exc}")
-        sys.exit(1)
+        sys.exit(int(ExitCode.CONFIGURATION_ERROR))
 
 
 def _build_connection_config(args: argparse.Namespace) -> ConnectionConfig:
