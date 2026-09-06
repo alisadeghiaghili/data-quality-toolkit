@@ -1,6 +1,6 @@
 """One scan per table, not one per rule (unit 16, performance and scale).
 
-``CLAUDE.md`` §3 asks for this by name: *"Rules on the same table are grouped
+``AGENTS.md`` "Performance rules" asks for this by name: *"Rules on the same table are grouped
 so the table is scanned once, not once per rule."* The previous pass got each
 rule down to one query and `test_rules_cost.py` gates that, which is a real
 improvement over two and **is not the same claim**. A DBA writes the most
@@ -142,7 +142,7 @@ class TestATableIsScannedOncePerRun:
     """The cost is the number of tables, not the number of rules."""
 
     def test_four_rules_on_one_table_cost_one_query(self, run_rules: RunRules) -> None:
-        """The claim ``CLAUDE.md`` §3 makes, stated as a count.
+        """The claim ``AGENTS.md`` "Performance rules" makes, stated as a count.
 
         Four different checks over the same rows. Each needs a denominator
         and a violation count, and one pass over the table produces all

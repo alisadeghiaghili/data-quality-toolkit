@@ -185,7 +185,7 @@ class TestPackagingDeclaresOneDriverPerDatabase:
 class TestTheVizFacetIsPure:
     """`dqt.viz` takes numbers and returns strings, and must keep doing so.
 
-    ``CLAUDE.md`` §2: dependencies point inward and I/O stays at the edges.
+    ``AGENTS.md`` "Architecture rules": dependencies point inward and I/O stays at the edges.
     The chart primitives are the innermost thing in the UI stack -- if they
     stay pure, every consumer can be tested without a database, a browser, or
     a rendering engine, which is the property `VIZ-1` was built for.

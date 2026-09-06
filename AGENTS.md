@@ -70,6 +70,64 @@ fully quote table identifiers on this branch — a known, tracked gap, not a
 pattern to copy. `DQT-critical-review.md` §1.3 reproduced a working exploit
 through it. `DQT-02` fixes it.)
 
+## Architecture rules
+
+These are the rules `tools/arch_audit.py` enforces. It runs in CI at zero
+tolerance, so a violation fails the build the same way a failing test does —
+it is a blocker, not a follow-up ticket.
+
+- **Dependencies point inward.** The core domain (results, metrics, issues,
+  rules) never imports adapters, drivers, CLI, or UI. Adapters depend on core,
+  never the reverse. *(`inward`)*
+- **Database drivers live only in `sql/dialects/`.** No other module imports
+  `sqlite3`, `psycopg`, or `pyodbc`. *(`driver-boundary`)*
+- **No branching on dialect name outside the dialect layer.** Identifier
+  quoting, the read-only incantation, regex matching and introspection are
+  *asked of* the dialect, never decided by the caller. Adding a database means
+  registering a dialect, not editing branches across the codebase.
+  *(`dialect-branching`)*
+- **`missingly` is reachable only through `bridges/`.** DQT core must be fully
+  usable without it and must never re-implement its algorithms.
+  *(`missingly-bridge`)*
+- **`viz.py` performs no I/O.** It returns chart objects; it does not read or
+  write. *(`viz-purity`)*
+- **`run()` cannot cleanse.** No path from the pipeline reaches a mutating
+  cleansing call. Cleansing is reached only by calling it deliberately.
+  *(`no-cleansing-from-run`)*
+
+The facets module layout is the architectural boundary — one module per facet,
+no non-DQ concerns leaking into core modules. I/O and database access stay at
+the edges; domain logic must be testable without a live database.
+
+## Performance rules
+
+DQT must work well on large data. This is an architectural constraint, not a
+later optimization pass — a DBA points this at production tables.
+
+- **Profiling is single-pass.** Many column statistics in one aggregate query
+  per table, not one query per statistic per column.
+- **Rules compile to set-based aggregate SQL.** Never iterate row by row.
+- **Rules on the same table are grouped** so the table is scanned once, not
+  once per rule.
+- **`COUNT(DISTINCT ...)` is expensive at scale.** Offer an approximate-distinct
+  path as a configurable option where the dialect supports it.
+- **Honour `SamplingConfig`.** Don't force a full scan when a sample answers
+  the question — but note that rules never sample: a profile is a description,
+  a rule is a verdict.
+- **Bound issue evidence with `LIMIT`.** A `DQIssue` must never materialize the
+  whole violating set.
+- **Reuse connections across rules.** Don't reopen per rule.
+- **Chunk reads** where rows must genuinely be read (cleansing), or use a
+  server-side cursor, so memory stays flat.
+
+Before adding a query, state how many round-trips and table scans it costs, and
+whether that cost grows with the number of columns or rules. **Per-row Python
+work over a table is a design smell.**
+
+Known limit: SQLite's `REGEXP` is a Python callback invoked per row, so `regex`
+rules there are a full scan with per-row overhead and will not scale. Use
+PostgreSQL's native `~` operator at size.
+
 ## Before claiming a task done
 
 Run, in order, and don't report success unless every one passes:

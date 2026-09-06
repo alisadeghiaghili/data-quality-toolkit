@@ -1,6 +1,6 @@
 """The architecture audit, and whether it can actually catch anything (`ARC-01`).
 
-`CLAUDE.md` §2 states DQT's architecture rules in prose. `tools/arch_audit.py`
+`AGENTS.md` "Architecture rules" states DQT's architecture rules in prose. `tools/arch_audit.py`
 checks them. This checks the checker.
 
 **Every rule is given something to catch.** An audit that reports zero on a

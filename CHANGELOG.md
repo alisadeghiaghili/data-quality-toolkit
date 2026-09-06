@@ -13,6 +13,37 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The architecture and performance rules now live in `AGENTS.md` (`NEW-AA`).**
+  Twelve tracked files -- shipped source, the CI workflow, `tools/arch_audit.py`,
+  tests and docs -- cited an untracked local instruction file by name, nineteen
+  times, as the authority for those rules. The rules therefore had no tracked
+  home: someone cloning the repository could read `arch_audit.py` saying it
+  enforces rules "stated in prose" in a file that is not there. The rules moved
+  into `AGENTS.md` and the citations now point at it. A test holds the line.
+
+### Documentation
+
+- **`docs/GETTING-STARTED.md` (`DOC-06`).** A first-run guide for standing DQT
+  up against a real database. Every command in it was run before it was written
+  down, which corrected two claims: warning-severity findings exit `0` under the
+  default `--fail-on error`, and SQL Server's `Encrypt=yes;TrustServerCertificate=no`
+  default fails against the self-signed certificates common on internal servers.
+
+- **`docs/ROADMAP-FLOOR-15.md` (`DOC-07`).** A sequenced plan to DQT's own
+  capability floor, recording that the authoritative roadmap contains no task
+  for any floor item and that `DQT-09` is genuinely still open.
+
+- **Entry documents corrected to the code (`DOC-05`).** `README.md` announced
+  `1.0.0`, advertised Python 3.11-3.12 while CI tested 3.14, showed a 90%
+  coverage gate against a configured 95, and denied per-stage error handling the
+  pipeline has had since `NEW-B`. `docs/00-START-HERE.md` and
+  `docs/CONVENTIONS-DQT.md` still called the project pre-alpha, and
+  `pyproject.toml` classified a frozen 1.x API as `Pre-Alpha`. The SQL Server
+  dialect still described itself as never having run against a real server,
+  which `GATE-02` stopped being true.
+
 ## [1.1.0] — 2026-09-06
 
 ### Added
@@ -177,7 +208,7 @@ gates are listed here instead of being performed.
   choices) and every `dqt.ui.api` function is checked for documentation.
 
 - **An architecture gate (`ARC-01`).** `tools/arch_audit.py` checks what
-  `CLAUDE.md` §2 states in prose: dependencies point inward, drivers live only
+  `AGENTS.md` "Architecture rules" states in prose: dependencies point inward, drivers live only
   in `sql/dialects/`, no module outside that package branches on a dialect
   name, `missingly` is reached only through a bridge, the visualisation facet
   touches no database, and `run()` cannot reach a write. Each rule is handed a
@@ -375,7 +406,7 @@ action.
   migrate this file, by design.
 - **Rules on the same table share one scan.** Each check compiles to
   aggregate expressions rather than to a statement, and the checks over a
-  table run as a single `SELECT` — what `CLAUDE.md` §3 asks for. Twenty rules
+  table run as a single `SELECT` — what `AGENTS.md` "Performance rules" asks for. Twenty rules
   on one table cost one pass, not twenty. A `REFERENCE` rule pointing at a
   reference table still pays its own scan, because the join it needs changes
   which rows the other aggregates would see. A batch the database rejects is

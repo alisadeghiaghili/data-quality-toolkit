@@ -3,7 +3,7 @@
 A dashboard page shows counts: issues by severity, issues by dimension, a
 score per dimension. The easy way to get them is to load every issue and
 count in Python, and that is a per-row loop over a table whose size is
-exactly how bad the data is — `CLAUDE.md` §3 calls that a design smell, and
+exactly how bad the data is — `AGENTS.md` "Performance rules" calls that a design smell, and
 the `dqt-ui-designer` skill asks for dashboard queries to stay set-based and
 single-pass per view.
 

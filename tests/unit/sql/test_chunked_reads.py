@@ -8,7 +8,7 @@ It read them all at once. ``_standardize`` and ``_lookup_correct`` each ran
 ``SELECT <identity>, <column> FROM <table> WHERE <column> IS NOT NULL`` and
 called ``fetchall()``, so planning a cleanse of a fifty-million-row table
 built a fifty-million-element Python list before deciding that four rows
-needed changing. ``CLAUDE.md`` names the requirement -- *"chunk reads or use
+needed changing. ``AGENTS.md`` names the requirement -- *"chunk reads or use
 a server-side cursor so memory stays flat"* -- and this is the path it was
 written for.
 
@@ -29,7 +29,7 @@ repeated. Memory is bounded by the page size, not by the table.
 
 **And a per-row round trip goes away.** ``_deduplicate`` ran one extra
 ``SELECT *`` per duplicate found, to capture the row before deleting it --
-per-row work over a table, which ``CLAUDE.md`` calls a design smell by name.
+per-row work over a table, which ``AGENTS.md`` calls a design smell by name.
 The ranked query already visits those rows; it can bring the values back
 with it.
 
@@ -475,7 +475,7 @@ class TestDeduplicationDoesNotWorkRowByRow:
 
         The ranked query already visits those rows, so it can return their
         values. Per-row Python work over a table is the design smell
-        ``CLAUDE.md`` names; this is the last one in cleansing.
+        ``AGENTS.md`` names; this is the last one in cleansing.
 
         Seeded so that ``city`` repeats: fifteen rows over three cities, so
         twelve rows duplicate an earlier one.

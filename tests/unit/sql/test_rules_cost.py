@@ -160,7 +160,7 @@ class TestTheTableIsReadOnce:
         """The cost is the table count, not the rule count.
 
         This test used to assert one query *per rule* and to call that the
-        honest floor. It was not: ``CLAUDE.md`` §3 asks for rules on the same
+        honest floor. It was not: ``AGENTS.md`` "Performance rules" asks for rules on the same
         table to be grouped so the table is scanned once, and four rules over
         the same rows need four denominators and four violation counts that
         one pass can produce.

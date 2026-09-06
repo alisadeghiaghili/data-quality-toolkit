@@ -1,6 +1,6 @@
 """Check the shape of the source tree against DQT's architecture rules.
 
-`CLAUDE.md` §2 states them in prose: dependencies point inward, the facets
+`AGENTS.md` "Architecture rules" states them in prose: dependencies point inward, the facets
 module layout is the boundary, I/O stays at the edges, `missingly` is reached
 only through a bridge. Prose is where a rule goes to be forgotten — this is
 where it goes to be checked.
@@ -329,7 +329,7 @@ def check_dialect_branching(relative_path: str, tree: ast.Module) -> Iterator[Vi
 def check_missingly(relative_path: str, tree: ast.Module) -> Iterator[Violation]:
     """Refuse ``missingly`` anywhere but the bridge.
 
-    `CLAUDE.md` §1: DQT must be fully usable without it. An import outside
+    `AGENTS.md` "Scope": DQT must be fully usable without it. An import outside
     ``bridges/`` makes an optional sibling a hard dependency of whatever
     module reached for it.
 
