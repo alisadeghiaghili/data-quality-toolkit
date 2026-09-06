@@ -230,6 +230,36 @@ evaluates it natively and is the right place for regex at size.
 
 ---
 
+## 5b. Naming what a column holds (optional)
+
+DQT can infer each column's **semantic type** — email, IBAN/Sheba, Iranian
+national ID, mobile or landline number, Shamsi date — and show it in the
+report beside the database type.
+
+**It is off by default, and the reason is what it reads.** Every other stage
+computes inside the database and brings back numbers. A checksum cannot work
+that way: recognising a national ID means seeing the ten digits. So this is
+the one stage that pulls real values into your Python process — and the
+validators are most useful exactly where the values are the ones you would
+least want copied. Turning it on should be your decision.
+
+Enable it in the config file:
+
+```yaml
+connection_id: sales
+classification:
+  enabled: true
+  sample_size: 500          # rows read per table; the read is always bounded
+  persian_normalization: true   # fold Persian/Arabic digits before matching
+```
+
+When enabled it costs **one bounded query per table** — not one per column,
+and never an unbounded read.
+
+A column that was examined and matched nothing reads `unknown`. A column that
+was never examined reads `n/a`. Those are different answers and the report
+keeps them apart.
+
 ## 6. The dashboard
 
 The web UI is **read-only and has no authentication.**

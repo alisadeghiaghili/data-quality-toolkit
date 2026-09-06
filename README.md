@@ -62,6 +62,11 @@ computed with SQL, against the live database, without extracting the data.
 ## What it does
 
 - **Schema discovery** — enumerate schemas, tables, and columns.
+- **Classification** — optional semantic typing: email, IBAN/Sheba, Iranian
+  national ID, mobile and landline numbers, Shamsi dates. **Off by default**,
+  because it is the only stage that reads real values rather than aggregating
+  — and the validators are most useful exactly where the values are most
+  sensitive. One bounded query per table when enabled.
 - **Profiling** — row counts, and per column: null count, minimum, maximum,
   mean and distinct count, with completeness scored from them. All of it in
   **one aggregate query per table**, whatever the column count. `MIN`/`MAX`/
