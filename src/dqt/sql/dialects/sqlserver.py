@@ -480,7 +480,24 @@ class SqlServerDialect:
         Example:
             expression = dialect.sampled_table_expression('"t"', "first_n", 10, None)
         """
-        raise NotImplementedError
+        if limit <= 0:
+            raise ValueError(f"A sample needs a positive limit; got {limit}.")
+        if strategy not in ("random", "first_n"):
+            raise ValueError(f"Unknown sampling strategy {strategy!r}. Use 'random' or 'first_n'.")
+        if seed is not None and strategy == "random":
+            raise ValueError(
+                "A random sample cannot take a seed on this dialect. PostgreSQL "
+                "needs a separate setseed() call, SQLite has no seedable "
+                "RANDOM(), and SQL Server's NEWID() takes none -- so honouring "
+                "the seed is impossible here and ignoring it would produce an "
+                "unseeded sample while the config said otherwise. Remove the "
+                "seed, or use strategy='first_n', which is already reproducible."
+            )
+        # TOP on the projection and NEWID() for the shuffle: T-SQL has
+        # neither LIMIT nor RANDOM(), which is the whole reason this is a
+        # dialect method rather than a shared string.
+        order = " ORDER BY NEWID()" if strategy == "random" else ""
+        return f"(SELECT TOP ({limit}) * FROM {qualified_table}{order}) AS dqt_sample"
 
     def regex_not_matching_predicate(self, quoted_column: str, pattern: str) -> str:
         """Refuse: SQL Server has no regular-expression operator.

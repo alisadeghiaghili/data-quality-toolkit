@@ -124,9 +124,7 @@ class TestTheDialectBuildsTheSampledTable:
 
         Refusing it here would be pedantry rather than protection.
         """
-        expression = get_dialect_by_name(name).sampled_table_expression(
-            '"t"', "first_n", 10, 42
-        )
+        expression = get_dialect_by_name(name).sampled_table_expression('"t"', "first_n", 10, 42)
 
         assert expression
 
@@ -166,9 +164,7 @@ class TestProfilingHonoursTheSetting:
         """
         assert profile().row_count == 200  # type: ignore[attr-defined]
 
-    def test_a_sampled_profile_reads_only_the_sample(
-        self, profile: Callable[..., object]
-    ) -> None:
+    def test_a_sampled_profile_reads_only_the_sample(self, profile: Callable[..., object]) -> None:
         """50 of 200, so the count is 50 rather than 200.
 
         ``first_n`` is used because its result is deterministic; a random
@@ -187,9 +183,7 @@ class TestProfilingHonoursTheSetting:
 
         assert sampled.row_count == 200  # type: ignore[attr-defined]
 
-    def test_the_null_counts_come_from_the_sample_too(
-        self, profile: Callable[..., object]
-    ) -> None:
+    def test_the_null_counts_come_from_the_sample_too(self, profile: Callable[..., object]) -> None:
         """Every column statistic, not only the row count.
 
         The fixture nulls every fourth row, so the first 40 rows hold 10
@@ -216,9 +210,7 @@ class TestASampledNumberSaysSo:
 
         assert sampled.sampling == {"strategy": "first_n", "limit": 50}  # type: ignore[attr-defined]
 
-    def test_an_unsampled_profile_says_nothing(
-        self, profile: Callable[..., object]
-    ) -> None:
+    def test_an_unsampled_profile_says_nothing(self, profile: Callable[..., object]) -> None:
         """Absent rather than a falsy placeholder.
 
         Every profile stored before this feature existed has no sampling
@@ -226,3 +218,65 @@ class TestASampledNumberSaysSo:
         new field has to agree with the old rows rather than contradict them.
         """
         assert profile().sampling is None  # type: ignore[attr-defined]
+
+
+class TestThePipelinePassesTheConfigThrough:
+    """The profiler honouring it is not the promise; the config key is.
+
+    `DQPipelineConfig.sampling` is what a user writes in a YAML file. A
+    profiler that samples correctly while the pipeline never asks it to would
+    leave the key exactly as ignored as `1.0.2` had to document.
+    """
+
+    def test_a_configured_sample_reaches_profiling(
+        self, make_sqlite_db: Callable[[str, str], Path], tmp_path: Path
+    ) -> None:
+        """End to end, from the config object a config file produces.
+
+        200 rows seeded, 50 asked for, so a profile of 50 says the setting
+        travelled the whole way.
+        """
+        from dqt.common.models import DQPipelineConfig
+        from dqt.sql.pipeline import DQTPipeline
+
+        db_file = make_sqlite_db("pipeline-sample.db", SEEDED)
+        result, _ = DQTPipeline(
+            ConnectionConfig(id="s", dsn=f"sqlite:///{db_file}"),
+            DQPipelineConfig(
+                connection_id="s",
+                sampling=SamplingConfig(strategy="first_n", limit=50),
+            ),
+            store_path=tmp_path / "runs.db",
+            report_dir=tmp_path,
+        ).run()
+
+        row_counts = [
+            metric.value
+            for metric in result.metrics
+            if metric.metric_name == "row_count" and metric.table_name == "people"
+        ]
+
+        assert row_counts == [50]
+
+    def test_no_sampling_configured_reads_everything(
+        self, make_sqlite_db: Callable[[str, str], Path], tmp_path: Path
+    ) -> None:
+        """The control, so the test above cannot pass by profiling nothing."""
+        from dqt.common.models import DQPipelineConfig
+        from dqt.sql.pipeline import DQTPipeline
+
+        db_file = make_sqlite_db("pipeline-full.db", SEEDED)
+        result, _ = DQTPipeline(
+            ConnectionConfig(id="s", dsn=f"sqlite:///{db_file}"),
+            DQPipelineConfig(connection_id="s"),
+            store_path=tmp_path / "runs.db",
+            report_dir=tmp_path,
+        ).run()
+
+        row_counts = [
+            metric.value
+            for metric in result.metrics
+            if metric.metric_name == "row_count" and metric.table_name == "people"
+        ]
+
+        assert row_counts == [200]

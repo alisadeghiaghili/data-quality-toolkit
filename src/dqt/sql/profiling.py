@@ -221,7 +221,24 @@ class SqlProfiler:
             f"COUNT({self._dialect.quote_identifier(column.column_name)})"
             for column in table.columns
         ]
-        statement = self._dialect.select_aggregates_sql(table_ref, expressions)
+        # The sample is substituted where the table name goes, so the same
+        # single aggregate query runs over it. One pass either way -- what
+        # changes is how many rows that pass reads.
+        read_from = table_ref
+        sampling: dict[str, object] | None = None
+        if self._sampling is not None:
+            read_from = self._dialect.sampled_table_expression(
+                table_ref,
+                self._sampling.strategy,
+                self._sampling.limit,
+                self._sampling.seed,
+            )
+            sampling = {
+                "strategy": self._sampling.strategy,
+                "limit": self._sampling.limit,
+            }
+
+        statement = self._dialect.select_aggregates_sql(read_from, expressions)
         row = conn.execute(statement).fetchone()
 
         # An aggregate over an empty table returns one row of zeros rather
@@ -242,4 +259,5 @@ class SqlProfiler:
             table_name=table.table_name,
             row_count=row_count,
             columns=columns,
+            sampling=sampling,
         )
