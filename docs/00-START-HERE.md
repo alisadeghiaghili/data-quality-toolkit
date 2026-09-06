@@ -4,7 +4,7 @@ Entry point for the **`dqt` (SQL Data Quality Toolkit)** documentation. Read thi
 page before any other document in this set.
 
 **Repository:** `alisadeghiaghili/data-quality-toolkit` · **Package:** `dqt` ·
-**Version:** 0.1.0 (pre-alpha, not released)
+**Version:** 1.1.0 (released; see `CHANGELOG.md`)
 
 DQT is one of four repositories in the Aghili data ecosystem (`missingly`,
 `py-distfit-pro`, `distfitr`, `data-quality-toolkit`). It is governed by that

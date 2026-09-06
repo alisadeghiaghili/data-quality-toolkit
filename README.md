@@ -1,13 +1,13 @@
 # data-quality-toolkit (`dqt`)
 
 [![License: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](pyproject.toml)
-[![Coverage gate](https://img.shields.io/badge/coverage%20gate-90%25-brightgreen.svg)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.14-blue.svg)](pyproject.toml)
+[![Coverage gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen.svg)](pyproject.toml)
 
 ## Status: stable
 
-Version `1.0.0`. `1.0.0` means the public API will not break without a
-major version. Four surfaces are frozen and each is held by a test: the
+Version `1.1.0`. The `1.x` line means the public API will not break without
+a major version. Four surfaces are frozen and each is held by a test: the
 export list, the CLI's flags and exit codes, the config file's keys and
 defaults, and the six JSON endpoints. The HTML screens are deliberately
 outside the freeze — their URLs are stable, their markup is not.
@@ -129,8 +129,11 @@ Count issues from `result.issues` only. The per-schema, per-table and per-column
 lists are overlapping views of the same issues — summing them double-counts. See
 `docs/CONVENTIONS-DQT-data-model.md` §1.
 
-Note that `result.status` is currently always `"success"`: there is no per-stage
-error handling yet, so a failed run raises rather than recording a failure.
+`result.status` is `"failed"` when a stage could not run at all, `"partial"`
+when a stage ran but skipped part of its input, and `"success"` only when
+neither happened. Reporting a degraded run as a success is what `NEW-B`
+exists to stop, so check the status rather than assuming a returned result
+means a clean one; `result.stage_errors` says what went wrong.
 
 ## Cleansing on a large table
 
