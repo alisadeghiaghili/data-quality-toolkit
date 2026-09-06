@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from dqt.common.models import ConnectionConfig, DQMetric, SamplingConfig
+from dqt.common.models import ConnectionConfig, DQMetric, ProfilingConfig, SamplingConfig
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.dialects import Dialect
 from dqt.sql.schema_discovery import DiscoveredTable
@@ -41,6 +41,19 @@ class ColumnProfile:
         column_name: Column name.
         null_count: Number of NULL values in the column.
         row_count: Number of rows in the table.
+        min_value: Smallest value present, or ``None`` when the column holds
+            no values or its type does not order.
+        max_value: Largest value present, on the same terms.
+        mean_value: Arithmetic mean of the non-NULL values, or ``None`` for
+            any type the engine cannot genuinely average. Absent rather than
+            zero: SQLite answers ``AVG`` over text with ``0.0``, and a
+            reported zero cannot be told from a column that averages zero.
+        distinct_count: Number of distinct non-NULL values, or ``None`` when
+            distinct counting was declined. ``None`` and ``0`` are different
+            answers -- the second is what an all-NULL column genuinely has.
+        distinct_is_approximate: Whether *distinct_count* is an estimate.
+            Set from what the engine actually did, not from what was asked
+            for, so a request an engine cannot honour reads as exact.
 
     Example:
         profile = ColumnProfile(
@@ -57,6 +70,11 @@ class ColumnProfile:
     column_name: str
     null_count: int
     row_count: int
+    min_value: Any = None
+    max_value: Any = None
+    mean_value: float | None = None
+    distinct_count: int | None = None
+    distinct_is_approximate: bool = False
 
 
 @dataclass(slots=True)
@@ -109,6 +127,7 @@ class SqlProfiler:
         self,
         connection_config: ConnectionConfig,
         sampling: SamplingConfig | None = None,
+        profiling: ProfilingConfig | None = None,
     ) -> None:
         """Resolve the dialect once, for every table this profiler reads.
 
@@ -120,6 +139,8 @@ class SqlProfiler:
             connection_config: Connection to profile through. May be
                 read-only; profiling never writes.
             sampling: How to sample, or None to read every row.
+            profiling: Which column statistics to compute, or None for the
+                defaults.
 
         Example:
             profiler = SqlProfiler(ConnectionConfig(id="c", dsn="sqlite:///dev.db"))
@@ -127,6 +148,7 @@ class SqlProfiler:
         self._connection_config = connection_config
         self._dialect: Dialect = get_dialect_for(connection_config)
         self._sampling = sampling
+        self._profiling = profiling or ProfilingConfig()
 
     def profile_tables(self, tables: list[DiscoveredTable]) -> list[TableProfile]:
         """Profile discovered tables with simple aggregate queries.

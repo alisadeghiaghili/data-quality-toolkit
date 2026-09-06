@@ -553,6 +553,43 @@ class SamplingConfig(BaseModel):
     seed: int | None = Field(default=None, description="Random seed for reproducibility.")
 
 
+class ProfilingConfig(BaseModel):
+    """Which column statistics to compute, and how exactly.
+
+    Every statistic here rides in the **same single aggregate query** as the
+    NULL counts, so none of them costs an extra scan. What they cost is work
+    the server does during that one pass, and one of them costs
+    substantially more than the others.
+
+    ``COUNT(DISTINCT ...)`` has to hold every distinct value it has seen, so
+    on a wide or high-cardinality table it is the one statistic that can cost
+    real memory server-side. It is on by default anyway -- a profile without
+    cardinality is not much of a profile, and profiling is already a
+    deliberate full scan -- but it can be declined, and it can be estimated
+    where the engine offers an estimator.
+
+    Attributes:
+        distinct_counts: Whether to count distinct values. Defaults to
+            ``True``. When ``False``, ``ColumnProfile.distinct_count`` is
+            ``None`` -- absent, which is distinct from the ``0`` an all-NULL
+            column genuinely has.
+        approximate_distinct: Whether to accept the dialect's estimating
+            distinct count when it offers one. Defaults to ``False``. Only
+            SQL Server does (``APPROX_COUNT_DISTINCT``); asking elsewhere is
+            harmless and yields the exact count, and the profile then reports
+            that it was exact.
+
+    Example::
+
+        cfg = ProfilingConfig(distinct_counts=True, approximate_distinct=False)
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    distinct_counts: bool = True
+    approximate_distinct: bool = False
+
+
 class RuleScope(BaseModel):
     """Defines the target scope for a data-quality rule.
 
@@ -887,6 +924,7 @@ __all__ = [
     "RuleResult",
     "RuleRunResult",
     "PipelineResult",
+    "ProfilingConfig",
     # Config models
     "SamplingConfig",
     "RuleScope",

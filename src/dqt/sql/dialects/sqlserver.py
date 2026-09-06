@@ -546,6 +546,34 @@ class SqlServerDialect:
             "'NOT NULL' or 'UNIQUE' rule here instead."
         )
 
+    def supports_min_max(self, data_type: str) -> bool:
+        """Whether ``MIN``/``MAX`` are meaningful over this type.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``True`` when bounds may be asked for.
+
+        Example:
+            assert dialect.supports_min_max("integer") is True
+        """
+        raise NotImplementedError
+
+    def supports_mean(self, data_type: str) -> bool:
+        """Whether ``AVG`` is meaningful over this type.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``True`` only for genuinely averageable types.
+
+        Example:
+            assert dialect.supports_mean("varchar") is False
+        """
+        raise NotImplementedError
+
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Return SQL Server's built-in approximate distinct count.
 

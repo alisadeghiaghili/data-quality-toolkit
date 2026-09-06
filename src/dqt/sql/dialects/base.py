@@ -404,6 +404,47 @@ class Dialect(Protocol):
         """
         ...
 
+    def supports_min_max(self, data_type: str) -> bool:
+        """Whether ``MIN``/``MAX`` are meaningful over a column of this type.
+
+        Asked per engine rather than answered from a shared table of type
+        names, because the same spelling means different things. ``TEXT`` is
+        SQLite's ordinary string type and orders fine; on SQL Server ``text``
+        is the deprecated LOB type and ``MIN`` over it is an error.
+
+        Args:
+            data_type: The column's declared type, as schema discovery
+                reported it. Matched case-insensitively.
+
+        Returns:
+            ``True`` when the profiler may ask for bounds on this type.
+
+        Example:
+            assert dialect.supports_min_max("integer") is True
+        """
+        ...
+
+    def supports_mean(self, data_type: str) -> bool:
+        """Whether ``AVG`` is meaningful over a column of this type.
+
+        Stricter than :meth:`supports_min_max`, and the gate matters more:
+        SQLite answers ``AVG`` over a text column with ``0.0`` rather than
+        refusing, so an ungated profiler reports the mean of a name column as
+        zero. A wrong number is worse than an absent one, because a reader
+        cannot tell it from a column that genuinely averages zero.
+
+        Args:
+            data_type: The column's declared type, as schema discovery
+                reported it. Matched case-insensitively.
+
+        Returns:
+            ``True`` only for types the engine can genuinely average.
+
+        Example:
+            assert dialect.supports_mean("varchar") is False
+        """
+        ...
+
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Return an approximate distinct-count expression, if one exists.
 
