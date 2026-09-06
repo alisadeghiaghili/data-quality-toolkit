@@ -211,7 +211,7 @@ Every feature MUST map to at least one facet, or be rejected as out of scope.
 |---|---|---|---|
 | Profiling | `sql/profiling.py` | SQL-level column/table statistics. | row/null counts only; unit-tested (`NEW-C` slice 1) |
 | Diagnostics | `sql/diagnostics.py` | Map statistics to `DQIssue` per dimension. | `completeness` only; unit-tested (`NEW-C` slice 1) |
-| Rules | `sql/rules.py` | Declarative constraints, column and table level. | column scope only; `regex` dead on SQLite |
+| Rules | `sql/rules.py` | Declarative constraints, column and table level. | column scope only; `regex` on SQLite is a per-row Python callback and does not scale |
 | Cleansing | `sql/cleansing.py` | Plan/apply repair with undo statements. | primitives exist, unsafe |
 | Metrics | `sql/metrics.py` | Quantitative scores per table/column/dimension. | 3 global metrics, untested |
 | Monitoring | `sql/monitoring.py` | Trends and drift of DQ metrics over time. | stub, untested |
@@ -310,7 +310,7 @@ table says so — see `BACKLOG.md` §1.
 | Area | State on `origin/main` | Task |
 |---|---|---|
 | Rules engine — `not_null`, `unique`, `range` | Works, tested | — |
-| Rules engine — `regex` | Was dead on SQLite (emitted `NOT REGEXP ?` with no `create_function` registered anywhere, so every regex rule yielded a permanent false `error`). Fixed on branch `dqt-04`, tested, **not yet merged** | `DQT-04` |
+| Rules engine — `regex` | Was dead on SQLite (emitted `NOT REGEXP ?` with no `create_function` registered anywhere, so every regex rule yielded a permanent false `error`). Fixed and merged (`DQT-04`): `dqt.sql.dialects.sqlite` registers the callback and owns the compiled-pattern cache. Remains a per-row callback, so it does not scale — prefer PostgreSQL's native `~` at size | `DQT-04` |
 | Rules engine, table scope | Not started | no ID yet |
 | Rule-file SQL safety | **Defective** — reproduced exploit. Fixed at `a1f6ce7`, **not pushed** | `DQT-02` |
 | `read_only` enforcement | **None.** Zero consumers, no `--dry-run`. Fixed at `7ae3fdc`, **not pushed** | `DQT-03` |
@@ -383,4 +383,4 @@ Recorded so future sessions do not resurrect them.
 | "Avoid full-table scans" as guidance | Withdrawn — unimplementable as written; replaced by the sampling and budget work in `NEW-F`/sampling (no ID yet). |
 | `src/dqt/ui/` is unverified | Closed — read on 2026-08-17. FastAPI skeleton over a read-only data layer, no tests, no frontend. |
 | A DQT-local task numbering (`B1`…`B15`) | Withdrawn — the ecosystem `ROADMAP.md` already defines `DQT-01`…`DQT-09`. A second numbering is the same defect this document set exists to prevent. |
-| "Four rule expressions work" | Withdrawn — three work. `regex` is dead on SQLite (`DQT-04`). |
+| "Four rule expressions work" | Restored — all four work. `regex` on SQLite was fixed by `DQT-04`; the claim was withdrawn while it was broken. |

@@ -217,6 +217,11 @@ class TestTheNormativeDocumentStatesTheCurrentVersion:
             line
             for line in conventions.splitlines()
             if re.search(r"regex.{0,40}dead|dead.{0,40}(on )?SQLite", line, re.IGNORECASE)
+            # A defect table that records what was broken and that it was
+            # fixed is not a false claim, and a test that cannot tell the two
+            # apart would forbid the project's own history. Only a line
+            # asserting deadness in the present tense is a lie.
+            and not re.search(r"\bwas dead\b|fixed and merged", line, re.IGNORECASE)
         ]
 
         assert stale == [], (
