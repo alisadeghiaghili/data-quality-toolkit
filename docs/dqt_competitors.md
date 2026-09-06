@@ -36,15 +36,15 @@ Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 | F7 | **Metrics** — per table/column/dimension scores | PARTIAL | **PARTIAL** | Unchanged: three global metrics (`table_count`, `column_count`, `average_completeness`). Per-column completeness reaches the report and the UI, but not as `DQMetric` rows. |
 | F8 | **Monitoring** — metric snapshots over time + drift detection | NOT MET | **PARTIAL** | Run history is stored and **rule pass-rate over time is charted** in the UI (`trend_line`, `load_rule_history`). But `monitor()` is still the identity function, there is no metric-level trend and no drift or anomaly detection. |
 | F9 | **Knowledge/Domain** — reference tables for validation | NOT MET | **MET** | `sql/knowledge.py`, reachable through the `REFERENCE` rule expression: values must appear in a reference list or table, matched with an anti-join over `SELECT DISTINCT` so duplicate reference rows cannot inflate the denominator. Optional Persian character folding. |
-| F10 | **Classification** — semantic column typing | NOT MET | **PARTIAL** | `classification.py` is real and locale-aware — Iranian national ID, IBAN/Sheba, mobile and landline numbers, Shamsi dates, email — and `classify_column` is publicly exported. **But nothing calls it during a run.** It is a library function, not a pipeline stage, so `semantic_type` is still never populated and a UI user never sees a classification. |
+| F10 | **Classification** — semantic column typing | NOT MET | **MET** | Runs as a pipeline stage and populates `ColumnResult.semantic_type`, rendered in the report beside the database type. **Off by default** — not for cost but for what it reads: it is the only stage that pulls real values into Python, and the validators are most useful exactly where the values are most sensitive. One bounded query per table when enabled. |
 | F11 | **Missingness (internal)** — null stats and patterns | PARTIAL | **PARTIAL** | Counts and ratios internally. Co-occurrence patterns exist only through the optional `missingly` bridge, which is external by design. |
 | F12 | **Reports** — HTML/PDF, per-table/column metrics, issues, trends | PARTIAL | **PARTIAL** | Self-contained HTML — verified to contain zero external references, so it survives being emailed. Bilingual EN/FA with RTL, an embedded font, and WCAG AA contrast computed in CI. A trend chart exists on the rule-history screen. **No PDF.** |
 | F13 | **Code quality** — English docstrings, unit + integration tests, CI (pytest/mypy/ruff) | PARTIAL | **MET** | 1079 tests passing, coverage 95.51% against a 95 floor, `mypy --strict` clean, `ruff` clean, `doc_audit` and `arch_audit` at zero. Python 3.11 / 3.12 / 3.14, and **all three databases exercised against live servers in CI** — including SQL Server, which is what closed the biggest hole in this row. |
 | F14 | **CLI** — profile, check rules, generate reports | PARTIAL | **PARTIAL** | `dqt profile` only, and it does run rules when a config supplies `rule_files`. There is still no `check` subcommand and **no `serve`**, so starting the dashboard needs a `uvicorn` command rather than a DQT one. |
 | F15 | **Read-only query/API surface** for downstream consumers | PARTIAL | **MET** | Six JSON endpoints and five server-rendered HTML screens, tested, and frozen under the `1.0` API contract. No JS and no build step. **No authentication** — by design, and the reason the documented way to run it binds loopback. |
 
-**Score: 6 of 15 met, 6 partial, 3 not met** — up from 0 of 15 in August.
-F1 closed on 2026-09-07.
+**Score: 7 of 15 met, 5 partial, 3 not met** — up from 0 of 15 in August.
+F1 and F10 closed on 2026-09-07.
 
 A sequenced plan for the remaining ten, with its dependencies and the one
 decision that blocks a full score, is in
@@ -65,6 +65,11 @@ Two rows deserve reading twice:
   invokes it during a run. That is precisely the failure this document's own
   release rule was written to catch, and it is caught here rather than scored
   as `MET`.
+* **F10 is closed, and the note that recorded it as `PARTIAL` is worth
+  keeping.** The module was real, tested and exported, and nothing called it.
+  What closed the row was forty lines of wiring, which is the point: the gap
+  between "built" and "reachable" cost nothing to cross and had gone
+  uncrossed for as long as the module existed.
 * **F1 was the keystone, and closing it changes what F3, F5 and F7 cost.**
   A distinct count is what a uniqueness *diagnostic* needs; bounds are what a
   validity diagnostic needs. Those rows are now "expose what exists" rather

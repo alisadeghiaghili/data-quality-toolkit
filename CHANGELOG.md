@@ -15,6 +15,19 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **Semantic column typing now runs (`F10`).** `classification.py` has been
+  real, locale-aware, tested and publicly exported for some time, and nothing
+  called it: `ColumnResult.semantic_type` was hard-coded to `None` at the one
+  place it is constructed. It is now a pipeline stage, and the answer reaches
+  the HTML report beside the column's database type.
+
+  **Off by default**, and the reason is what it reads rather than what it
+  costs. It is the only stage that pulls real values into Python -- a checksum
+  cannot be evaluated on an aggregate -- and the validators recognise national
+  IDs, IBANs and phone numbers, so the stage is most useful exactly where the
+  values are least suitable for copying. Enable it with the new
+  `ClassificationConfig`. When enabled it costs one bounded query per table.
+
 - **Column statistics: minimum, maximum, mean and distinct count (`F1`).**
   Profiling produced a NULL count and a row count; it now produces five
   statistics per column, and still in **one aggregate query per table**
@@ -39,6 +52,15 @@ Dates are the merge dates on `main`.
   The statistics reach the metric metadata and the HTML report, not only the
   profiler -- a statistic that stops at the profiler is the failure `F10` is
   currently recorded as.
+
+### Fixed
+
+- **`ColumnResult.db_type` reported the Python class name (`NEW-AB`).** Every
+  column came back as `"ColumnProfile"` in a field documented as the column's
+  database type, on the public model the JSON API serves. Found while
+  threading the real type through for classification. It had survived because
+  nothing rendered the field -- an unrendered value is one nobody can falsify,
+  so the report now shows it.
 
 ### Changed
 
