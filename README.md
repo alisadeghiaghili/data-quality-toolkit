@@ -98,6 +98,11 @@ permanent non-goals, not gaps.
 
 ## Install
 
+**New here, or standing this up against a real database?** Read
+[`docs/GETTING-STARTED.md`](docs/GETTING-STARTED.md) — it covers the
+read-only login, the SQL Server ODBC driver and its certificate default,
+rules, the dashboard, and scheduling.
+
 ```bash
 pip install -e .                 # core
 pip install -e ".[postgres]"     # + PostgreSQL driver
