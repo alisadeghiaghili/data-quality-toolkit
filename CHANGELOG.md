@@ -13,6 +13,33 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-09-06
+
+### Added
+
+- **Profiling honours `SamplingConfig` (`NEW-Z`).** The key `1.0.2` had to
+  document as ignored now works, end to end from the config file. Each
+  dialect builds its own sampled table reference — `LIMIT` on SQLite and
+  PostgreSQL, `TOP (n)` on SQL Server, `ORDER BY RANDOM()` versus `NEWID()`
+  for a random sample — and profiling's single aggregate query runs over it.
+
+  **Rules never sample, deliberately.** A profile is a *description*; a rule
+  is a *verdict*. "No duplicates" read off a sample means "none among the
+  rows I looked at" — the false clean bill of health `DQT-04` and `GATE-02`
+  exist to prevent.
+
+  **Every sampled profile says so**, carrying its strategy and limit, for the
+  same reason `UNIQUE`'s evidence carries `approximate`.
+
+  **`seed` is refused for a random sample rather than ignored.** No dialect
+  can seed one inside a single scalar subquery. With `first_n` it is accepted
+  and harmless, because that sample is already reproducible.
+
+  `docs/ROADMAP-2.0.md` had placed this in `2.0` on the grounds that it needed
+  a new store column. It did not — `metadata` already existed — so the entry
+  is corrected in place rather than quietly dropped.
+
+
 ## [1.0.3] — 2026-09-06
 
 ### Fixed

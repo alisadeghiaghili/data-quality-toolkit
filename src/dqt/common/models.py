@@ -502,34 +502,38 @@ class Rule:
 
 
 class SamplingConfig(BaseModel):
-    """How a caller asks for sampling. **Not yet honoured** (`NEW-X`).
+    """How a caller asks profiling to read a sample instead of every row.
 
-    .. warning::
+    Honoured by profiling since `1.1.0` (`NEW-Z`). **Rules never sample**,
+    and that is deliberate rather than unfinished: a profile is a
+    description, and "about 12% of ``email`` is NULL" is useful whether it
+    came from every row or from fifty thousand. A rule is a *verdict*, and
+    "``email`` has no duplicates" read off a sample means "none among the
+    rows I looked at" -- a far more reassuring claim than the evidence
+    supports.
 
-       DQT accepts this setting and currently **ignores** it. Profiling,
-       rules and cleansing all read the whole table regardless of what is
-       set here. A run configured with ``sampling`` produces a full-scan
-       answer, not a sampled one.
+    Every sampled profile records that it was sampled, so a reader never has
+    to guess which kind of number they are looking at.
 
-       This is stated rather than quietly implied because the config schema
-       is strict: an unknown key is refused, so ``sampling`` being *accepted*
-       reads as a promise that it works. It does not yet.
+    .. note::
 
-    The type stays in the public API because it is the right shape for the
-    feature and removing it would be a major-version break for a name callers
-    may already reference. `CLAUDE.md` §3 asks for the behaviour -- "honour
-    SamplingConfig; don't force a full scan when a sample answers the
-    question" -- and ``tests/unit/test_sampling_is_not_implemented.py`` fails
-    the day it lands, so this warning cannot outlive the limitation it
-    describes.
+       ``seed`` is **refused** for a random sample rather than ignored. None
+       of the three dialects can seed one inside a single scalar subquery:
+       PostgreSQL needs a separate ``setseed()``, SQLite has no seedable
+       ``RANDOM()``, and SQL Server's ``NEWID()`` takes none. A seed with
+       ``first_n`` is accepted and harmless, because that sample is already
+       reproducible.
 
     Attributes:
-        strategy: Sampling method a future release will honour.
-            ``"random"`` or ``"first_n"``. Defaults to ``"random"``.
-        limit: Maximum rows to sample. Must be a positive integer. Defaults
-            to ``10_000``.
-        seed: Optional seed, for a reproducible sample. Meaningful only when
-            *strategy* is ``"random"``.
+        strategy: ``"random"`` sorts before taking rows, which costs a sort
+            but is representative; ``"first_n"`` stops early, which is cheap
+            and biased toward whatever the table's physical order is.
+            Defaults to ``"random"``.
+        limit: Maximum rows to read. Must be a positive integer. A limit
+            above the table's size reads the whole table, which is not an
+            error. Defaults to ``10_000``.
+        seed: Refused for a random sample, harmless for ``first_n``. See the
+            note above.
 
     Example::
 

@@ -88,25 +88,35 @@ Cost today is bounded: a local SQLite file, a short-lived process. It stops
 being bounded the moment the FastAPI surface is served for real, because that
 opens one per request.
 
-### 1.3 The pipeline reads the whole database, and the one knob for that is ignored
+### 1.3 ~~Sampling~~ — **done in `1.1.0`, and this entry was wrong**
 
-**Verified:** `sampling` appears nowhere under `src/dqt/` outside the model
-that defines it. `NEW-X` corrected the docstring; the feature is still absent.
+**What this section originally said:** that honouring `SamplingConfig`
+belonged in `2.0`, because every consumer of a metric has to be able to tell a
+sampled number from a full-scan one, and making existing stored rows
+implicitly "unsampled" would need a store column that old rows do not have.
 
-**Why it is 2.0.** Honouring it is *additive* and could ship in `1.1` — but
-doing it properly is not. A sampled run produces **different numbers** from a
-full run, and every consumer of a `DQMetric` has to be able to tell which it
-is looking at. That means `DQMetric` grows a field saying so, exactly as
-`UNIQUE`'s evidence carries `approximate`.
+**Why it was wrong.** `DQMetric.metadata` and the `run_metrics.metadata`
+column already exist, with a `DEFAULT '{}'`. There was already somewhere to
+record it, and rows written before the feature read correctly as unsampled
+rather than contradicting it. No schema change, therefore no forced deletion
+of history, therefore a **minor**.
 
-Adding a field to a frozen dataclass is additive. **Making every existing
-stored metric implicitly "unsampled" is the part that is not**, because the
-store has rows with no such column and a trend chart would silently compare a
-sampled run against a full one.
+Shipped as `1.1.0` (`NEW-Z`). Two decisions from it are worth keeping here
+because they will come up again:
 
-That is the same class of error as comparing across DQT versions, which
-`NEW-S` already added a column to warn about. The precedent argues for doing
-this once, properly, in a major.
+* **Rules never sample.** A profile is a description; a rule is a verdict.
+  "No duplicates" read off a sample means "none among the rows I looked at",
+  which is the false-clean-bill-of-health failure `DQT-04` and `GATE-02` both
+  exist to prevent. Sampling a verdict would reintroduce it by design.
+* **`seed` is refused, not ignored.** No dialect can seed a random sample
+  inside one scalar subquery. Accepting the parameter and producing an
+  unseeded sample is the exact failure this whole area was cleaning up.
+
+**The lesson, kept deliberately.** This document argued from memory of the
+schema rather than from reading it, and reached a wrong conclusion that would
+have deferred a useful feature by a major version. The closing section already
+says the roadmap reasons from code rather than usage; it should also have said
+that reasoning from code means *checking* the code.
 
 ### 1.4 `monitor()` is the identity function, and Monitoring is a named facet
 

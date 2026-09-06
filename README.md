@@ -219,15 +219,28 @@ issue's evidence carries `approximate`**, so a reader never has to guess which
 kind of number they are looking at — an estimate and an exact count are
 different claims.
 
-## Known limitation: sampling is not honoured
+## Sampling
 
-`SamplingConfig` and the `sampling` config key are accepted and **currently
-ignored**. Profiling, rules and cleansing read the whole table regardless.
+Profiling can read a sample instead of the whole table:
 
-This is called out rather than left implicit because the config schema is
-strict — an unknown key is refused, so a key being *accepted* reads as a
-promise that it works. It does not yet. Implementing it is the first item of
-the roadmap toward `2.0`.
+```yaml
+sampling:
+  strategy: first_n   # or: random
+  limit: 50000
+```
+
+**Rules never sample, and that is deliberate.** A profile is a *description* —
+"about 12% of `email` is NULL" is useful whether it came from every row or
+from fifty thousand, and the profile records which. A rule is a *verdict*, and
+"`email` has no duplicates" read off a sample means "none among the rows I
+looked at", which is a far more reassuring claim than the evidence supports.
+
+Every sampled profile carries the strategy and limit it was taken with, so a
+reader never has to guess which kind of number they are looking at.
+
+`seed` is **refused** for a random sample rather than quietly ignored: none of
+the three engines can seed one inside a single subquery. With `first_n` it is
+accepted and harmless, because that sample is already reproducible.
 
 ## Exit codes
 

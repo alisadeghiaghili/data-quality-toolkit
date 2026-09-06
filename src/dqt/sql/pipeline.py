@@ -280,7 +280,10 @@ class DQTPipeline:
             tables   = pipeline.discover_schema()
             profiles = pipeline.profile_data(tables)
         """
-        profiler = SqlProfiler(self._connection_config)
+        # The config key is the promise, not the profiler's parameter: a
+        # profiler that samples correctly while nothing asks it to leaves
+        # `sampling` as ignored as it was before it was implemented.
+        profiler = SqlProfiler(self._connection_config, sampling=self._pipeline_config.sampling)
         return profiler.profile_tables(tables)
 
     def run_diagnostics(
@@ -481,7 +484,7 @@ class DQTPipeline:
             (``status`` set to ``"partial"``; caller updates to ``"success"``
             after remaining stages).
         """
-        profiler = SqlProfiler(self._connection_config)
+        profiler = SqlProfiler(self._connection_config, sampling=self._pipeline_config.sampling)
         profile_metrics = profiler.build_metrics(profiled_tables, run_id=run_id)
 
         table_results: dict[str, TableResult] = {}
