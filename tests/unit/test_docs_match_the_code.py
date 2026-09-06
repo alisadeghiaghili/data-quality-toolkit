@@ -174,6 +174,30 @@ class TestStartHereDescribesThisRelease:
         assert "pre-alpha" not in start_here.lower()
 
 
+class TestTheNormativeDocumentStatesTheCurrentVersion:
+    """`docs/CONVENTIONS-DQT.md` outranks most of the set, so it is read as law.
+
+    Its own header says the code wins where the two disagree, which is the
+    right rule and is exactly why a stale version line in that header is
+    worse here than elsewhere: a reader who trusts the ranking has no reason
+    to check the number against anything.
+
+    The "Statuses verified" date beside it is deliberately **not** asserted
+    on. It records when the document's status markers were last checked
+    against the tree, and moving it without redoing that check would convert
+    an honest record of staleness into a false claim of freshness -- the
+    precise failure `docs/HONESTY-GATE.md` exists to prevent.
+    """
+
+    def test_it_states_the_current_version(self) -> None:
+        """It carried "0.1.0 (pre-alpha)" while the tree was at `1.1.0`."""
+        conventions = (_ROOT / "docs" / "CONVENTIONS-DQT.md").read_text(encoding="utf-8")
+
+        assert f"**Version:** {dqt.__version__}" in conventions, (
+            f"docs/CONVENTIONS-DQT.md does not state version {dqt.__version__}."
+        )
+
+
 class TestTheMaturityClaimMatchesTheVersion:
     """``Development Status`` is what PyPI shows before anyone reads a word."""
 
