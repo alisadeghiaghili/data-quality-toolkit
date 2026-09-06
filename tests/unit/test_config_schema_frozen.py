@@ -25,8 +25,10 @@ from __future__ import annotations
 import pytest
 
 from dqt.common.models import (
+    ClassificationConfig,
     ConnectionConfig,
     DQPipelineConfig,
+    ProfilingConfig,
     RuleConfig,
     RuleScope,
     SamplingConfig,
@@ -44,15 +46,24 @@ FROZEN_CONFIG_SCHEMA: dict[str, set[str]] = {
         "include_tables",
         "exclude_tables",
         "sampling",
+        # Added 2026-09-07 for F1 and F10. Both are additive and optional --
+        # a config file written before them parses unchanged and behaves
+        # identically, which is what makes them a minor rather than a break.
+        "profiling",
+        "classification",
         "metric_thresholds",
         "rule_files",
     },
     "SamplingConfig": {"strategy", "limit", "seed"},
+    "ProfilingConfig": {"distinct_counts", "approximate_distinct"},
+    "ClassificationConfig": {"enabled", "sample_size", "persian_normalization"},
     "RuleConfig": {"name", "dimension", "severity", "scope", "expression", "params"},
     "RuleScope": {"schema_pattern", "table_pattern", "column_pattern"},
 }
 
 _MODELS = {
+    "ProfilingConfig": ProfilingConfig,
+    "ClassificationConfig": ClassificationConfig,
     "ConnectionConfig": ConnectionConfig,
     "DQPipelineConfig": DQPipelineConfig,
     "SamplingConfig": SamplingConfig,

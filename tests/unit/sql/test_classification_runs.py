@@ -258,6 +258,14 @@ def _traced_run(
     Taken from SQLite's own trace callback rather than from inside DQT, so a
     query issued by a route the test did not anticipate is still counted.
 
+    Every module that opens connections is patched, not just one. Each does
+    ``from dqt.sql._connect import get_connection``, which binds the name at
+    import time -- so patching the source module alone changes nothing the
+    pipeline calls, and the trace silently attaches to no connection at all.
+    That is worse than a broken test: an assertion that *no* value-reading
+    query ran passes trivially when no query was recorded. The empty-trace
+    guard below is what makes that impossible to miss again.
+
     Args:
         db_file: The seeded database.
         tmp_path: Where the store and report go.
@@ -269,10 +277,22 @@ def _traced_run(
     Example:
         assert len(_traced_run(path, tmp, None)) >= 1
     """
-    import dqt.sql._connect as connect_module
+    import dqt.sql.pipeline as pipeline_module
+    import dqt.sql.profiling as profiling_module
+    import dqt.sql.rules as rules_module
+    import dqt.sql.schema_discovery as discovery_module
+    import dqt.sql.semantic_typing as semantic_typing_module
+    from dqt.sql._connect import get_connection as real_connect
+
+    patched = [
+        pipeline_module,
+        profiling_module,
+        rules_module,
+        discovery_module,
+        semantic_typing_module,
+    ]
 
     statements: list[str] = []
-    real_connect = connect_module.get_connection
 
     def traced(*args: object, **kwargs: object) -> object:
         connection = real_connect(*args, **kwargs)  # type: ignore[arg-type]
@@ -283,7 +303,10 @@ def _traced_run(
     if classification is not None:
         config = DQPipelineConfig(connection_id="s", classification=classification)
 
-    connect_module.get_connection = traced  # type: ignore[assignment]
+    originals = {m: getattr(m, "get_connection", None) for m in patched}
+    for module in patched:
+        if originals[module] is not None:
+            module.get_connection = traced  # type: ignore[attr-defined]
     try:
         DQTPipeline(
             ConnectionConfig(id="s", dsn=f"sqlite:///{db_file}"),
@@ -292,6 +315,93 @@ def _traced_run(
             report_dir=tmp_path,
         ).run()
     finally:
-        connect_module.get_connection = real_connect  # type: ignore[assignment]
+        for module, original in originals.items():
+            if original is not None:
+                module.get_connection = original  # type: ignore[attr-defined]
 
-    return [s for s in statements if s.strip().upper().startswith("SELECT")]
+    selects = [s for s in statements if s.strip().upper().startswith("SELECT")]
+
+    assert selects, (
+        "the trace recorded no SELECT at all, so any assertion about which "
+        "queries ran would pass without meaning anything"
+    )
+    return selects
+
+
+class TestTheReportShowsTheTypes:
+    """A semantic type nobody sees is the state `F10` was already in."""
+
+    def test_the_database_type_is_a_column_in_the_report(
+        self, make_sqlite_db: Callable[[str, str], Path], tmp_path: Path
+    ) -> None:
+        """It was never shown, which is partly why the defect survived.
+
+        ``db_type`` held the string ``"ColumnProfile"`` on every column for
+        as long as it existed, and nothing rendered it -- so nobody read the
+        wrong value and nobody reported it.
+        """
+        html = _report(make_sqlite_db, tmp_path, "report-type.db", None)
+
+        assert "Type" in html
+        assert ">TEXT<" in html.upper()
+
+    def test_a_recognised_column_says_what_it_is(
+        self, make_sqlite_db: Callable[[str, str], Path], tmp_path: Path
+    ) -> None:
+        """The payoff of the facet, in the artifact a DBA is sent.
+
+        "This ten-character text column is a national ID" is the sentence a
+        generic profiler cannot produce.
+        """
+        html = _report(
+            make_sqlite_db, tmp_path, "report-sem.db", ClassificationConfig(enabled=True)
+        )
+
+        assert "iranian_national_id" in html
+        assert "email" in html
+
+    def test_an_unclassified_run_shows_no_semantic_claim(
+        self, make_sqlite_db: Callable[[str, str], Path], tmp_path: Path
+    ) -> None:
+        """With classification off, the cell must not invent one.
+
+        ``n/a`` is reused here for the same reason the statistic cells use
+        it: the column was not examined, and a blank would read as a finding.
+        """
+        html = _report(make_sqlite_db, tmp_path, "report-nosem.db", None)
+
+        assert "iranian_national_id" not in html
+        assert "n/a" in html
+
+
+def _report(
+    make_sqlite_db: Callable[[str, str], Path],
+    tmp_path: Path,
+    name: str,
+    classification: ClassificationConfig | None,
+) -> str:
+    """Run the pipeline and return the rendered HTML report.
+
+    Args:
+        make_sqlite_db: Factory fixture building a SQLite file.
+        tmp_path: pytest's per-test directory.
+        name: Distinct database filename.
+        classification: Settings, or None for the defaults.
+
+    Returns:
+        The report's HTML.
+
+    Example:
+        assert "Type" in _report(make_sqlite_db, tmp_path, "a.db", None)
+    """
+    db_file = make_sqlite_db(name, SEEDED)
+    config = DQPipelineConfig(connection_id="s")
+    if classification is not None:
+        config = DQPipelineConfig(connection_id="s", classification=classification)
+    _, report_path = DQTPipeline(
+        ConnectionConfig(id="s", dsn=f"sqlite:///{db_file}"),
+        config,
+        store_path=tmp_path / "runs.db",
+        report_dir=tmp_path,
+    ).run()
+    return Path(str(report_path)).read_text(encoding="utf-8")

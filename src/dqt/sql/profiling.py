@@ -49,6 +49,9 @@ class ColumnProfile:
         column_name: Column name.
         null_count: Number of NULL values in the column.
         row_count: Number of rows in the table.
+        data_type: The column's declared database type, carried through from
+            schema discovery. Consumers report this as the column's type; the
+            profiler's own class name is not it.
         min_value: Smallest value present, or ``None`` when the column holds
             no values or its type does not order.
         max_value: Largest value present, on the same terms.
@@ -78,6 +81,7 @@ class ColumnProfile:
     column_name: str
     null_count: int
     row_count: int
+    data_type: str = ""
     min_value: Any = None
     max_value: Any = None
     mean_value: float | None = None
@@ -170,6 +174,7 @@ class _ColumnPlan:
             column_name=self.column.column_name,
             null_count=row_count - int(row[self.non_null]),
             row_count=row_count,
+            data_type=self.column.data_type,
             min_value=None if self.minimum is None else row[self.minimum],
             max_value=None if self.maximum is None else row[self.maximum],
             mean_value=mean,

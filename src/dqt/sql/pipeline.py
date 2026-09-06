@@ -50,6 +50,7 @@ from dqt.common.models import (
     TableResult,
 )
 from dqt.common.storage import RunStore
+from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.diagnostics import DQDiagnostics
 from dqt.sql.metrics import compute_run_metrics
 from dqt.sql.monitoring import monitor
@@ -57,6 +58,7 @@ from dqt.sql.profiling import SqlProfiler, TableProfile
 from dqt.sql.reports import generate_html_report
 from dqt.sql.rules import apply_rules as _apply_rules_engine
 from dqt.sql.schema_discovery import DiscoveredTable, discover_schema
+from dqt.sql.semantic_typing import classify_table
 
 
 class DQTPipeline:
@@ -283,7 +285,11 @@ class DQTPipeline:
         # The config key is the promise, not the profiler's parameter: a
         # profiler that samples correctly while nothing asks it to leaves
         # `sampling` as ignored as it was before it was implemented.
-        profiler = SqlProfiler(self._connection_config, sampling=self._pipeline_config.sampling)
+        profiler = SqlProfiler(
+            self._connection_config,
+            sampling=self._pipeline_config.sampling,
+            profiling=self._pipeline_config.profiling,
+        )
         return profiler.profile_tables(tables)
 
     def run_diagnostics(
@@ -458,6 +464,49 @@ class DQTPipeline:
             filtered.append(table)
         return filtered
 
+    def classify_columns(
+        self, profiled_tables: list[TableProfile]
+    ) -> dict[tuple[str, str, str], str]:
+        """Infer a semantic type per column, when classification is enabled.
+
+        Returns an empty mapping when it is not, and issues no query in that
+        case -- which is the point. This is the only stage that reads real
+        values rather than aggregates, so "disabled" has to mean nothing was
+        read, not that something was read and discarded.
+
+        One bounded query per table, reusing a single connection across all
+        of them.
+
+        Args:
+            profiled_tables: Tables already profiled, reused here so the
+                stage does not rediscover the schema.
+
+        Returns:
+            ``(schema, table, column)`` to semantic type. A column that was
+            examined and matched nothing maps to ``"unknown"``; a column that
+            was never examined is absent, and reads back as ``None``.
+
+        Example:
+            types = pipeline.classify_columns(profiles)
+        """
+        config = self._pipeline_config.classification
+        if config is None or not config.enabled:
+            return {}
+
+        dialect = get_dialect_for(self._connection_config)
+        found: dict[tuple[str, str, str], str] = {}
+        connection = get_connection(self._connection_config)
+        try:
+            for table in self.discover_schema():
+                results = classify_table(connection, dialect, table, config)
+                for column_name, result in results.items():
+                    found[(table.schema_name, table.table_name, column_name)] = str(
+                        result.semantic_type
+                    )
+        finally:
+            connection.close()
+        return found
+
     def _build_result(
         self,
         run_id: str,
@@ -484,8 +533,13 @@ class DQTPipeline:
             (``status`` set to ``"partial"``; caller updates to ``"success"``
             after remaining stages).
         """
-        profiler = SqlProfiler(self._connection_config, sampling=self._pipeline_config.sampling)
+        profiler = SqlProfiler(
+            self._connection_config,
+            sampling=self._pipeline_config.sampling,
+            profiling=self._pipeline_config.profiling,
+        )
         profile_metrics = profiler.build_metrics(profiled_tables, run_id=run_id)
+        semantic_types = self.classify_columns(profiled_tables)
 
         table_results: dict[str, TableResult] = {}
         schema_tables: dict[str, list[str]] = {}
@@ -515,8 +569,14 @@ class DQTPipeline:
                         schema_name=column_profile.schema_name,
                         table_name=column_profile.table_name,
                         column_name=column_profile.column_name,
-                        db_type=column_profile.__class__.__name__,
-                        semantic_type=None,
+                        db_type=column_profile.data_type,
+                        semantic_type=semantic_types.get(
+                            (
+                                column_profile.schema_name,
+                                column_profile.table_name,
+                                column_profile.column_name,
+                            )
+                        ),
                         metrics=column_metrics,
                         issues=column_issues,
                     )
