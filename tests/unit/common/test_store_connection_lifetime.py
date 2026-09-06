@@ -108,6 +108,29 @@ class _WatchedConnection:
         """
         return getattr(self._inner, name)
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Forward attribute writes to the wrapped connection.
+
+        Without this, ``conn.row_factory = sqlite3.Row`` lands on the wrapper
+        and the real connection keeps returning tuples -- so the store reads
+        rows it cannot turn into dicts, and the test fails for a reason that
+        has nothing to do with the code under test.
+
+        Args:
+            name: Attribute name.
+            value: Value to set.
+
+        Returns:
+            None.
+
+        Example:
+            watched.row_factory = sqlite3.Row
+        """
+        if name in {"_inner", "closed"}:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._inner, name, value)
+
 
 @pytest.fixture
 def watched_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:

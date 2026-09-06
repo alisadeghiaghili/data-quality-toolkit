@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -123,12 +125,51 @@ class RunStore:
     # ------------------------------------------------------------------
 
     def _connect(self) -> sqlite3.Connection:
-        """Open and return a new SQLite connection with sensible defaults."""
+        """Open and return a new SQLite connection with sensible defaults.
+
+        Prefer :meth:`_transaction`, which closes what it opens. This is the
+        raw open, kept separate so the closing policy lives in exactly one
+        place.
+
+        Returns:
+            A connection with row access by name and foreign keys enforced.
+
+        Example:
+            connection = store._connect()
+        """
         conn = sqlite3.connect(str(self._db_path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
         return conn
+
+    @contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        """Open a connection, run a transaction in it, and close it (`NEW-T`).
+
+        Every method used ``with self._transaction() as conn:``. In ``sqlite3``
+        that context manager is a **transaction**, not a close -- it commits
+        or rolls back and leaves the connection open -- so each call leaked
+        one until garbage collection.
+
+        **The order is the whole point.** The inner ``with conn`` ends first,
+        committing on success or rolling back on an exception, and only then
+        does ``finally`` close. Reversing those would close before the commit
+        and lose the write silently.
+
+        Yields:
+            The open connection, inside a transaction.
+
+        Example:
+            with store._transaction() as conn:
+                conn.execute("SELECT 1")
+        """
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------
     # Schema management
@@ -159,7 +200,7 @@ class RunStore:
         if not self._db_path.exists():
             return
 
-        with self._connect() as conn:
+        with self._transaction() as conn:
             found = int(conn.execute("PRAGMA user_version").fetchone()[0])
 
         if found == SCHEMA_VERSION:
@@ -330,7 +371,7 @@ class RunStore:
                 ON cleansing_log(plan_id);
             """,
         ]
-        with self._connect() as conn:
+        with self._transaction() as conn:
             for stmt in ddl:
                 conn.execute(stmt)
             # Stamped last, so a file only claims this version once every
@@ -360,7 +401,7 @@ class RunStore:
 
             store.save_run(pipeline_result)
         """
-        with self._connect() as conn:
+        with self._transaction() as conn:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO runs
@@ -457,7 +498,7 @@ class RunStore:
         Example:
             scores = store.average_score_by_dimension("run-001")
         """
-        with self._connect() as conn:
+        with self._transaction() as conn:
             rows = conn.execute(
                 """
                 SELECT dimension, AVG(score) AS mean_score
@@ -489,7 +530,7 @@ class RunStore:
             raise ValueError(
                 f"Issues can only be grouped by severity or dimension; got {column!r}."
             )
-        with self._connect() as conn:
+        with self._transaction() as conn:
             rows = conn.execute(
                 f"""
                 SELECT {column} AS grouping_value, COUNT(*) AS issue_count
@@ -515,7 +556,7 @@ class RunStore:
         Example:
             summaries = store.load_rule_results("run-001")
         """
-        with self._connect() as conn:
+        with self._transaction() as conn:
             rows = conn.execute(
                 """
                 SELECT run_id, rule_name, targets_checked, targets_failed, targets_error
@@ -541,7 +582,7 @@ class RunStore:
         Example:
             history = store.load_rule_history("not-null-email")
         """
-        with self._connect() as conn:
+        with self._transaction() as conn:
             rows = conn.execute(
                 """
                 SELECT r.run_id, r.rule_name, r.targets_checked, r.targets_failed,
@@ -600,7 +641,7 @@ class RunStore:
             LIMIT ?
         """
         params.append(limit)
-        with self._connect() as conn:
+        with self._transaction() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
@@ -643,7 +684,7 @@ class RunStore:
             {where}
             ORDER BY schema_name, table_name, column_name, dimension
         """
-        with self._connect() as conn:
+        with self._transaction() as conn:
             rows = conn.execute(sql, params).fetchall()
         result = []
         for r in rows:
@@ -692,7 +733,7 @@ class RunStore:
             {where}
             ORDER BY severity DESC, table_name, column_name
         """
-        with self._connect() as conn:
+        with self._transaction() as conn:
             rows = conn.execute(sql, params).fetchall()
         result = []
         for r in rows:
@@ -721,7 +762,7 @@ class RunStore:
         Example:
             store.save_cleansing_plan(plan)
         """
-        with self._connect() as conn:
+        with self._transaction() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO cleansing_plans
@@ -753,7 +794,7 @@ class RunStore:
         Example:
             plan = store.load_cleansing_plan("plan-abc")
         """
-        with self._connect() as conn:
+        with self._transaction() as conn:
             row = conn.execute(
                 "SELECT * FROM cleansing_plans WHERE plan_id = ?", (plan_id,)
             ).fetchone()
@@ -788,7 +829,7 @@ class RunStore:
         Example:
             store.save_cleansing_log(plan.plan_id, plan.changes, applied_at)
         """
-        with self._connect() as conn:
+        with self._transaction() as conn:
             conn.executemany(
                 """
                 INSERT INTO cleansing_log
@@ -829,7 +870,7 @@ class RunStore:
         Example:
             entries = store.load_cleansing_log("plan-abc")
         """
-        with self._connect() as conn:
+        with self._transaction() as conn:
             rows = conn.execute(
                 "SELECT * FROM cleansing_log WHERE plan_id = ? ORDER BY id", (plan_id,)
             ).fetchall()
@@ -856,7 +897,7 @@ class RunStore:
         Example:
             store.mark_cleansing_plan_applied(plan.plan_id, applied_at)
         """
-        with self._connect() as conn:
+        with self._transaction() as conn:
             conn.execute(
                 "UPDATE cleansing_plans SET applied_at = ? WHERE plan_id = ?",
                 (applied_at.isoformat(), plan_id),

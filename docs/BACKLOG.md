@@ -270,7 +270,7 @@ inside DQT.
 
 ---
 
-### `NEW-T` · `RunStore` never closes its connections
+### `NEW-T` · `RunStore` never closes its connections — **fixed**
 
 Every method opens one with `with self._connect() as conn:`. In `sqlite3` that
 context manager is a **transaction**, not a close — it commits or rolls back
@@ -291,6 +291,12 @@ edit inside a schema change.
 Cost today is bounded — the store is a local SQLite file and the process is
 short-lived — but a long-running consumer of `dqt.ui.api` (which is exactly
 what the dashboard in `docs/PLAN-VIZ-UI.md` will be) opens one per request.
+
+**Fixed 2026-09-06** by `RunStore._transaction()`, a context manager that owns
+both the transaction and the close, in that order: the inner `with conn`
+commits or rolls back, and only then does `finally` close. All sixteen call
+sites go through it. The suite's `ResourceWarning` count went from 404 to
+**zero**.
 
 ---
 
