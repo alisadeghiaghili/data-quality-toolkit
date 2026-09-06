@@ -15,7 +15,7 @@ ignored ``ConnectionConfig.read_only`` entirely.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dqt.common.models import ConnectionConfig
 from dqt.sql._connect import get_connection, get_dialect_for
@@ -56,6 +56,47 @@ class DiscoveredColumn:
 
 
 @dataclass(slots=True)
+class DiscoveredForeignKey:
+    """One foreign-key constraint, as a whole rather than column by column.
+
+    A composite key is **one** of these with several columns, not several
+    with one each. SQLite reports it as several ``PRAGMA`` rows sharing an
+    id, and reading those as independent keys would compare each column
+    against one parent column alone -- calling a row matched when only half
+    of it matches.
+
+    Attributes:
+        schema_name: Schema of the referencing table.
+        table_name: The referencing (child) table.
+        columns: The referencing columns, in key order.
+        referenced_schema: Schema of the referenced table.
+        referenced_table: The referenced (parent) table.
+        referenced_columns: The referenced columns, in the same order as
+            *columns*. Position ``i`` of one corresponds to position ``i`` of
+            the other.
+        constraint_name: The constraint's name where the engine reports one.
+
+    Example:
+        key = DiscoveredForeignKey(
+            schema_name="main",
+            table_name="orders",
+            columns=("customer_id",),
+            referenced_schema="main",
+            referenced_table="customers",
+            referenced_columns=("id",),
+        )
+    """
+
+    schema_name: str
+    table_name: str
+    columns: tuple[str, ...]
+    referenced_schema: str
+    referenced_table: str
+    referenced_columns: tuple[str, ...]
+    constraint_name: str = ""
+
+
+@dataclass(slots=True)
 class DiscoveredTable:
     """Metadata for one discovered database table.
 
@@ -75,6 +116,7 @@ class DiscoveredTable:
     schema_name: str
     table_name: str
     columns: list[DiscoveredColumn]
+    foreign_keys: list[DiscoveredForeignKey] = field(default_factory=list)
 
 
 def discover_schema(connection_config: ConnectionConfig) -> list[DiscoveredTable]:
