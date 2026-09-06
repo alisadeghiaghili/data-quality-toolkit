@@ -65,9 +65,17 @@ SEEDED = """
 def _recorded_selects(db_file: Path) -> list[str]:
     """Profile *db_file* and return every SELECT the profiler issued.
 
-    Patching ``sqlite3.Connection.execute`` rather than counting inside DQT
-    keeps the measurement outside the code under test: an implementation
-    cannot satisfy it by reporting a number it chose itself.
+    The count is taken from SQLite itself, through
+    ``Connection.set_trace_callback``, which reports every statement the
+    engine actually runs. That keeps the measurement outside the code under
+    test twice over: DQT cannot satisfy it by reporting a number it chose,
+    and the test cannot miss a query issued by a route it did not think to
+    patch.
+
+    ``sqlite3.Connection`` is immutable from Python 3.13, so replacing its
+    ``execute`` method -- the obvious approach, and the first one tried --
+    raises ``TypeError``. The trace callback is the supported seam and is a
+    better measurement regardless.
 
     Args:
         db_file: The SQLite file to profile.
@@ -78,23 +86,24 @@ def _recorded_selects(db_file: Path) -> list[str]:
     Example:
         assert len(_recorded_selects(path)) == 1
     """
-    import sqlite3
+    from dqt.sql import profiling as profiling_module
 
     config = ConnectionConfig(id="s", dsn=f"sqlite:///{db_file}")
     tables = discover_schema(config)
 
     statements: list[str] = []
-    original = sqlite3.Connection.execute
+    real_get_connection = profiling_module.get_connection
 
-    def recording(self: object, sql: str, *args: object) -> object:
-        statements.append(sql)
-        return original(self, sql, *args)  # type: ignore[arg-type]
+    def traced(*args: object, **kwargs: object) -> object:
+        connection = real_get_connection(*args, **kwargs)  # type: ignore[arg-type]
+        connection.set_trace_callback(statements.append)
+        return connection
 
-    sqlite3.Connection.execute = recording  # type: ignore[method-assign]
+    profiling_module.get_connection = traced  # type: ignore[assignment]
     try:
         SqlProfiler(config).profile_tables(tables)
     finally:
-        sqlite3.Connection.execute = original  # type: ignore[method-assign]
+        profiling_module.get_connection = real_get_connection  # type: ignore[assignment]
 
     return [s for s in statements if s.strip().upper().startswith("SELECT")]
 

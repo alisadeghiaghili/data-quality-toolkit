@@ -1,23 +1,31 @@
 """
-Basic SQL profiling for DQT.
+SQL profiling for DQT.
 
-This module provides minimal SQL-first profiling focused on row counts and
-column null counts. It is intentionally small and DBA-oriented, forming the
-first usable slice of the larger profiling roadmap.
+Computes, per table:
 
-Current implementation:
-- Table row counts.
-- Column null counts.
-- Column completeness scores derived from null counts.
+- The row count.
+- Per column: NULL count, minimum, maximum, mean, and distinct count.
 
-Query cost, stated plainly. Profiling currently issues one row-count query per
-table plus one null-count query per column, so a table with N columns costs
-N + 1 round trips and N + 1 scans. That is unchanged by `DQT-08`, which only
-moved where the SQL is built: every statement now comes from
-``dialect.select_aggregates_sql``, which takes a *sequence* of expressions.
-Folding the N + 1 statements into one aggregate query per table is therefore a
-change to this module alone, needing nothing from the dialect layer. That work
-belongs to the performance unit, not here.
+Query cost, stated plainly. **One aggregate query per table**, whatever the
+column count and whatever the statistics asked for. A hundred-column table
+producing five statistics each is one ``SELECT`` carrying roughly five
+hundred aggregate expressions over a single scan -- not five hundred scans,
+which is what the arithmetic looks like if each statistic fetches itself.
+`AGENTS.md` "Performance rules" requires this, and
+``tests/unit/sql/test_column_statistics.py`` counts the statements SQLite
+actually executes, because a per-column implementation returns identical
+numbers and only the clock would tell.
+
+Two statistics are conditional, for different reasons:
+
+- ``MIN``/``MAX``/``AVG`` are asked for only where the column's type
+  supports them, and the **dialect** decides that. ``AVG`` over text is not
+  a harmless no-op -- PostgreSQL raises, SQLite silently answers ``0.0`` --
+  and a reported mean of zero cannot be told from a column that genuinely
+  averages zero.
+- ``COUNT(DISTINCT ...)`` holds every distinct value it sees, so it is the
+  one statistic that can cost real memory server-side. It is on by default
+  and can be declined through :class:`~dqt.common.models.ProfilingConfig`.
 """
 
 from __future__ import annotations
@@ -106,6 +114,68 @@ class TableProfile:
     row_count: int
     columns: list[ColumnProfile]
     sampling: dict[str, object] | None = None
+
+
+@dataclass(slots=True)
+class _ColumnPlan:
+    """Where one column's statistics sit in the shared aggregate row.
+
+    Every column contributes a variable number of expressions to a single
+    ``SELECT`` -- a text column has no mean, a declined distinct count has no
+    slot -- so the mapping from column to result position cannot be computed
+    from the column's index. It is recorded while the query is built and read
+    back afterwards.
+
+    Attributes:
+        column: The discovered column this plan describes.
+        non_null: Position of its ``COUNT(col)``.
+        minimum: Position of its ``MIN``, or None when the type does not order.
+        maximum: Position of its ``MAX``, or None on the same terms.
+        mean: Position of its ``AVG``, or None when the type is not numeric.
+        distinct: Position of its distinct count, or None when declined.
+        distinct_is_approximate: Whether the distinct expression was the
+            dialect's estimator. Recorded from what was *built*, not what was
+            asked for.
+
+    Example:
+        plan = _ColumnPlan(column, non_null=1)
+    """
+
+    column: Any
+    non_null: int
+    minimum: int | None = None
+    maximum: int | None = None
+    mean: int | None = None
+    distinct: int | None = None
+    distinct_is_approximate: bool = False
+
+    def read(self, row: Any, row_count: int) -> ColumnProfile:
+        """Build this column's profile from the shared aggregate row.
+
+        Args:
+            row: The single row the aggregate query returned.
+            row_count: ``COUNT(*)`` for the table or sample.
+
+        Returns:
+            The column's :class:`ColumnProfile`.
+
+        Example:
+            profile = plan.read(row, row_count)
+        """
+        mean = None if self.mean is None or row[self.mean] is None else float(row[self.mean])
+        distinct = None if self.distinct is None else int(row[self.distinct])
+        return ColumnProfile(
+            schema_name=self.column.schema_name,
+            table_name=self.column.table_name,
+            column_name=self.column.column_name,
+            null_count=row_count - int(row[self.non_null]),
+            row_count=row_count,
+            min_value=None if self.minimum is None else row[self.minimum],
+            max_value=None if self.maximum is None else row[self.maximum],
+            mean_value=mean,
+            distinct_count=distinct,
+            distinct_is_approximate=self.distinct_is_approximate,
+        )
 
 
 class SqlProfiler:
@@ -216,6 +286,55 @@ class SqlProfiler:
                 )
         return metrics
 
+    def _plan_column(self, column: Any, expressions: list[str]) -> _ColumnPlan:
+        """Append one column's aggregate expressions and record where they land.
+
+        Appending into the caller's list is what keeps this a single query:
+        every column's statistics join the same ``SELECT`` rather than
+        earning one of their own.
+
+        Which statistics are asked for depends on the column's type, and the
+        dialect decides that. ``AVG`` over text is not a harmless no-op --
+        PostgreSQL raises and SQLite answers ``0.0`` -- so an ungated
+        profiler either crashes or reports a wrong mean.
+
+        Args:
+            column: The discovered column to profile.
+            expressions: The aggregate list being built, appended to in place.
+
+        Returns:
+            The :class:`_ColumnPlan` recording each statistic's position.
+
+        Example:
+            plan = profiler._plan_column(column, expressions)
+        """
+        quoted = self._dialect.quote_identifier(column.column_name)
+        plan = _ColumnPlan(column=column, non_null=len(expressions))
+        expressions.append(f"COUNT({quoted})")
+
+        if self._dialect.supports_min_max(column.data_type):
+            plan.minimum = len(expressions)
+            expressions.append(f"MIN({quoted})")
+            plan.maximum = len(expressions)
+            expressions.append(f"MAX({quoted})")
+
+        if self._dialect.supports_mean(column.data_type):
+            plan.mean = len(expressions)
+            expressions.append(f"AVG({quoted})")
+
+        if self._profiling.distinct_counts:
+            estimated = None
+            if self._profiling.approximate_distinct:
+                estimated = self._dialect.approximate_distinct_expression(quoted)
+            # Set from the expression that was actually built. Setting it from
+            # the request would report an exact count as an estimate on every
+            # engine that has no estimator to offer.
+            plan.distinct_is_approximate = estimated is not None
+            plan.distinct = len(expressions)
+            expressions.append(estimated or f"COUNT(DISTINCT {quoted})")
+
+        return plan
+
     def _profile_table(self, conn: Any, table: DiscoveredTable) -> TableProfile:
         """Profile one table with a single aggregate query.
 
@@ -239,10 +358,8 @@ class SqlProfiler:
             profile = profiler._profile_table(conn, table)
         """
         table_ref = self._dialect.qualified_identifier(table.schema_name, table.table_name)
-        expressions = ["COUNT(*)"] + [
-            f"COUNT({self._dialect.quote_identifier(column.column_name)})"
-            for column in table.columns
-        ]
+        expressions = ["COUNT(*)"]
+        plans = [self._plan_column(column, expressions) for column in table.columns]
         # The sample is substituted where the table name goes, so the same
         # single aggregate query runs over it. One pass either way -- what
         # changes is how many rows that pass reads.
@@ -266,16 +383,7 @@ class SqlProfiler:
         # An aggregate over an empty table returns one row of zeros rather
         # than no rows; reading it as "no result" would make row_count wrong.
         row_count = int(row[0])
-        columns = [
-            ColumnProfile(
-                schema_name=column.schema_name,
-                table_name=column.table_name,
-                column_name=column.column_name,
-                null_count=row_count - int(row[position]),
-                row_count=row_count,
-            )
-            for position, column in enumerate(table.columns, start=1)
-        ]
+        columns = [plan.read(row, row_count) for plan in plans]
         return TableProfile(
             schema_name=table.schema_name,
             table_name=table.table_name,

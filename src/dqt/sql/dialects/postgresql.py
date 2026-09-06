@@ -30,6 +30,7 @@ from dqt.sql.dialects.base import (
     ColumnMetadata,
     ReadOnlyEnforcement,
     ansi_select_aggregates_sql,
+    normalized_type_name,
     quote_with_doubled_delimiter,
     validate_row_limit,
 )
@@ -61,6 +62,53 @@ COLUMN_METADATA_SQL = """
                 WHERE c.table_schema NOT IN ('information_schema', 'pg_catalog')
                 ORDER BY c.table_schema, c.table_name, c.ordinal_position
                 """
+
+
+#: Types this dialect can average. Serial types are included because they are integers with a
+#: default attached, and a DBA profiling one wants its range.
+_NUMERIC_TYPES: frozenset[str] = frozenset(
+    {
+        "smallint",
+        "integer",
+        "int",
+        "int2",
+        "int4",
+        "int8",
+        "bigint",
+        "decimal",
+        "numeric",
+        "real",
+        "double precision",
+        "float",
+        "float4",
+        "float8",
+        "smallserial",
+        "serial",
+        "bigserial",
+        "money",
+    }
+)
+
+#: Types this dialect cannot order. The geometric types are the reason matching is by whole name:
+#: ``point`` and ``interval`` both contain the letters ``int``. ``blob`` is
+#: not a PostgreSQL type and is listed defensively -- if discovery ever
+#: reports one, refusing to order it is the safe answer.
+_UNORDERED_TYPES: frozenset[str] = frozenset(
+    {
+        "bytea",
+        "json",
+        "jsonb",
+        "xml",
+        "point",
+        "line",
+        "lseg",
+        "box",
+        "path",
+        "polygon",
+        "circle",
+        "blob",
+    }
+)
 
 
 class PostgresqlDialect:
@@ -359,12 +407,12 @@ class PostgresqlDialect:
             data_type: The column's declared type.
 
         Returns:
-            ``True`` when bounds may be asked for.
+            ``True`` unless the type is one this engine cannot order.
 
         Example:
             assert dialect.supports_min_max("integer") is True
         """
-        raise NotImplementedError
+        return normalized_type_name(data_type) not in _UNORDERED_TYPES
 
     def supports_mean(self, data_type: str) -> bool:
         """Whether ``AVG`` is meaningful over this type.
@@ -378,7 +426,7 @@ class PostgresqlDialect:
         Example:
             assert dialect.supports_mean("varchar") is False
         """
-        raise NotImplementedError
+        return normalized_type_name(data_type) in _NUMERIC_TYPES
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Report that stock PostgreSQL has no approximate distinct count.

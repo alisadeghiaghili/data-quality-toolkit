@@ -469,6 +469,30 @@ class Dialect(Protocol):
         ...
 
 
+def normalized_type_name(data_type: str) -> str:
+    """Reduce a declared type to a bare, comparable name.
+
+    ``VARCHAR(50)`` and ``numeric(10, 2)`` name the same types as ``varchar``
+    and ``numeric``; the parameters say how big, not what kind.
+
+    Matching is by **whole normalized name**, never by substring, and that is
+    a correctness requirement rather than a style choice. PostgreSQL's
+    ``point`` and ``interval`` both contain the letters ``int``, so a
+    substring test for numeric types classifies a geometric point as a
+    number and asks the database for its mean.
+
+    Args:
+        data_type: The declared type, as schema discovery reported it.
+
+    Returns:
+        Lowercased, with any parameter list and surrounding space removed.
+
+    Example:
+        assert normalized_type_name("VARCHAR(50)") == "varchar"
+    """
+    return data_type.split("(", 1)[0].strip().lower()
+
+
 def quote_with_doubled_delimiter(name: str, quote_char: str) -> str:
     """Quote *name* with a symmetric delimiter, doubling embedded occurrences.
 
