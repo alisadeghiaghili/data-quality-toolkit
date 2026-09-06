@@ -338,6 +338,42 @@ class Dialect(Protocol):
         """
         ...
 
+    def sampled_table_expression(
+        self,
+        qualified_table: str,
+        strategy: str,
+        limit: int,
+        seed: int | None,
+    ) -> str:
+        """Return a table reference that yields at most *limit* rows.
+
+        Substituted where a table name would go, so the caller's aggregates
+        run over the sample instead of the table. Aliased, because an
+        unaliased subquery is a syntax error on every dialect here.
+
+        Args:
+            qualified_table: An already-quoted table reference.
+            strategy: ``"random"`` or ``"first_n"``.
+            limit: Maximum rows the sample may contain. Must be positive.
+            seed: Requested random seed, or None.
+
+        Returns:
+            An aliased subquery usable as a table reference.
+
+        Raises:
+            ValueError: If *strategy* is unknown, if *limit* is not positive,
+                or if a *seed* is given for a random sample. No dialect here
+                can seed one inside a single scalar subquery -- PostgreSQL
+                needs a separate ``setseed()``, SQLite has no seedable
+                ``RANDOM()``, and SQL Server's ``NEWID()`` takes none -- and
+                accepting it to produce an unseeded sample is the silent
+                failure `1.0.2` had to document.
+
+        Example:
+            expression = dialect.sampled_table_expression('"t"', "first_n", 100, None)
+        """
+        ...
+
     def regex_not_matching_predicate(self, quoted_column: str, pattern: str) -> str:
         """Build a predicate selecting rows whose value fails *pattern*.
 

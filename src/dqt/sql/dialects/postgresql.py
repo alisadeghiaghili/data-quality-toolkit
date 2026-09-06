@@ -284,6 +284,47 @@ class PostgresqlDialect:
             return statement
         return f"{statement} LIMIT {limit}"
 
+    def sampled_table_expression(
+        self,
+        qualified_table: str,
+        strategy: str,
+        limit: int,
+        seed: int | None,
+    ) -> str:
+        """Return a table reference yielding at most *limit* rows.
+
+        Args:
+            qualified_table: An already-quoted table reference.
+            strategy: ``"random"`` or ``"first_n"``.
+            limit: Maximum rows. Must be positive.
+            seed: Requested random seed, or None.
+
+        Returns:
+            An aliased subquery usable as a table reference.
+
+        Raises:
+            ValueError: If the strategy is unknown, the limit is not
+                positive, or a seed is given for a random sample.
+
+        Example:
+            expression = dialect.sampled_table_expression('"t"', "first_n", 10, None)
+        """
+        if limit <= 0:
+            raise ValueError(f"A sample needs a positive limit; got {limit}.")
+        if strategy not in ("random", "first_n"):
+            raise ValueError(f"Unknown sampling strategy {strategy!r}. Use 'random' or 'first_n'.")
+        if seed is not None and strategy == "random":
+            raise ValueError(
+                "A random sample cannot take a seed on this dialect. PostgreSQL "
+                "needs a separate setseed() call, SQLite has no seedable "
+                "RANDOM(), and SQL Server's NEWID() takes none -- so honouring "
+                "the seed is impossible here and ignoring it would produce an "
+                "unseeded sample while the config said otherwise. Remove the "
+                "seed, or use strategy='first_n', which is already reproducible."
+            )
+        order = " ORDER BY RANDOM()" if strategy == "random" else ""
+        return f"(SELECT * FROM {qualified_table}{order} LIMIT {limit}) AS dqt_sample"
+
     def regex_not_matching_predicate(self, quoted_column: str, pattern: str) -> str:
         """Build a "value does not match" predicate using the native ``~`` operator.
 
