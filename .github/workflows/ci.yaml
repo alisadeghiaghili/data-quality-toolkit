@@ -158,11 +158,14 @@ jobs:
 
       - name: Run unit tests with coverage
         run: |
+          # No --cov-fail-under. The floor lives in pyproject.toml, and a
+          # flag here would silently override it -- which it did, at 80,
+          # while the file said 90. tests/unit/test_coverage_gate.py keeps
+          # that from coming back.
           pytest tests/unit/ \
             --cov=src/dqt \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
-            --cov-fail-under=80 \
             -v
 
       - name: Upload coverage report

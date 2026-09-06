@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dqt"
-version = "1.0.0"
+version = "1.0.1"
 description = "DQT \u2014 SQL Data Quality Toolkit for DBAs"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -155,4 +155,8 @@ omit = ["tests/*"]
 
 [tool.coverage.report]
 show_missing = true
-fail_under = 90
+# Raised from 90 on 2026-09-06, at the owner's instruction, once the suite
+# was measured at 95.6%. A floor below what the suite already achieves is not
+# a floor, it is a record of where the floor used to be -- it permits a
+# regression nobody would otherwise accept.
+fail_under = 95

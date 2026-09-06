@@ -13,6 +13,37 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-09-06
+
+### Fixed
+
+- **A config problem exits `3`, not `1` (`NEW-V`).** A missing config file, a
+  file that would not parse, and a YAML file with no parser installed all
+  exited `1` — which the contract defines as "at least one `error` finding".
+  A CI pipeline branching on it read *your data has errors* when the truth
+  was that DQT never opened the database and a path had a typo. The two
+  demand opposite responses. A patch rather than a major, per
+  `docs/API-STABILITY.md` §3: the docs already said `3` and the code
+  disagreed with them.
+
+  Worth saying plainly — **`1.0.0` froze a surface with an untested corner.**
+  `test_exit_codes.py` covered `decide_exit_code`, which needs a finished
+  run; these paths exit before a pipeline exists, and nothing reached them.
+
+- **CI enforced a coverage floor of 80 while `pyproject.toml` said 90
+  (`NEW-W`).** `pytest --cov-fail-under=80` on the command line beats the
+  config file, so every local run used one number and CI used another. The
+  flag is gone, `pyproject.toml` is the single authority, and a test forbids
+  the override coming back.
+
+### Changed
+
+- **The coverage floor is 95%**, at the owner's instruction, now that the
+  suite measures 95.68%. A floor below what the suite already achieves is a
+  record of where the floor used to be, and permits a regression nobody would
+  otherwise accept.
+
+
 ## [1.0.0] — 2026-09-06
 
 **`1.0.0` means one thing: the public API will not break without a major
