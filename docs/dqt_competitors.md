@@ -1,6 +1,9 @@
 # DQT Competitors, Feature Floor, and Current Gap
 
-> *Verified against the repository on 2026-08-17 at commit `4629925`. Statuses rot — re-check before relying on one.*
+> *Section 1 re-verified against the repository on 2026-09-06 at commit `1fee86e`
+> (version `1.1.0`). Sections 2 and 3 were last checked on 2026-08-17 at commit
+> `4629925` and are not re-verified here. Statuses rot — re-check before relying
+> on one.*
 
 
 This document does three things: defines the **minimum capability floor** DQT
@@ -22,39 +25,58 @@ floor**, and tracks **best-of features** worth borrowing from other tools.
 
 Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 
-| # | Floor requirement | Status | Where DQT actually is |
-|---|---|---|---|
-| F1 | **Profiling** — column stats (min, max, mean, distinct, null count/ratio) | PARTIAL | Null counts, row counts, completeness only. No min/max/mean/distinct/patterns. |
-| F2 | **Profiling** — table stats (row counts, orphan FK rows, referential integrity) | NOT MET | Row counts only. No orphan-FK detection. |
-| F3 | **Diagnostics** — all six canonical dimensions with structured issue objects | NOT MET | `completeness` only. Issue objects themselves are well-structured. |
-| F4 | **Rules** — column rules (range, regex, type, uniqueness, NOT NULL) | PARTIAL | Four expressions declared, YAML/JSON-driven; `not_null`/`unique`/`range` unit-tested. **`regex` is dead on SQLite** — no REGEXP function is registered, so every regex rule emits a permanent false `error`. Semantic validity is the stated differentiator, so this is the costliest single gap. |
-| F5 | **Rules** — table rules (FK integrity, duplication, conditional constraints) | NOT MET | Column scope only. |
-| F6 | **Cleansing** — reversible standardization, dedup, lookup correction with audit trail | PARTIAL | Write-capable primitives exist (real `UPDATE`/`DELETE` + `commit()`). `run()` *does* call `cleanse()` on every run, but it reaches a pass-through, so nothing is written today — the primitives sit one wiring commit off the default path. "Reversible" currently means *manually* reconstructable, the audit log is not persisted, and there is no plan/apply split. Not safely usable as-is. |
-| F7 | **Metrics** — per table/column/dimension scores | PARTIAL | Three global metrics: table count, column count, average completeness. |
-| F8 | **Monitoring** — metric snapshots over time + drift detection | NOT MET | `monitor()` returns its input unchanged. Storage exists but no trend layer. |
-| F9 | **Knowledge/Domain** — reference tables for validation | NOT MET | No module. |
-| F10 | **Classification** — semantic column typing | NOT MET | No module. The `semantic_type` field exists and is never populated. |
-| F11 | **Missingness (internal)** — null stats and patterns | PARTIAL | Counts and ratios; no co-occurrence patterns. |
-| F12 | **Reports** — HTML/PDF, per-table/column metrics, issues, trends | PARTIAL | Self-contained HTML with score bars and severity badges. No PDF, no bilingual content, no trends. |
-| F13 | **Code quality** — English docstrings, unit + integration tests, CI (pytest/mypy/ruff) | PARTIAL | CI is real and enforces lint, strict typing, and an 80% coverage gate. **Six** modules have zero unit tests (`profiling`, `diagnostics`, `metrics`, `monitoring`, `schema_discovery`, `reports`), plus both `ui/` modules; docstring compliance unaudited; PostgreSQL — the primary target — is untested in CI. |
-| F14 | **CLI** — profile, check rules, generate reports | PARTIAL | `dqt profile` only. `check` and `missing` subcommands absent. |
+| # | Floor requirement | Aug 17 | **Now** | Where DQT actually is, at `1.1.0` |
+|---|---|---|---|---|
+| F1 | **Profiling** — column stats (min, max, mean, distinct, null count/ratio) | PARTIAL | **PARTIAL** | Unchanged. `ColumnProfile` carries `null_count` and `row_count` and nothing else — no min, max, mean, distinct or patterns. The single largest gap against what a DBA expects from the word "profiling". |
+| F2 | **Profiling** — table stats (row counts, orphan FK rows, referential integrity) | NOT MET | **NOT MET** | Row counts, plus sampling metadata when a sample was taken. Still no orphan-FK detection and no FK discovery. |
+| F3 | **Diagnostics** — all six canonical dimensions with structured issue objects | NOT MET | **NOT MET** | `completeness` only, one of six. `DQDiagnostics` says so in its own docstring. Issue objects remain well-structured. |
+| F4 | **Rules** — column rules (range, regex, type, uniqueness, NOT NULL) | PARTIAL | **MET** | Five expressions, all working and tested: `NOT NULL`, `UNIQUE`, `RANGE`, `REGEX`, `REFERENCE`. `DQT-04` fixed `regex` on SQLite. Rules compile to grouped aggregate SQL, one scan per table. **`REGEX` is refused on SQL Server** — T-SQL has no such operator, and refusing is deliberate rather than reporting zero violations. |
+| F5 | **Rules** — table rules (FK integrity, duplication, conditional constraints) | NOT MET | **NOT MET** | Column scope only. `RuleScope` has a `column_pattern`; nothing evaluates a table-level predicate. |
+| F6 | **Cleansing** — reversible standardization, dedup, lookup correction with audit trail | PARTIAL | **MET** | `cleanse_plan()` / `cleanse_apply()` / `revert()`. The log is persisted against a `plan_id`, planning works against a read-only connection, and `cleanse_apply` refuses an already-applied plan, a read-only connection, or **data that drifted since the plan was computed**. Deduplication deletes and `revert` re-inserts the whole row. **Open gap:** `revert()` does not make that drift check — an edit made after apply is overwritten without warning. |
+| F7 | **Metrics** — per table/column/dimension scores | PARTIAL | **PARTIAL** | Unchanged: three global metrics (`table_count`, `column_count`, `average_completeness`). Per-column completeness reaches the report and the UI, but not as `DQMetric` rows. |
+| F8 | **Monitoring** — metric snapshots over time + drift detection | NOT MET | **PARTIAL** | Run history is stored and **rule pass-rate over time is charted** in the UI (`trend_line`, `load_rule_history`). But `monitor()` is still the identity function, there is no metric-level trend and no drift or anomaly detection. |
+| F9 | **Knowledge/Domain** — reference tables for validation | NOT MET | **MET** | `sql/knowledge.py`, reachable through the `REFERENCE` rule expression: values must appear in a reference list or table, matched with an anti-join over `SELECT DISTINCT` so duplicate reference rows cannot inflate the denominator. Optional Persian character folding. |
+| F10 | **Classification** — semantic column typing | NOT MET | **PARTIAL** | `classification.py` is real and locale-aware — Iranian national ID, IBAN/Sheba, mobile and landline numbers, Shamsi dates, email — and `classify_column` is publicly exported. **But nothing calls it during a run.** It is a library function, not a pipeline stage, so `semantic_type` is still never populated and a UI user never sees a classification. |
+| F11 | **Missingness (internal)** — null stats and patterns | PARTIAL | **PARTIAL** | Counts and ratios internally. Co-occurrence patterns exist only through the optional `missingly` bridge, which is external by design. |
+| F12 | **Reports** — HTML/PDF, per-table/column metrics, issues, trends | PARTIAL | **PARTIAL** | Self-contained HTML — verified to contain zero external references, so it survives being emailed. Bilingual EN/FA with RTL, an embedded font, and WCAG AA contrast computed in CI. A trend chart exists on the rule-history screen. **No PDF.** |
+| F13 | **Code quality** — English docstrings, unit + integration tests, CI (pytest/mypy/ruff) | PARTIAL | **MET** | 1079 tests passing, coverage 95.51% against a 95 floor, `mypy --strict` clean, `ruff` clean, `doc_audit` and `arch_audit` at zero. Python 3.11 / 3.12 / 3.14, and **all three databases exercised against live servers in CI** — including SQL Server, which is what closed the biggest hole in this row. |
+| F14 | **CLI** — profile, check rules, generate reports | PARTIAL | **PARTIAL** | `dqt profile` only, and it does run rules when a config supplies `rule_files`. There is still no `check` subcommand and **no `serve`**, so starting the dashboard needs a `uvicorn` command rather than a DQT one. |
+| F15 | **Read-only query/API surface** for downstream consumers | PARTIAL | **MET** | Six JSON endpoints and five server-rendered HTML screens, tested, and frozen under the `1.0` API contract. No JS and no build step. **No authentication** — by design, and the reason the documented way to run it binds loopback. |
 
-| F15 | **Read-only query/API surface** for downstream consumers | PARTIAL | `ui/api.py` + a FastAPI skeleton in `ui/app.py` expose runs, tables, metrics and issues read-only. Untested; no frontend. |
+**Score: 5 of 15 met, 7 partial, 3 not met** — up from 0 of 15 in August.
 
-**Score: 0 of 15 fully met** (was recorded as 1 of 14 before `regex` was found
-dead on SQLite). Nothing here is a reason for discouragement — the
-architecture, data model, rule engine, and CI are real and sound. But DQT is not
-currently at its own stated floor, and any document, README, or matrix that
-implies otherwise should be corrected rather than defended.
+Read the shape rather than the score. What moved was **safety and
+trustworthiness**: cleansing became genuinely reversible, the rule engine
+stopped lying on SQLite, every dialect gained a live CI server, and the
+quality gates went from aspiration to enforcement. What did **not** move is
+**breadth of analysis**: F1, F3 and F5 are the same as they were, and they are
+the three a DBA notices first, because they are what the words "profiling" and
+"rules" promise.
+
+Two rows deserve reading twice:
+
+* **F10 is the clearest case of a module that exists and a product that does
+  not use it.** The classification code is good and locale-aware; nothing
+  invokes it during a run. That is precisely the failure this document's own
+  release rule was written to catch, and it is caught here rather than scored
+  as `MET`.
+* **F8 improved by accident of the UI, not by design.** Rule history charts
+  because someone built a rules screen, not because a monitoring facet was
+  built. `monitor()` is still the identity function.
 
 **Release rule:** a floor item may not be marked `MET` on the strength of a
 module existing, or of a module plus a test that only asserts the code does what
 the code does. It requires read source and an externally grounded passing test —
 see the honesty gate in `CONVENTIONS-DQT.md` §4.
 
-F4 is the cautionary example: it sat at `MET` because four rule expressions
-existed and three of them had tests. The fourth had no test and had never worked
-on the only fully supported backend.
+F4 is the cautionary example, and it has now been both things. It once sat at
+`MET` because four rule expressions existed and three of them had tests; the
+fourth had no test and had never worked on the only supported backend. It is
+`MET` again today — but on different evidence: five expressions, each with a
+test, exercised against three live databases, and one of them (`REGEX` on SQL
+Server) *refused* rather than silently passing where it cannot work.
+
+The difference between those two `MET`s is the whole point of the rule.
 
 ---
 
