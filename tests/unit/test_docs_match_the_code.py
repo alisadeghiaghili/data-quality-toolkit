@@ -230,6 +230,57 @@ class TestTheNormativeDocumentStatesTheCurrentVersion:
         )
 
 
+class TestTheSqlServerDialectDoesNotUnderstateItsCoverage:
+    """The module carrying the caveat must drop it when CI removes the cause.
+
+    ``dqt.sql.dialects.sqlserver`` was written before any SQL Server existed
+    to test against, and said so honestly: unexercised, no instance and no
+    ``pyodbc`` in CI, ``connect`` and ``fetch_column_metadata`` never run
+    against a real server.
+
+    `GATE-02` then added a live SQL Server 2022 service to CI, installed the
+    ODBC driver and the ``sqlserver`` extra, and ran both the integration
+    suite and the four-hash read-only proof against it. The caveat stayed.
+
+    Understating coverage is the direction that costs most here, because SQL
+    Server is the engine where DQT's own guard is the only thing between a
+    caller and a write. A DBA who reads "never been run against SQL Server"
+    in the module that enforces that guard has every reason not to trust it,
+    and no way to discover from the module that the sentence is out of date.
+    """
+
+    def test_it_does_not_claim_to_be_unexercised_while_ci_exercises_it(self) -> None:
+        """Tied to the workflow, so the claim becomes true again if CI drops it.
+
+        Asserting the absence of the words alone would forbid an honest
+        caveat if the live job were ever removed. The condition is what makes
+        this a doc-vs-code check rather than a banned-phrase list.
+        """
+        workflow = (_ROOT / ".github" / "workflows" / "ci.yaml").read_text(encoding="utf-8")
+        exercised = "mcr.microsoft.com/mssql/server" in workflow
+
+        if not exercised:
+            return
+
+        import dqt.sql.dialects.sqlserver as dialect_module
+
+        docstring = dialect_module.__doc__ or ""
+        stale = [
+            phrase
+            for phrase in (
+                "Unexercised against a real server",
+                "has never been run against",
+                "No SQL Server instance",
+            )
+            if phrase in docstring
+        ]
+
+        assert stale == [], (
+            "CI runs a live SQL Server, but dqt.sql.dialects.sqlserver still "
+            f"says it is untested. Stale phrases: {stale}"
+        )
+
+
 class TestTheMaturityClaimMatchesTheVersion:
     """``Development Status`` is what PyPI shows before anyone reads a word."""
 
