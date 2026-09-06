@@ -244,7 +244,33 @@ No CLI-level rule-file flag exists; this fix only closes the config-file path.
 
 ---
 
-### `NEW-T` · `RunStore` never closes its connections
+### `NEW-Y` · `save_run` uses `OR IGNORE`, which swallows CHECK violations
+
+`save_run` inserts with `INSERT OR IGNORE` so that re-saving a run is
+idempotent — a deliberate and correct choice for the `runs` row.
+
+The side effect is that `OR IGNORE` also ignores **constraint** violations. A
+`DQMetric` whose `dimension` is not one of the six the CHECK constraint
+allows is not refused; the row is silently dropped, and the run is saved
+without it. The metric was computed, the store accepted the save, and the
+number is gone.
+
+Found while writing `NEW-T`'s rollback test, which tried to use a CHECK
+violation to force a mid-save failure and could not.
+
+Not fixed here because the right answer is a decision, not an edit: either
+idempotency moves to `ON CONFLICT (run_id) DO NOTHING` on the `runs` row
+alone, leaving the child inserts strict, or the constraint violation is
+caught and reported as a `StageError`. The first is a schema change; the
+second changes what `save_run` raises. Both are more than a drive-by.
+
+Reachable in practice only through a hand-built `DQMetric`, since
+`DQDimension` is a `Literal` that `mypy --strict` enforces at every call site
+inside DQT.
+
+---
+
+### `NEW-T` · `RunStore` never closes its connections — **fixed**
 
 Every method opens one with `with self._connect() as conn:`. In `sqlite3` that
 context manager is a **transaction**, not a close — it commits or rolls back
@@ -265,6 +291,12 @@ edit inside a schema change.
 Cost today is bounded — the store is a local SQLite file and the process is
 short-lived — but a long-running consumer of `dqt.ui.api` (which is exactly
 what the dashboard in `docs/PLAN-VIZ-UI.md` will be) opens one per request.
+
+**Fixed 2026-09-06** by `RunStore._transaction()`, a context manager that owns
+both the transaction and the close, in that order: the inner `with conn`
+commits or rolls back, and only then does `finally` close. All sixteen call
+sites go through it. The suite's `ResourceWarning` count went from 404 to
+**zero**.
 
 ---
 

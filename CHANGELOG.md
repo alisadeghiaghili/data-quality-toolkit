@@ -13,6 +13,25 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-09-06
+
+### Fixed
+
+- **`RunStore` never closed a connection (`NEW-T`).** Every method used
+  `with self._connect() as conn:`, and in `sqlite3` that context manager is a
+  **transaction**, not a close — it commits or rolls back and leaves the
+  connection open. Each call leaked one until garbage collection. All sixteen
+  call sites now go through `_transaction()`, which owns both: the inner
+  `with conn` commits or rolls back, and only then does `finally` close.
+  **Reversing that order would close before the commit and lose the write
+  silently**, so a test asserts it from inside the connection wrapper.
+
+  The suite's `ResourceWarning` count went from 404 to **zero**. Cost was
+  bounded while the store was a local file in a short-lived process; it stops
+  being bounded when `dqt.ui.api` is served for real, because that opens one
+  per request.
+
+
 ## [1.0.2] — 2026-09-06
 
 ### Fixed
