@@ -45,6 +45,10 @@ Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 
 **Score: 5 of 15 met, 7 partial, 3 not met** — up from 0 of 15 in August.
 
+A sequenced plan for the remaining ten, with its dependencies and the one
+decision that blocks a full score, is in
+[`ROADMAP-FLOOR-15.md`](ROADMAP-FLOOR-15.md).
+
 Read the shape rather than the score. What moved was **safety and
 trustworthiness**: cleansing became genuinely reversible, the rule engine
 stopped lying on SQLite, every dialect gained a live CI server, and the
