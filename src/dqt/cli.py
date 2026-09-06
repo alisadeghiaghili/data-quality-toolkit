@@ -142,6 +142,20 @@ def _build_parser() -> argparse.ArgumentParser:
             "opens the connection read-only and never mutates."
         ),
     )
+
+    serve = sub.add_parser("serve", help="Serve the read-only dashboard over HTTP.")
+    serve.add_argument("--store", default="dqt_runs.db")
+    serve.add_argument("--host", default=LOOPBACK_HOST)
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--allow-unauthenticated-remote-access", action="store_true")
+
+    check = sub.add_parser("check", help="Evaluate rules only, without profiling.")
+    check.add_argument("--dsn", required=True)
+    check.add_argument("--rules", action="append", default=None)
+    check.add_argument("--config", default=None)
+    check.add_argument("--connection-id", default="cli")
+    check.add_argument("--fail-on", choices=list(FAIL_ON_CHOICES), default="error")
+
     return parser
 
 
@@ -467,6 +481,73 @@ def _cmd_profile(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+#: The address the dashboard binds unless told otherwise.
+LOOPBACK_HOST = "127.0.0.1"
+
+
+def resolve_bind_host(host: str, *, allow_remote: bool) -> str:
+    """Return *host* if it is safe to bind, or refuse.
+
+    Args:
+        host: The address the operator asked to bind.
+        allow_remote: Whether the operator explicitly accepted the risk.
+
+    Returns:
+        *host*, unchanged, when binding it is permitted.
+
+    Example:
+        assert resolve_bind_host("127.0.0.1", allow_remote=False) == "127.0.0.1"
+    """
+    raise NotImplementedError
+
+
+def _run_server(host: str, port: int, store: str) -> None:
+    """Start the dashboard.
+
+    Args:
+        host: Already-validated bind address.
+        port: Port to bind.
+        store: Path to the RunStore the dashboard reads.
+
+    Returns:
+        None.
+
+    Example:
+        _run_server("127.0.0.1", 8000, "dqt_runs.db")
+    """
+    raise NotImplementedError
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """Validate the bind address, then serve.
+
+    Args:
+        args: Parsed ``serve`` arguments.
+
+    Returns:
+        The process exit code.
+
+    Example:
+        code = _cmd_serve(args)
+    """
+    raise NotImplementedError
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    """Evaluate rules against the database, without profiling.
+
+    Args:
+        args: Parsed ``check`` arguments.
+
+    Returns:
+        The process exit code.
+
+    Example:
+        code = _cmd_check(args)
+    """
+    raise NotImplementedError
+
+
 def main() -> None:
     """CLI entry point — parse args and dispatch to the appropriate command.
 
@@ -479,11 +560,12 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    if args.command == "profile":
-        sys.exit(_cmd_profile(args))
-    else:
+    handlers = {"profile": _cmd_profile, "serve": _cmd_serve, "check": _cmd_check}
+    handler = handlers.get(args.command)
+    if handler is None:
         parser.print_help()
         sys.exit(1)
+    sys.exit(handler(args))
 
 
 if __name__ == "__main__":
