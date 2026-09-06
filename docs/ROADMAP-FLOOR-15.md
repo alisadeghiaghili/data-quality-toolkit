@@ -136,13 +136,14 @@ honesty gate. Version numbers assume nothing else lands between.
 |---|---|---|---|---|
 | 1 | **`F1`** column statistics | M | The keystone. Highest value on its own and the input three other rows need. | **Done 2026-09-07.** One query per table, type-gated by the dialect, distinct declinable. Surfaced in metric metadata and the HTML report, so it is not a statistic that stops at the profiler. |
 | 2 | **`F10`** call `classify_column` during a run | S | The code exists, is locale-aware, and is tested. Nothing calls it. Wiring, not building — the cheapest `PARTIAL → MET` on the board. | **Done 2026-09-07.** Off by default, one bounded query per table, surfaced in the report. Fixed a defect found alongside: every `ColumnResult` reported `db_type="ColumnProfile"`. |
-| 3 | **`F14`** `dqt check` and `dqt serve` | M | `serve` is what makes the dashboard startable without Python — and the only way the loopback-bind rule stops being a docstring nobody reads and becomes a refusal. | |
-| 4 | **`DQT-09`** exception hierarchy | S | The only open authoritative task. Not a feature, so it follows the ones that are. | |
+| 3 | **`F14`** `dqt check` and `dqt serve` | M | `serve` is what makes the dashboard startable without Python — and the only way the loopback-bind rule stops being a docstring nobody reads and becomes a refusal. | **Done 2026-09-07.** The refusal is real: a reachable bind address exits 3 before anything binds. `check` computes no statistics, and checking nothing exits 3 rather than 0. |
+| 4 | **`DQT-09`** exception hierarchy | S | The only open authoritative task. Not a feature, so it follows the ones that are. | **Done 2026-09-07**, ahead of `F14` because `serve`'s refusal needed a typed error and inventing a one-off to replace later would have been worse. |
 
 Target: **`1.2.0`**. After this wave: **8 met**, and the DBA-facing story is
 whole — real profiling numbers, semantic types, and a command to start the UI.
 
-`F1` and `F10` have landed, so the score is already **7 of 15**.
+Wave 1 is complete: **8 of 15**, and the authoritative roadmap's DQT track is
+now fully closed.
 
 ### Wave 2 — the analysis depth a DBA judges the tool by
 
