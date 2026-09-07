@@ -152,6 +152,17 @@ ignore_missing_imports = true
 
 # Route decorators resolve to Any because fastapi itself is untyped here;
 # that's a consequence of the override above, not a real typing gap.
+# fpdf2 drags Pillow in, and Pillow's stubs reach into numpy. mypy then
+# analyses numpy's own stubs under `python_version = "3.11"` and fails on
+# `type X = ...`, which is 3.12 syntax -- an error inside a package DQT never
+# imports, produced by a version of numpy nobody here chose. Not following
+# them is the honest fix: these are transitive artifacts of an optional
+# extra, and DQT's own types do not depend on any of them.
+[[tool.mypy.overrides]]
+module = ["fpdf.*", "PIL.*", "numpy.*", "fontTools.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = "dqt.ui.app"
 disallow_untyped_decorators = false
