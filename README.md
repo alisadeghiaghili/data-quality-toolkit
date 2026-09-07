@@ -183,8 +183,16 @@ without a stable row locator. The refusal names the fix: give the table a key.
 ## Rules
 
 Rules are declarative, defined in YAML or JSON, and compile to set-based SQL —
-never a row-by-row loop. Five expressions: `NOT NULL`, `UNIQUE`, `RANGE`,
-`REGEX`, `REFERENCE`.
+never a row-by-row loop. Eight expressions — five column-scoped (`NOT NULL`,
+`UNIQUE`, `RANGE`, `REGEX`, `REFERENCE`) and three **table-scoped**, compiled
+once per table: `UNIQUE_TOGETHER` (a composite key the schema does not
+declare), `FOREIGN_KEY` (referential integrity for relationships the database
+does *not* enforce, which is where orphans accumulate), and
+`CONDITIONAL_NOT_NULL` ("when `status` is `shipped`, `shipped_at` must be
+set").
+
+No rule takes SQL from you: identifiers are quoted and checked against the
+table, values are bound parameters.
 
 **Rules on the same table share one scan.** Each check compiles to aggregate
 expressions rather than to a statement, and the checks over a table are run as

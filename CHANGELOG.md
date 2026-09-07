@@ -13,6 +13,45 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Added
+
+- **Table-level rules (`F5`).** Every rule DQT could express was about one
+  column. Three new expressions are scoped to a table and compiled once per
+  table rather than once per column:
+
+  - **`UNIQUE_TOGETHER`** -- a composite key the schema does not declare.
+    `(order_id, line_no)` cannot be expressed as two column rules: `order_id`
+    repeats legitimately, `line_no` repeats legitimately, and only the pair is
+    a constraint.
+  - **`FOREIGN_KEY`** -- referential integrity *declared* rather than
+    discovered. `F2` finds orphans behind constraints the database enforces;
+    this finds them behind the relationships it does not, which is where they
+    accumulate, since an undeclared relationship is the one nothing was
+    protecting.
+  - **`CONDITIONAL_NOT_NULL`** -- "when `status` is `shipped`, `shipped_at`
+    must be set", the shape most real conditional constraints take.
+
+  **None takes SQL from the user.** Identifiers go through the dialect's
+  quoting path *and* are checked against the table's columns, because quoting
+  alone would let a typo reach the driver and fail mid-scan as a database
+  error rather than the configuration mistake it is. Values are bound
+  parameters. A rule carrying a raw predicate would be more expressive and
+  would hand a config file the ability to run arbitrary SQL; that stays
+  undecided in `docs/BACKLOG.md` §3 rather than being settled by
+  implementation.
+
+  Cost is unchanged: table-level checks ride in the same statement as the
+  column-level ones, as scalar subqueries. No rule gets a scan of its own.
+
+### Fixed
+
+- **A rule file named twice was loaded twice.** Passing `--rules r.yaml`
+  alongside a config listing `r.yaml` in `rule_files` evaluated every rule
+  twice and counted every violation twice. Nothing errored and the numbers
+  looked plausible -- a doubled duplicate count is still a duplicate count.
+  Paths are resolved before comparison, so `rules.yaml` and `./rules.yaml`
+  are recognised as one file.
+
 ## [1.4.0] — 2026-09-07
 
 ### Fixed
