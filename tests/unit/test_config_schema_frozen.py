@@ -28,6 +28,7 @@ from dqt.common.models import (
     ClassificationConfig,
     ConnectionConfig,
     DQPipelineConfig,
+    MissingnessConfig,
     MonitoringConfig,
     ProfilingConfig,
     RuleConfig,
@@ -62,6 +63,9 @@ FROZEN_CONFIG_SCHEMA: dict[str, set[str]] = {
         # without it DQT records how far each metric moved but declines to
         # call any of it a problem.
         "monitoring",
+        # Added 2026-09-07 for F11. Optional and off by default, because it
+        # costs a second scan of every table on top of profiling's.
+        "missingness",
         "metric_thresholds",
         "rule_files",
     },
@@ -77,6 +81,7 @@ FROZEN_CONFIG_SCHEMA: dict[str, set[str]] = {
     },
     "TimelinessConfig": {"max_age_days"},
     "MonitoringConfig": {"max_score_drop"},
+    "MissingnessConfig": {"enabled", "top_patterns"},
     "RuleConfig": {"name", "dimension", "severity", "scope", "expression", "params"},
     "RuleScope": {"schema_pattern", "table_pattern", "column_pattern"},
 }
@@ -86,6 +91,7 @@ _MODELS = {
     "ClassificationConfig": ClassificationConfig,
     "TimelinessConfig": TimelinessConfig,
     "MonitoringConfig": MonitoringConfig,
+    "MissingnessConfig": MissingnessConfig,
     "ConnectionConfig": ConnectionConfig,
     "DQPipelineConfig": DQPipelineConfig,
     "SamplingConfig": SamplingConfig,

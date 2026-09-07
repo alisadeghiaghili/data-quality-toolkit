@@ -376,6 +376,37 @@ That is not a problem in practice, and the answer is the next section.
 
 ---
 
+## 5c. Which columns go missing together (optional)
+
+Completeness tells you *how much* is missing. This tells you *what is missing
+with what*:
+
+```yaml
+missingness:
+  enabled: true
+  top_patterns: 5
+```
+
+```
+2 columns are missing together in 'leads': email, phone are all NULL in 3 row(s).
+2 columns are missing together in 'leads': company, source are all NULL in 2 row(s).
+```
+
+Three columns each 20% NULL might be one upstream feed dropping all three from
+the same fifth of your rows, or three unrelated gaps. **The null counts are
+identical either way** — only the pattern distinguishes them, and the first is
+one bug while the second is three.
+
+Off by default because it costs a second scan of each table, on top of the one
+profiling already makes.
+
+Rows missing *nothing* are not reported, and neither is a single column on its
+own — that is just the null count again.
+
+**This counts; it does not explain.** Whether the missingness is random is a
+statistical question, and `missingly` answers it through DQT's bridge. DQT
+reports the pattern; missingly explains it.
+
 ## 6a. Watching quality change over time
 
 Every metric records how far it moved since the previous run against the same

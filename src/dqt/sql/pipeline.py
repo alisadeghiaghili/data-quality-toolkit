@@ -54,6 +54,7 @@ from dqt.common.storage import RunStore
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.diagnostics import DQDiagnostics
 from dqt.sql.metrics import compute_run_metrics, roll_up_dimension_scores
+from dqt.sql.missingness import missingness_patterns
 from dqt.sql.monitoring import drift_issues, monitor
 from dqt.sql.profiling import SqlProfiler, TableProfile
 from dqt.sql.referential import count_orphans
@@ -258,6 +259,9 @@ class DQTPipeline:
             discovered_tables, run_id=run_id
         )
 
+        # Stage 4b-ii: which columns go missing together, when asked.
+        missingness_issues = self.check_missingness_patterns(discovered_tables, run_id=run_id)
+
         # Stage 4c: the two dimensions that need an expectation supplied.
         # Classification runs once here and feeds both the validity check and
         # the semantic types on the result; running it twice would double the
@@ -275,6 +279,7 @@ class DQTPipeline:
             + referential_issues
             + validity_issues
             + timeliness_issues
+            + missingness_issues
         )
 
         # Assemble intermediate result
@@ -552,6 +557,57 @@ class DQTPipeline:
                 continue
             filtered.append(table)
         return filtered
+
+    def check_missingness_patterns(
+        self, discovered_tables: list[DiscoveredTable], run_id: str
+    ) -> list[DQIssue]:
+        """Report which columns are missing together, when asked to look.
+
+        Returns nothing and issues no query when disabled, which is the
+        point: this costs a second scan of every table, on top of the one
+        profiling already makes.
+
+        Args:
+            discovered_tables: The tables to examine.
+            run_id: The current run.
+
+        Returns:
+            One issue per reported pattern.
+
+        Example:
+            issues = pipeline.check_missingness_patterns(tables, "run-1")
+        """
+        config = self._pipeline_config.missingness
+        if config is None or not config.enabled:
+            return []
+
+        issues: list[DQIssue] = []
+        for table in discovered_tables:
+            for pattern in missingness_patterns(self._connection_config, table, config):
+                named = ", ".join(pattern.columns)
+                issues.append(
+                    DQIssue(
+                        issue_id=(
+                            f"{run_id}:{table.schema_name}:{table.table_name}:"
+                            f"{'-'.join(pattern.columns)}:missing-together"
+                        ),
+                        run_id=run_id,
+                        dimension="completeness",
+                        severity="warning",
+                        message=(
+                            f"{len(pattern.columns)} columns are missing together in "
+                            f"'{table.table_name}': {named} are all NULL in "
+                            f"{pattern.row_count} row(s)."
+                        ),
+                        evidence={
+                            "columns": list(pattern.columns),
+                            "row_count": pattern.row_count,
+                        },
+                        schema_name=table.schema_name,
+                        table_name=table.table_name,
+                    )
+                )
+        return issues
 
     def check_referential_integrity(
         self, discovered_tables: list[DiscoveredTable], run_id: str

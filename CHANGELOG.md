@@ -13,6 +13,29 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Added
+
+- **Missingness co-occurrence patterns (`F11`).** Profiling reported how much
+  is missing per column; it now optionally reports *what is missing with
+  what*. Three columns each 20% NULL might be one upstream feed dropping all
+  three from the same fifth of rows, or three unrelated gaps -- the null counts
+  are identical either way.
+
+  One bounded `GROUP BY` per table over a per-row null signature, materialising
+  nothing. **Off by default**, because it costs a second scan on top of
+  profiling's.
+
+  Rows missing nothing are excluded -- they are the largest group on a healthy
+  table, so reporting the most common pattern without excluding them would
+  report "nothing is missing" as a problem everywhere. Single-column patterns
+  are excluded too: that is the null count restated.
+
+  **The boundary with `missingly` is deliberate.** That package *infers the
+  mechanism* -- `mcar_test` asks whether missingness is random, a statistical
+  inference over a DataFrame. This *counts co-occurrence*, which is a `GROUP
+  BY` and asserts nothing about why. DQT reports the pattern; missingly
+  explains it.
+
 ## [1.6.0] — 2026-09-07
 
 ### Added

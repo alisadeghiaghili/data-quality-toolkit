@@ -627,6 +627,42 @@ class TimelinessConfig(BaseModel):
     max_age_days: int = Field(gt=0, description="Maximum acceptable age of the newest row.")
 
 
+class MissingnessConfig(BaseModel):
+    """Whether to look at which columns go missing together.
+
+    Profiling reports how much is missing per column. This reports what is
+    missing *with* what, and they are different findings: three columns each
+    20% NULL might be one broken upstream feed dropping all three from the
+    same fifth of rows, or three unrelated gaps. The null counts are
+    identical either way.
+
+    **Off by default because it costs a second scan.** Profiling is already
+    one deliberate full pass over the table, and doubling that should be a
+    decision rather than a default someone inherits.
+
+    This counts co-occurrence and asserts nothing about *why*. Inferring the
+    mechanism -- whether the missingness is random -- is `missingly`'s job,
+    reached through :mod:`dqt.bridges.missingly`, and DQT must not
+    re-implement it.
+
+    Attributes:
+        enabled: Whether to compute the patterns. Defaults to ``False``.
+        top_patterns: How many of the most common patterns to report.
+            Defaults to ``5``. A table with twenty nullable columns admits a
+            million possible patterns, so the query is bounded rather than
+            read back in full.
+
+    Example::
+
+        cfg = MissingnessConfig(enabled=True, top_patterns=3)
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    top_patterns: int = Field(default=5, gt=0, description="Most common patterns to report.")
+
+
 class MonitoringConfig(BaseModel):
     """When a metric moving counts as a problem.
 
@@ -814,6 +850,9 @@ class DQPipelineConfig(BaseModel):
         sampling: Optional :class:`SamplingConfig` for large-table sampling.
         profiling: Optional :class:`ProfilingConfig` choosing which column
             statistics to compute.
+        missingness: Optional :class:`MissingnessConfig` enabling
+            co-occurrence patterns. Off unless given, because it costs a
+            second scan.
         monitoring: Optional :class:`MonitoringConfig` saying how far a
             score may fall between runs. Without it drift is measured but
             not judged.
@@ -857,6 +896,7 @@ class DQPipelineConfig(BaseModel):
     classification: ClassificationConfig | None = None
     timeliness: TimelinessConfig | None = None
     monitoring: MonitoringConfig | None = None
+    missingness: MissingnessConfig | None = None
     metric_thresholds: dict[str, float] | None = None
     rule_files: list[str] = Field(default_factory=list)
 
@@ -1047,6 +1087,7 @@ __all__ = [
     "Rule",
     "RuleResult",
     "RuleRunResult",
+    "MissingnessConfig",
     "MonitoringConfig",
     "PipelineResult",
     "ProfilingConfig",

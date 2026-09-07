@@ -176,7 +176,7 @@ Ordered by the owner's decision of 2026-09-07: `F12` is last, and optional.
 | | Item | Size | The trap |
 |---|---|---|---|
 | 12 | **`F12`** PDF export — **last, and may not happen** | M | **Adds a runtime dependency.** Every PDF library is heavy, and DQT's lean footprint is one of only three differentiators the competitor analysis credits it with. This belongs behind an extra, or not at all — "no PDF" may be the better answer than a dependency that costs more than the feature. |
-| 11 | **`F11`** internal missingness patterns | M | **Boundary risk.** Co-occurrence patterns are what `missingly` does. `AGENTS.md` forbids re-implementing its algorithms, and the floor's wording ("null stats and patterns") does not say how deep. Scope this against `missingly` before writing a line, or it becomes the duplication the bridge exists to prevent. |
+| 11 | **`F11`** internal missingness patterns — **done 2026-09-07** | M | **Boundary risk, resolved by drawing the line explicitly.** `missingly` infers the mechanism; DQT counts co-occurrence. A `GROUP BY` is not one of its algorithms. The original risk stood: Co-occurrence patterns are what `missingly` does. `AGENTS.md` forbids re-implementing its algorithms, and the floor's wording ("null stats and patterns") does not say how deep. Scope this against `missingly` before writing a line, or it becomes the duplication the bridge exists to prevent. |
 
 ---
 
