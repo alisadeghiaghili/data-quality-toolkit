@@ -53,7 +53,7 @@ from dqt.common.models import (
 from dqt.common.storage import RunStore
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.diagnostics import DQDiagnostics
-from dqt.sql.metrics import compute_run_metrics
+from dqt.sql.metrics import compute_run_metrics, roll_up_dimension_scores
 from dqt.sql.monitoring import monitor
 from dqt.sql.profiling import SqlProfiler, TableProfile
 from dqt.sql.referential import count_orphans
@@ -293,13 +293,16 @@ class DQTPipeline:
         run_metrics = self.compute_metrics(profiled_tables, run_id=run_id)
 
         # Stage 7: monitoring
-        result.metrics = self.monitor(
+        # Rolled up last, over everything the run produced, because a rollup
+        # computed before the final metric exists would silently omit it.
+        measured = (
             result.metrics
             + run_metrics
             + referential_metrics
             + validity_metrics
             + timeliness_metrics
         )
+        result.metrics = self.monitor(measured + roll_up_dimension_scores(measured, run_id))
 
         result.ended_at = datetime.now(UTC)
         stage_errors.extend(self._rule_file_errors)

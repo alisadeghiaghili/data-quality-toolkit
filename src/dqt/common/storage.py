@@ -489,6 +489,20 @@ class RunStore:
         Args:
             run_id: The run to read.
 
+        Reads the run-level rollup the pipeline stores (`F7`) rather than
+        averaging here. Averaging in this method was the original design and
+        became wrong the moment rollups existed: the rollup rows are
+        themselves dimension rows, so a mean over everything counts each
+        column once and then counts it again through its table's summary.
+
+        Runs stored before `F7` carry no rollup, so those fall back to the
+        original average. Dropping the fallback would blank the dimension
+        scores on every historical run in an existing store -- which is the
+        same as deleting history, just less obviously.
+
+        Args:
+            run_id: The run to read.
+
         Returns:
             Dimension to mean score. A dimension nothing measured is absent
             rather than zero: absent means "nothing measured this" and zero
@@ -499,9 +513,21 @@ class RunStore:
             scores = store.average_score_by_dimension("run-001")
         """
         with self._transaction() as conn:
+            # One statement, not two. A run-level rollup is the row with
+            # neither a table nor a column -- table rollups carry a table
+            # name, column scores carry both -- and COALESCE falls back to
+            # the average only when no such row exists, which is exactly the
+            # pre-F7 runs.
             rows = conn.execute(
                 """
-                SELECT dimension, AVG(score) AS mean_score
+                SELECT
+                    dimension,
+                    COALESCE(
+                        MAX(CASE
+                            WHEN table_name IS NULL AND column_name IS NULL THEN score
+                        END),
+                        AVG(score)
+                    ) AS mean_score
                 FROM run_metrics
                 WHERE run_id = ? AND dimension IS NOT NULL
                 GROUP BY dimension
