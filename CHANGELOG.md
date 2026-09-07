@@ -13,6 +13,8 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-09-07
+
 ### Fixed
 
 - **Config-file keys were silently dropped by the CLI (`NEW-AC`).**
