@@ -28,6 +28,7 @@ from dqt.common.models import (
     ClassificationConfig,
     ConnectionConfig,
     DQPipelineConfig,
+    MonitoringConfig,
     ProfilingConfig,
     RuleConfig,
     RuleScope,
@@ -57,6 +58,10 @@ FROZEN_CONFIG_SCHEMA: dict[str, set[str]] = {
         # missing default: without it DQT measures data age but declines to
         # call it stale.
         "timeliness",
+        # Added 2026-09-07 for F8. Optional, and its absence is meaningful:
+        # without it DQT records how far each metric moved but declines to
+        # call any of it a problem.
+        "monitoring",
         "metric_thresholds",
         "rule_files",
     },
@@ -71,6 +76,7 @@ FROZEN_CONFIG_SCHEMA: dict[str, set[str]] = {
         "persian_normalization",
     },
     "TimelinessConfig": {"max_age_days"},
+    "MonitoringConfig": {"max_score_drop"},
     "RuleConfig": {"name", "dimension", "severity", "scope", "expression", "params"},
     "RuleScope": {"schema_pattern", "table_pattern", "column_pattern"},
 }
@@ -79,6 +85,7 @@ _MODELS = {
     "ProfilingConfig": ProfilingConfig,
     "ClassificationConfig": ClassificationConfig,
     "TimelinessConfig": TimelinessConfig,
+    "MonitoringConfig": MonitoringConfig,
     "ConnectionConfig": ConnectionConfig,
     "DQPipelineConfig": DQPipelineConfig,
     "SamplingConfig": SamplingConfig,

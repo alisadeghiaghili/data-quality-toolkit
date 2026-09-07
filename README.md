@@ -83,13 +83,14 @@ computed with SQL, against the live database, without extracting the data.
   `AVG` are asked for only where the column's type supports them, so a text
   column reports no mean rather than a misleading zero.
 - **Diagnostics** — turn statistics into structured, evidence-carrying issues.
-  Currently `completeness` only.
-- **Rules** — declarative `NOT NULL`, `UNIQUE`, `RANGE`, and `REGEX` checks from
-  YAML or JSON. See the status block above regarding `REGEX`.
-- **Metrics and storage** — persist per-run metrics and issues to a local SQLite
-  store, which is what a comparison across runs would read. DQT does not
-  perform that comparison itself: `monitor()` is a pass-through today, so
-  trend and drift detection are not implemented (`NEW-G`).
+  All six dimensions.
+- **Rules** — declarative checks from YAML or JSON, five column-scoped and three
+  table-scoped.
+- **Metrics and storage** — per-run metrics and issues persisted to a local
+  SQLite store, scored per column, per table and per run.
+- **Monitoring** — every metric records how far it moved since the previous
+  run. A **fall** past a configured tolerance is reported; an improvement never
+  is, and a metric seen for the first time has no drift rather than zero drift.
 - **Reporting** — a self-contained HTML report with score bars and severity
   badges.
 - **Read-only HTTP API** — an optional FastAPI surface over the stored results.

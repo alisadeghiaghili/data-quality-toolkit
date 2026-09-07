@@ -54,7 +54,7 @@ from dqt.common.storage import RunStore
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.diagnostics import DQDiagnostics
 from dqt.sql.metrics import compute_run_metrics, roll_up_dimension_scores
-from dqt.sql.monitoring import monitor
+from dqt.sql.monitoring import drift_issues, monitor
 from dqt.sql.profiling import SqlProfiler, TableProfile
 from dqt.sql.referential import count_orphans
 from dqt.sql.reports import generate_html_report
@@ -302,7 +302,15 @@ class DQTPipeline:
             + validity_metrics
             + timeliness_metrics
         )
-        result.metrics = self.monitor(measured + roll_up_dimension_scores(measured, run_id))
+        rolled = measured + roll_up_dimension_scores(measured, run_id)
+        # Before persistence, so the newest stored observation is the previous
+        # run and the deltas computed here are themselves stored.
+        store = RunStore(db_path=self._store_path)
+        store.init_schema()
+        result.metrics = monitor(rolled, store=store)
+        result.issues = list(result.issues) + drift_issues(
+            result.metrics, self._pipeline_config.monitoring, run_id
+        )
 
         result.ended_at = datetime.now(UTC)
         stage_errors.extend(self._rule_file_errors)

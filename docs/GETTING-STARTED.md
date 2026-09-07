@@ -376,6 +376,41 @@ That is not a problem in practice, and the answer is the next section.
 
 ---
 
+## 6a. Watching quality change over time
+
+Every metric records how far it moved since the previous run against the same
+store. That happens automatically — it is what the store is for.
+
+DQT will not call a change a *problem* until you say how far is too far:
+
+```yaml
+monitoring:
+  max_score_drop: 0.1     # a dimension score may fall 10 points between runs
+```
+
+Then a bigger fall is reported:
+
+```
+WARNING  people  email  completeness
+  Drift: completeness on 'people.email' fell 0.750 since the previous run,
+  past the 0.1 tolerance (1.000 -> 0.250).
+```
+
+Three things worth knowing:
+
+- **An improvement is never reported.** A tolerance on the size of the change
+  would alert you whenever your data got cleaner.
+- **A first run cannot drift.** There is nothing to have drifted from, and a
+  metric seen for the first time is recorded as having no drift rather than
+  zero drift.
+- **Tables drift too, not just columns.** A table's score is the mean of its
+  columns, so a table-wide decline shows up even when no single column crossed
+  the line.
+
+A score that swings ten points a day is alarming on a customer table and normal
+on a staging table that is truncated and reloaded. DQT will not guess which
+yours is.
+
 ## 6b. `dqt check` — rules only, for CI
 
 `dqt profile` computes statistics and writes a report. When all you want is a

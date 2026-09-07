@@ -276,6 +276,21 @@ class RunStore:
                 CHECK ((dimension IS NULL) <> (metric_name IS NULL))
             );
             """,
+            # Following one metric across runs filters on the scope and
+            # leaves run_id free, so the natural-key index -- which leads
+            # with run_id -- cannot serve it. Adding an index changes no
+            # stored data, so this needs no schema-version bump and no
+            # existing store is refused.
+            """
+            CREATE INDEX IF NOT EXISTS idx_run_metrics_identity
+                ON run_metrics(
+                    COALESCE(schema_name, ''),
+                    COALESCE(table_name, ''),
+                    COALESCE(column_name, ''),
+                    COALESCE(dimension, ''),
+                    COALESCE(metric_name, '')
+                );
+            """,
             """
             CREATE INDEX IF NOT EXISTS idx_run_metrics_run_id
                 ON run_metrics(run_id);
@@ -591,6 +606,69 @@ class RunStore:
                 ORDER BY rule_name
                 """,
                 (run_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def load_metric_history(
+        self,
+        *,
+        schema_name: str | None,
+        table_name: str | None,
+        column_name: str | None,
+        dimension: str | None,
+        metric_name: str | None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return one metric's observations across runs, newest first.
+
+        A metric's identity is its scope plus what it measures, which is
+        exactly what ``idx_run_metrics_natural_key`` already keys on -- so
+        following one over time needed no schema change and no store is
+        refused for being old.
+
+        ``COALESCE`` on every nullable part, matching that index: SQLite
+        treats NULLs as distinct, so ``column_name = NULL`` matches nothing
+        and a table-scoped metric would have no history at all.
+
+        Newest first, matching :meth:`load_rule_history`, so a caller
+        reading both is not surprised by one of them.
+
+        Args:
+            schema_name: Schema the metric is scoped to, or None.
+            table_name: Table the metric is scoped to, or None.
+            column_name: Column the metric is scoped to, or None.
+            dimension: The quality dimension, or None for a measurement.
+            metric_name: The measurement's name, or None for a dimension.
+            limit: Most observations to return.
+
+        Returns:
+            Rows carrying ``run_id``, ``started_at``, ``score`` and
+            ``value``, newest first.
+
+        Example:
+            history = store.load_metric_history(
+                schema_name="main",
+                table_name="people",
+                column_name="email",
+                dimension="completeness",
+                metric_name=None,
+            )
+        """
+        with self._transaction() as conn:
+            rows = conn.execute(
+                """
+                SELECT m.run_id, r.started_at, m.score, m.value
+                FROM run_metrics AS m
+                JOIN runs AS r ON r.run_id = m.run_id
+                WHERE COALESCE(m.schema_name, '') = COALESCE(?, '')
+                  AND COALESCE(m.table_name, '')  = COALESCE(?, '')
+                  AND COALESCE(m.column_name, '') = COALESCE(?, '')
+                  AND COALESCE(m.dimension, '')   = COALESCE(?, '')
+                  AND COALESCE(m.metric_name, '') = COALESCE(?, '')
+                ORDER BY r.started_at DESC
+                LIMIT ?
+                """,
+                (schema_name, table_name, column_name, dimension, metric_name, limit),
             ).fetchall()
         return [dict(row) for row in rows]
 
