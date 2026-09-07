@@ -13,6 +13,8 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-09-07
+
 ### Added
 
 - **Missingness co-occurrence patterns (`F11`).** Profiling reported how much
