@@ -62,6 +62,11 @@ class ColumnProfile:
         distinct_count: Number of distinct non-NULL values, or ``None`` when
             distinct counting was declined. ``None`` and ``0`` are different
             answers -- the second is what an all-NULL column genuinely has.
+        normalized_distinct_count: Distinct values after folding case and
+            surrounding whitespace, or ``None`` for a column the question was
+            not asked of. Smaller than *distinct_count* means the same value
+            is written more than one way -- a consistency finding rather than
+            a uniqueness one.
         distinct_is_approximate: Whether *distinct_count* is an estimate.
             Set from what the engine actually did, not from what was asked
             for, so a request an engine cannot honour reads as exact.
@@ -86,6 +91,7 @@ class ColumnProfile:
     max_value: Any = None
     mean_value: float | None = None
     distinct_count: int | None = None
+    normalized_distinct_count: int | None = None
     distinct_is_approximate: bool = False
 
 
@@ -137,6 +143,8 @@ class _ColumnPlan:
         maximum: Position of its ``MAX``, or None on the same terms.
         mean: Position of its ``AVG``, or None when the type is not numeric.
         distinct: Position of its distinct count, or None when declined.
+        normalized_distinct: Position of its case- and space-folded distinct
+            count, or None for a column the question does not suit.
         distinct_is_approximate: Whether the distinct expression was the
             dialect's estimator. Recorded from what was *built*, not what was
             asked for.
@@ -151,6 +159,7 @@ class _ColumnPlan:
     maximum: int | None = None
     mean: int | None = None
     distinct: int | None = None
+    normalized_distinct: int | None = None
     distinct_is_approximate: bool = False
 
     def read(self, row: Any, row_count: int) -> ColumnProfile:
@@ -168,6 +177,7 @@ class _ColumnPlan:
         """
         mean = None if self.mean is None or row[self.mean] is None else float(row[self.mean])
         distinct = None if self.distinct is None else int(row[self.distinct])
+        folded = None if self.normalized_distinct is None else int(row[self.normalized_distinct])
         return ColumnProfile(
             schema_name=self.column.schema_name,
             table_name=self.column.table_name,
@@ -179,6 +189,7 @@ class _ColumnPlan:
             max_value=None if self.maximum is None else row[self.maximum],
             mean_value=mean,
             distinct_count=distinct,
+            normalized_distinct_count=folded,
             distinct_is_approximate=self.distinct_is_approximate,
         )
 
@@ -274,6 +285,7 @@ class SqlProfiler:
                 if column.row_count > 0:
                     completeness = 1.0 - (column.null_count / column.row_count)
 
+                metrics.extend(self._quality_metrics(column, run_id))
                 metrics.append(
                     DQMetric(
                         run_id=run_id,
@@ -346,7 +358,104 @@ class SqlProfiler:
             plan.distinct = len(expressions)
             expressions.append(estimated or f"COUNT(DISTINCT {quoted})")
 
+            # Only where the answer can differ. Case-folding a number is
+            # meaningless work in the hot query, and an estimate cannot be
+            # compared against an exact count to decide anything.
+            if not estimated and self._is_text_like(column.data_type):
+                folded = self._dialect.normalized_text_expression(quoted)
+                plan.normalized_distinct = len(expressions)
+                expressions.append(f"COUNT(DISTINCT {folded})")
+
         return plan
+
+    def _is_text_like(self, data_type: str) -> bool:
+        """Whether folding case and whitespace could change this column's values.
+
+        Orderable but not numeric. A date column passes and folds to itself,
+        which costs one aggregate and reports no false finding; a number is
+        excluded because the question cannot mean anything about it.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``True`` when the column may hold text.
+
+        Example:
+            assert profiler._is_text_like("TEXT") is True
+        """
+        return self._dialect.supports_min_max(data_type) and not self._dialect.supports_mean(
+            data_type
+        )
+
+    def _quality_metrics(self, column: ColumnProfile, run_id: str) -> list[DQMetric]:
+        """Score uniqueness and consistency for one column.
+
+        Produced **whether or not anything is wrong**. A dimension with no
+        metric renders as "not measured", which is indistinguishable from
+        measured-and-fine -- the distinction `F2` made load-bearing for
+        referential integrity, and the same argument applies here.
+
+        A column the statistic was not computed for is skipped rather than
+        scored 1.0, because that would claim a check nobody ran.
+
+        Args:
+            column: One profiled column.
+            run_id: The current run.
+
+        Returns:
+            Zero, one or two metrics.
+
+        Example:
+            metrics = profiler._quality_metrics(column, "run-1")
+        """
+        metrics: list[DQMetric] = []
+        present = column.row_count - column.null_count
+
+        if column.distinct_count is not None and not column.distinct_is_approximate:
+            # The share of non-NULL values that are their own value. An empty
+            # column is vacuously unique rather than a division by zero.
+            score = 1.0 if present == 0 else column.distinct_count / present
+            metrics.append(
+                DQMetric(
+                    run_id=run_id,
+                    dimension="uniqueness",
+                    score=min(score, 1.0),
+                    schema_name=column.schema_name,
+                    table_name=column.table_name,
+                    column_name=column.column_name,
+                    value=float(present - column.distinct_count),
+                    metadata={
+                        "distinct_count": column.distinct_count,
+                        "non_null_count": present,
+                    },
+                )
+            )
+
+        if column.distinct_count is not None and column.normalized_distinct_count is not None:
+            # The share of spellings that survive folding. All of them
+            # surviving means every value is written one way.
+            score = (
+                1.0
+                if column.distinct_count == 0
+                else column.normalized_distinct_count / column.distinct_count
+            )
+            metrics.append(
+                DQMetric(
+                    run_id=run_id,
+                    dimension="consistency",
+                    score=min(score, 1.0),
+                    schema_name=column.schema_name,
+                    table_name=column.table_name,
+                    column_name=column.column_name,
+                    value=float(column.distinct_count - column.normalized_distinct_count),
+                    metadata={
+                        "distinct_count": column.distinct_count,
+                        "normalized_distinct_count": column.normalized_distinct_count,
+                    },
+                )
+            )
+        return metrics
 
     def _profile_table(self, conn: Any, table: DiscoveredTable) -> TableProfile:
         """Profile one table with a single aggregate query.

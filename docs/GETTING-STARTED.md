@@ -129,6 +129,17 @@ completeness score. A cell reading `n/a` means the statistic was not produced
 rather than that it is zero — a text column has no mean, and saying `0` would
 be a number DQT never computed.
 
+Four of the six quality dimensions are measured: **completeness**,
+**uniqueness**, **consistency** and **referential integrity**. A dimension
+scores even when nothing is wrong, so "measured and fine" reads differently
+from "not measured".
+
+**Consistency** is the one people ask about. It does not mean "valid" — it
+means *written the same way every time*. A `tier` column holding `gold`,
+`Gold` and `GOLD` is one value recorded three ways, and a distinct count
+cannot see it because those genuinely are three distinct values. That is
+exactly what cleansing's `standardize` operation fixes.
+
 DQT also reads your **foreign keys** and counts orphan rows — rows whose
 reference names a parent that does not exist. Those appear under the
 `referential_integrity` dimension. A row whose foreign key is NULL is *not* an

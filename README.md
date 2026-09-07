@@ -62,6 +62,11 @@ computed with SQL, against the live database, without extracting the data.
 ## What it does
 
 - **Schema discovery** — enumerate schemas, tables, and columns.
+- **Diagnostics** — four of the six quality dimensions are measured:
+  completeness, uniqueness, consistency and referential integrity. Consistency
+  is the one worth naming: it finds values that are *the same thing written
+  more than one way* — `Tehran`, `tehran`, ` Tehran ` — which a distinct
+  count cannot see, because they genuinely are distinct.
 - **Referential integrity** — foreign keys are discovered and orphan rows
   counted with an anti-join: one `COUNT(*)` per key, no rows materialised.
   Composite keys are matched whole, and a NULL reference is not an orphan.

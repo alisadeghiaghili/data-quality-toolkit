@@ -661,6 +661,20 @@ class SqlServerDialect:
         """
         return normalized_type_name(data_type) in _NUMERIC_TYPES
 
+    def normalized_text_expression(self, quoted_column: str) -> str:
+        """Fold case and surrounding whitespace for a consistency comparison.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+
+        Returns:
+            ``LOWER(TRIM(<column>))``.
+
+        Example:
+            expression = dialect.normalized_text_expression('"city"')
+        """
+        return f"LOWER(TRIM({quoted_column}))"
+
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Return SQL Server's built-in approximate distinct count.
 

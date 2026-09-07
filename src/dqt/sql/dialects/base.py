@@ -509,6 +509,30 @@ class Dialect(Protocol):
         """
         ...
 
+    def normalized_text_expression(self, quoted_column: str) -> str:
+        """Return an expression folding case and surrounding whitespace.
+
+        Used to ask whether the same value is written more than one way --
+        ``"Tehran"``, ``"tehran"`` and ``" Tehran "`` are one city recorded
+        three ways. Comparing the distinct count of this against the distinct
+        count of the raw column finds that in a single pass.
+
+        Asked of the dialect rather than assumed because ``TRIM`` arrived in
+        SQL Server only in 2017, and an engine needing
+        ``LTRIM(RTRIM(...))`` should be able to say so without the caller
+        knowing.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+
+        Returns:
+            An SQL expression yielding the folded value.
+
+        Example:
+            expression = dialect.normalized_text_expression('"city"')
+        """
+        ...
+
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Return an approximate distinct-count expression, if one exists.
 

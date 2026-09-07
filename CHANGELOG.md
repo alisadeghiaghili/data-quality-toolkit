@@ -15,6 +15,26 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **Uniqueness and consistency diagnostics (`F3`, four of six dimensions).**
+  `DQDiagnostics` produced one of six; it now produces three, and
+  `referential_integrity` makes four. Both new ones come out of the profiling
+  pass that was already happening.
+
+  **Uniqueness** compares the distinct count against the **non-NULL** count.
+  Comparing against the row count instead reports every nullable column in the
+  database as having duplicates.
+
+  **Consistency** asks a different question, and keeping it separate is the
+  point: `"Tehran"`, `"tehran"` and `" Tehran "` are one city recorded three
+  ways, and the distinct count cannot see them because they genuinely are
+  distinct. Two rows both saying `"Shiraz"` are the opposite -- duplicated and
+  perfectly consistent. It costs one aggregate, asked of the dialect because
+  `TRIM` arrived in SQL Server only in 2017.
+
+  Each produces a metric whether or not it finds anything: a dimension with no
+  metric renders as "not measured", which is indistinguishable from
+  measured-and-fine.
+
 - **Foreign-key discovery and orphan-row detection (`F2`).** Schema discovery
   now reads foreign keys alongside columns, on the same connection, on all
   three engines. Orphan rows -- rows whose reference names a parent that does
