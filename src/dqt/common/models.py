@@ -627,6 +627,40 @@ class TimelinessConfig(BaseModel):
     max_age_days: int = Field(gt=0, description="Maximum acceptable age of the newest row.")
 
 
+class MonitoringConfig(BaseModel):
+    """When a metric moving counts as a problem.
+
+    DQT records how far every metric moved since the last run without being
+    told anything. It cannot say how far is **too** far: a completeness score
+    that swings ten points a day is alarming on a customer table and normal
+    on a staging table that is truncated and reloaded.
+
+    So the change is always recorded on the metric and becomes an issue only
+    here. This is the same split :class:`TimelinessConfig` makes, for the
+    same reason.
+
+    Only *drops* are reported. Getting better is not a problem, and a
+    tolerance on the absolute change -- the obvious implementation -- would
+    alert whenever the data got cleaner.
+
+    Attributes:
+        max_score_drop: How far a dimension score may fall between runs
+            before the fall is reported. Required; there is no defensible
+            default. A score is in ``[0, 1]``, so ``0.1`` is ten percentage
+            points.
+
+    Example::
+
+        cfg = MonitoringConfig(max_score_drop=0.1)
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_score_drop: float = Field(
+        gt=0.0, le=1.0, description="Permitted fall in a dimension score between runs."
+    )
+
+
 class ProfilingConfig(BaseModel):
     """Which column statistics to compute, and how exactly.
 
@@ -780,6 +814,9 @@ class DQPipelineConfig(BaseModel):
         sampling: Optional :class:`SamplingConfig` for large-table sampling.
         profiling: Optional :class:`ProfilingConfig` choosing which column
             statistics to compute.
+        monitoring: Optional :class:`MonitoringConfig` saying how far a
+            score may fall between runs. Without it drift is measured but
+            not judged.
         timeliness: Optional :class:`TimelinessConfig` saying how old the
             newest row may be. Without it the age is measured but not judged.
         classification: Optional :class:`ClassificationConfig` enabling
@@ -819,6 +856,7 @@ class DQPipelineConfig(BaseModel):
     profiling: ProfilingConfig | None = None
     classification: ClassificationConfig | None = None
     timeliness: TimelinessConfig | None = None
+    monitoring: MonitoringConfig | None = None
     metric_thresholds: dict[str, float] | None = None
     rule_files: list[str] = Field(default_factory=list)
 
@@ -1009,6 +1047,7 @@ __all__ = [
     "Rule",
     "RuleResult",
     "RuleRunResult",
+    "MonitoringConfig",
     "PipelineResult",
     "ProfilingConfig",
     # Config models
