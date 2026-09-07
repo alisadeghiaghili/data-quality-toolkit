@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 from dqt.common.models import ConnectionConfig
 from dqt.sql._connect import get_connection, get_dialect_for
-from dqt.sql.dialects import ColumnMetadata
+from dqt.sql.dialects import ColumnMetadata, ForeignKeyMetadata
 
 
 @dataclass(slots=True)
@@ -151,9 +151,54 @@ def discover_schema(connection_config: ConnectionConfig) -> list[DiscoveredTable
     connection = get_connection(connection_config)
     try:
         column_rows = dialect.fetch_column_metadata(connection)
+        # Read on the same connection rather than a second one. Discovery is
+        # already a round trip, and opening another to ask a related question
+        # of the same catalogue would double it for nothing.
+        foreign_key_rows = dialect.fetch_foreign_keys(connection)
     finally:
         connection.close()
-    return _group_columns_into_tables(column_rows)
+
+    tables = _group_columns_into_tables(column_rows)
+    _attach_foreign_keys(tables, foreign_key_rows)
+    return tables
+
+
+def _attach_foreign_keys(
+    tables: list[DiscoveredTable], foreign_key_rows: list[ForeignKeyMetadata]
+) -> None:
+    """Hang each constraint on the table that declares it.
+
+    A constraint naming a table discovery did not return is dropped rather
+    than attached to nothing. That happens when the child table is filtered
+    out -- a view, a system table -- and a dangling key would be a reference
+    nothing downstream could resolve.
+
+    Args:
+        tables: Discovered tables, modified in place.
+        foreign_key_rows: Adapter-layer constraint rows.
+
+    Returns:
+        None.
+
+    Example:
+        _attach_foreign_keys(tables, rows)
+    """
+    by_key = {(table.schema_name, table.table_name): table for table in tables}
+    for row in foreign_key_rows:
+        table = by_key.get((row.schema_name, row.table_name))
+        if table is None:
+            continue
+        table.foreign_keys.append(
+            DiscoveredForeignKey(
+                schema_name=row.schema_name,
+                table_name=row.table_name,
+                columns=row.columns,
+                referenced_schema=row.referenced_schema,
+                referenced_table=row.referenced_table,
+                referenced_columns=row.referenced_columns,
+                constraint_name=row.constraint_name,
+            )
+        )
 
 
 def _group_columns_into_tables(column_rows: list[ColumnMetadata]) -> list[DiscoveredTable]:

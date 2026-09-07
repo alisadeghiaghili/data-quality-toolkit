@@ -56,6 +56,52 @@ def _unimplemented(symbol: str) -> NoReturn:
     raise NotImplementedError(f"{symbol} is declared but not yet implemented (DQT-08).")
 
 
+@dataclass(frozen=True, slots=True)
+class ForeignKeyMetadata:
+    """One foreign-key constraint as a dialect reports it.
+
+    The adapter-layer row shape returned by
+    :meth:`Dialect.fetch_foreign_keys`, deliberately not the domain's
+    :class:`~dqt.sql.schema_discovery.DiscoveredForeignKey` -- having an
+    adapter build a domain object would point the dependency outward.
+
+    A composite key is **one** of these carrying several column pairs, not
+    several carrying one each. Engines report the columns separately and
+    every one of them requires regrouping; doing that regrouping in the
+    dialect means the domain never sees the split form and cannot
+    accidentally treat half a key as a whole one.
+
+    Attributes:
+        schema_name: Schema of the referencing table.
+        table_name: The referencing (child) table.
+        columns: Referencing columns, in key order.
+        referenced_schema: Schema of the referenced table.
+        referenced_table: The referenced (parent) table.
+        referenced_columns: Referenced columns, aligned by position with
+            *columns*.
+        constraint_name: The constraint's name where the engine reports one.
+
+    Example:
+        key = ForeignKeyMetadata(
+            schema_name="main",
+            table_name="orders",
+            columns=("customer_id",),
+            referenced_schema="main",
+            referenced_table="customers",
+            referenced_columns=("id",),
+            constraint_name="",
+        )
+    """
+
+    schema_name: str
+    table_name: str
+    columns: tuple[str, ...]
+    referenced_schema: str
+    referenced_table: str
+    referenced_columns: tuple[str, ...]
+    constraint_name: str = ""
+
+
 class ReadOnlyEnforcement(Enum):
     """How strongly a dialect can hold a connection to ``read_only=True``.
 
@@ -257,6 +303,24 @@ class Dialect(Protocol):
         Example:
             rows = dialect.fetch_column_metadata(connection)
             assert all(row.table_name for row in rows)
+        """
+        ...
+
+    def fetch_foreign_keys(self, connection: Any) -> list[ForeignKeyMetadata]:
+        """Read every user table's foreign-key constraints.
+
+        Returns one entry per constraint, with composite keys already
+        regrouped -- see :class:`ForeignKeyMetadata` for why that regrouping
+        belongs here rather than in the caller.
+
+        Args:
+            connection: An open connection to the profiled database.
+
+        Returns:
+            The constraints, in a deterministic order.
+
+        Example:
+            keys = dialect.fetch_foreign_keys(connection)
         """
         ...
 
@@ -491,6 +555,43 @@ def normalized_type_name(data_type: str) -> str:
         assert normalized_type_name("VARCHAR(50)") == "varchar"
     """
     return data_type.split("(", 1)[0].strip().lower()
+
+
+def _group_foreign_key_rows(rows: Sequence[Any]) -> list[ForeignKeyMetadata]:
+    """Regroup per-column catalogue rows into whole constraints.
+
+    PostgreSQL and SQL Server both report a composite key as one row per
+    column, and both need the same regrouping, so it lives here rather than
+    twice. Rows must arrive ordered by constraint and then by the column's
+    position within it -- that ordering is what keeps a child column aligned
+    with the parent column it references.
+
+    Args:
+        rows: ``(constraint_name, schema, table, column, referenced_schema,
+            referenced_table, referenced_column)`` tuples.
+
+    Returns:
+        One :class:`ForeignKeyMetadata` per constraint.
+
+    Example:
+        keys = _group_foreign_key_rows(cursor.fetchall())
+    """
+    grouped: dict[tuple[str, str, str], list[Any]] = {}
+    for row in rows:
+        grouped.setdefault((str(row[0]), str(row[1]), str(row[2])), []).append(row)
+
+    return [
+        ForeignKeyMetadata(
+            schema_name=key[1],
+            table_name=key[2],
+            columns=tuple(str(r[3]) for r in members),
+            referenced_schema=str(members[0][4]),
+            referenced_table=str(members[0][5]),
+            referenced_columns=tuple(str(r[6]) for r in members),
+            constraint_name=key[0],
+        )
+        for key, members in grouped.items()
+    ]
 
 
 def quote_with_doubled_delimiter(name: str, quote_char: str) -> str:

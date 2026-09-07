@@ -28,13 +28,24 @@ Example:
 from __future__ import annotations
 
 from dqt.common.models import ConnectionConfig
+from dqt.sql._connect import get_connection, get_dialect_for
+from dqt.sql.dialects import Dialect
 from dqt.sql.schema_discovery import DiscoveredForeignKey
 
 __all__ = ["count_orphans", "orphan_count_sql"]
 
 
-def orphan_count_sql(dialect: object, key: DiscoveredForeignKey) -> str:
+def orphan_count_sql(dialect: Dialect, key: DiscoveredForeignKey) -> str:
     """Build the anti-join that counts rows whose reference is unmatched.
+
+    A ``LEFT JOIN`` on the whole key, keeping the rows where the parent side
+    came back NULL. The join carries **every** column of the key, so a
+    composite key matches only when all of it matches.
+
+    Rows whose own key is NULL are excluded before the join is considered.
+    They would satisfy the ``IS NULL`` test on the parent side -- nothing
+    joins to NULL -- and be counted as orphans, which they are not: a row
+    with no reference references nothing.
 
     Args:
         dialect: The dialect to quote identifiers with.
@@ -46,11 +57,34 @@ def orphan_count_sql(dialect: object, key: DiscoveredForeignKey) -> str:
     Example:
         sql = orphan_count_sql(dialect, key)
     """
-    raise NotImplementedError
+    child = dialect.qualified_identifier(key.schema_name, key.table_name)
+    parent = dialect.qualified_identifier(key.referenced_schema, key.referenced_table)
+
+    on_terms = " AND ".join(
+        f"c.{dialect.quote_identifier(child_column)} = p.{dialect.quote_identifier(parent_column)}"
+        for child_column, parent_column in zip(key.columns, key.referenced_columns, strict=True)
+    )
+    # Every column of the child's key must be present for the row to be
+    # claiming a reference at all. A partially-NULL composite key references
+    # nothing, the same as a wholly-NULL one.
+    present = " AND ".join(
+        f"c.{dialect.quote_identifier(column)} IS NOT NULL" for column in key.columns
+    )
+    # Any parent column serves as the "did it match" probe; the first is
+    # arbitrary but stable.
+    probe = f"p.{dialect.quote_identifier(key.referenced_columns[0])}"
+
+    return (
+        f"SELECT COUNT(*) FROM {child} AS c "
+        f"LEFT JOIN {parent} AS p ON {on_terms} "
+        f"WHERE {present} AND {probe} IS NULL"
+    )
 
 
 def count_orphans(connection_config: ConnectionConfig, key: DiscoveredForeignKey) -> int:
     """Count rows whose foreign key names a parent row that does not exist.
+
+    One query, no rows materialised.
 
     Args:
         connection_config: Connection to read through. May be read-only.
@@ -62,4 +96,11 @@ def count_orphans(connection_config: ConnectionConfig, key: DiscoveredForeignKey
     Example:
         orphans = count_orphans(connection_config, key)
     """
-    raise NotImplementedError
+    dialect = get_dialect_for(connection_config)
+    statement = orphan_count_sql(dialect, key)
+    connection = get_connection(connection_config)
+    try:
+        row = connection.execute(statement).fetchone()
+    finally:
+        connection.close()
+    return int(row[0])

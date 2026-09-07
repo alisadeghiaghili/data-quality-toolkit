@@ -29,6 +29,7 @@ from typing import Any
 from dqt.common.models import ConnectionConfig
 from dqt.sql.dialects.base import (
     ColumnMetadata,
+    ForeignKeyMetadata,
     ReadOnlyEnforcement,
     ansi_select_aggregates_sql,
     normalized_type_name,
@@ -345,6 +346,92 @@ class SqliteDialect:
                 for row in pragma_rows
             )
         return columns
+
+    def fetch_foreign_keys(self, connection: Any) -> list[ForeignKeyMetadata]:
+        """Read every user table's foreign keys from ``PRAGMA foreign_key_list``.
+
+        One query to list tables plus one ``PRAGMA`` per table, matching what
+        :meth:`fetch_column_metadata` costs and for the same reason: SQLite
+        exposes no catalogue view that would make it one query.
+
+        The ``PRAGMA`` reports a composite key as several rows sharing an
+        ``id`` and ordered by ``seq``. Regrouping them here is what stops a
+        caller comparing one column of a two-column key against one parent
+        column and calling the row matched.
+
+        Args:
+            connection: An open SQLite connection.
+
+        Returns:
+            The constraints, tables in name order.
+
+        Example:
+            keys = SqliteDialect().fetch_foreign_keys(connection)
+        """
+        tables = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
+        ]
+
+        keys: list[ForeignKeyMetadata] = []
+        for table in tables:
+            grouped: dict[int, list[Any]] = {}
+            for row in connection.execute(
+                f"PRAGMA foreign_key_list({self.quote_identifier(table)})"
+            ).fetchall():
+                grouped.setdefault(int(row[0]), []).append(row)
+
+            for constraint_id in sorted(grouped):
+                rows = sorted(grouped[constraint_id], key=lambda r: int(r[1]))
+                keys.append(
+                    ForeignKeyMetadata(
+                        schema_name="main",
+                        table_name=table,
+                        columns=tuple(str(r[3]) for r in rows),
+                        referenced_schema="main",
+                        referenced_table=str(rows[0][2]),
+                        # A reference naming no parent column means the
+                        # parent's primary key. SQLite reports None there,
+                        # and passing that through would build a join
+                        # against a column called "None".
+                        referenced_columns=tuple(
+                            str(r[4])
+                            if r[4] is not None
+                            else self._primary_key_of(connection, str(rows[0][2]))
+                            for r in rows
+                        ),
+                        constraint_name="",
+                    )
+                )
+        return keys
+
+    def _primary_key_of(self, connection: Any, table: str) -> str:
+        """Return *table*'s single primary-key column.
+
+        ``REFERENCES parent`` without a column list means the parent's
+        primary key, and SQLite reports ``None`` for the referenced column in
+        that case.
+
+        Args:
+            connection: An open SQLite connection.
+            table: The referenced table.
+
+        Returns:
+            The primary-key column name, or ``"rowid"`` when the table
+            declares none.
+
+        Example:
+            name = SqliteDialect()._primary_key_of(connection, "customers")
+        """
+        for row in connection.execute(
+            f"PRAGMA table_info({self.quote_identifier(table)})"
+        ).fetchall():
+            if int(row[5]):
+                return str(row[1])
+        return "rowid"
 
     def select_aggregates_sql(
         self,

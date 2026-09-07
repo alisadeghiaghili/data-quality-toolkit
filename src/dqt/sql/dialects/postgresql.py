@@ -28,12 +28,37 @@ from typing import Any
 from dqt.common.models import ConnectionConfig
 from dqt.sql.dialects.base import (
     ColumnMetadata,
+    ForeignKeyMetadata,
     ReadOnlyEnforcement,
+    _group_foreign_key_rows,
     ansi_select_aggregates_sql,
     normalized_type_name,
     quote_with_doubled_delimiter,
     validate_row_limit,
 )
+
+#: Foreign keys with their columns, ordered so a composite key's child and
+#: parent columns line up by position.
+FOREIGN_KEY_METADATA_SQL = """
+    SELECT
+        tc.constraint_name,
+        tc.table_schema,
+        tc.table_name,
+        kcu.column_name,
+        ccu.table_schema  AS referenced_schema,
+        ccu.table_name    AS referenced_table,
+        ccu.column_name   AS referenced_column
+    FROM information_schema.table_constraints AS tc
+    JOIN information_schema.key_column_usage AS kcu
+      ON tc.constraint_name = kcu.constraint_name
+     AND tc.table_schema = kcu.table_schema
+    JOIN information_schema.constraint_column_usage AS ccu
+      ON ccu.constraint_name = tc.constraint_name
+     AND ccu.constraint_schema = tc.constraint_schema
+    WHERE tc.constraint_type = 'FOREIGN KEY'
+      AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+    ORDER BY tc.constraint_name, kcu.ordinal_position
+"""
 
 # One query returns every user column, already ordered, so discovery costs a
 # single round trip regardless of how many tables the database holds.
@@ -266,6 +291,26 @@ class PostgresqlDialect:
                 is_primary_key,
             ) in rows
         ]
+
+    def fetch_foreign_keys(self, connection: Any) -> list[ForeignKeyMetadata]:
+        """Read foreign keys from ``information_schema``.
+
+        One query. The ``ordinal_position`` ordering is what keeps a
+        composite key's columns aligned with the parent's, and the ordering
+        by constraint name keeps the output deterministic.
+
+        Args:
+            connection: An open PostgreSQL connection.
+
+        Returns:
+            The constraints, with composite keys regrouped.
+
+        Example:
+            keys = PostgresqlDialect().fetch_foreign_keys(connection)
+        """
+        cursor = connection.cursor()
+        cursor.execute(FOREIGN_KEY_METADATA_SQL)
+        return _group_foreign_key_rows(cursor.fetchall())
 
     def select_aggregates_sql(
         self,

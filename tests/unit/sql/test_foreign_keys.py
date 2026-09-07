@@ -241,3 +241,105 @@ class TestTheCountIsCheap:
 
         assert len(selects) == 1, f"expected one query, got {selects}"
         assert "COUNT(" in selects[0].upper()
+
+
+class TestOrphansReachTheRun:
+    """A count that stops in a helper is the `F10` failure again."""
+
+    def test_a_broken_reference_becomes_a_referential_integrity_issue(
+        self, make_sqlite_db: Callable[[str, str], Path], tmp_path: Path
+    ) -> None:
+        """The dimension the dashboard has always rendered as "not measured".
+
+        There are two orphans in the fixture -- one per key -- and they are
+        the whole point of the facet: a column-by-column profiler cannot see
+        either of them, because each individual value looks fine.
+        """
+        result = _run_pipeline(make_sqlite_db, tmp_path, "pipeline-orphans.db")
+        issues = [
+            issue
+            for issue in result.issues  # type: ignore[attr-defined]
+            if issue.dimension == "referential_integrity"
+        ]
+
+        assert len(issues) == 2
+        assert all(issue.table_name == "orders" for issue in issues)
+
+    def test_an_intact_database_raises_nothing(
+        self, make_sqlite_db: Callable[[str, str], Path], tmp_path: Path
+    ) -> None:
+        """The control. A check that always fires says nothing."""
+        sql = """
+            CREATE TABLE parents (id INTEGER PRIMARY KEY);
+            CREATE TABLE children (id INTEGER PRIMARY KEY,
+                                   parent_id INTEGER REFERENCES parents(id));
+            INSERT INTO parents (id) VALUES (1);
+            INSERT INTO children (id, parent_id) VALUES (1, 1), (2, NULL);
+        """
+        result = _run_pipeline(make_sqlite_db, tmp_path, "pipeline-clean.db", sql)
+
+        assert not [
+            issue
+            for issue in result.issues  # type: ignore[attr-defined]
+            if issue.dimension == "referential_integrity"
+        ]
+
+    def test_the_dimension_is_scored_rather_than_unmeasured(
+        self, make_sqlite_db: Callable[[str, str], Path], tmp_path: Path
+    ) -> None:
+        """ "Not measured" and "measured, and fine" are different answers.
+
+        The dashboard has rendered referential integrity as unmeasured since
+        it was built. A metric has to exist for it to say anything else, and
+        an intact database is exactly the case where the distinction matters
+        -- silence there is indistinguishable from not having looked.
+        """
+        sql = """
+            CREATE TABLE parents (id INTEGER PRIMARY KEY);
+            CREATE TABLE children (id INTEGER PRIMARY KEY,
+                                   parent_id INTEGER REFERENCES parents(id));
+            INSERT INTO parents (id) VALUES (1);
+            INSERT INTO children (id, parent_id) VALUES (1, 1);
+        """
+        result = _run_pipeline(make_sqlite_db, tmp_path, "pipeline-scored.db", sql)
+        metrics = [
+            metric
+            for metric in result.metrics  # type: ignore[attr-defined]
+            if metric.dimension == "referential_integrity"
+        ]
+
+        assert metrics, "referential integrity produced no metric"
+        assert metrics[0].score == 1.0
+
+
+def _run_pipeline(
+    make_sqlite_db: Callable[[str, str], Path],
+    tmp_path: Path,
+    name: str,
+    sql: str = SEEDED,
+) -> object:
+    """Run the whole pipeline over a seeded database.
+
+    Args:
+        make_sqlite_db: Factory fixture building a SQLite file.
+        tmp_path: pytest's per-test directory.
+        name: Distinct database filename.
+        sql: Schema and data to seed.
+
+    Returns:
+        The :class:`~dqt.common.models.PipelineResult`.
+
+    Example:
+        result = _run_pipeline(make_sqlite_db, tmp_path, "a.db")
+    """
+    from dqt.common.models import DQPipelineConfig
+    from dqt.sql.pipeline import DQTPipeline
+
+    db_file = make_sqlite_db(name, sql)
+    result, _ = DQTPipeline(
+        ConnectionConfig(id="s", dsn=f"sqlite:///{db_file}"),
+        DQPipelineConfig(connection_id="s"),
+        store_path=tmp_path / "runs.db",
+        report_dir=tmp_path,
+    ).run()
+    return result
