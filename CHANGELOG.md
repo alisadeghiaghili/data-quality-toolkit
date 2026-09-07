@@ -13,6 +13,8 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-09-07
+
 ### Added
 
 - **Drift detection; `monitor()` is no longer a pass-through (`F8`).** It has
