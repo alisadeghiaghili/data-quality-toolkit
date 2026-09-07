@@ -50,7 +50,9 @@ from dqt.common.models import ConnectionConfig
 from dqt.exceptions import ConnectionConfigError, RuleEvaluationError
 from dqt.sql.dialects.base import (
     ColumnMetadata,
+    ForeignKeyMetadata,
     ReadOnlyEnforcement,
+    _group_foreign_key_rows,
     ansi_select_aggregates_sql,
     normalized_type_name,
     validate_row_limit,
@@ -77,6 +79,29 @@ DEFAULT_ODBC_DRIVER = "ODBC Driver 18 for SQL Server"
 # semicolon-delimited key/value pairs, so silently passing arbitrary
 # user-supplied text into one would be a connection-string injection.
 SUPPORTED_DSN_QUERY_KEYS = ("driver", "encrypt", "trust_server_certificate")
+
+#: Foreign keys from the ``sys`` catalogue. ``constraint_column_id`` is the
+#: ordering that keeps a composite key's child and parent columns aligned.
+FOREIGN_KEY_METADATA_SQL = """
+    SELECT
+        fk.name AS constraint_name,
+        SCHEMA_NAME(child.schema_id) AS table_schema,
+        child.name AS table_name,
+        cchild.name AS column_name,
+        SCHEMA_NAME(parent.schema_id) AS referenced_schema,
+        parent.name AS referenced_table,
+        cparent.name AS referenced_column
+    FROM sys.foreign_keys AS fk
+    JOIN sys.foreign_key_columns AS fkc ON fkc.constraint_object_id = fk.object_id
+    JOIN sys.tables AS child ON child.object_id = fk.parent_object_id
+    JOIN sys.tables AS parent ON parent.object_id = fk.referenced_object_id
+    JOIN sys.columns AS cchild
+      ON cchild.object_id = fkc.parent_object_id AND cchild.column_id = fkc.parent_column_id
+    JOIN sys.columns AS cparent
+      ON cparent.object_id = fkc.referenced_object_id
+     AND cparent.column_id = fkc.referenced_column_id
+    ORDER BY fk.name, fkc.constraint_column_id
+"""
 
 # Base tables only (views excluded, matching the other two dialects), system
 # schemas excluded, ordered so discovery output is deterministic.
@@ -426,6 +451,25 @@ class SqlServerDialect:
                 is_primary_key,
             ) in rows
         ]
+
+    def fetch_foreign_keys(self, connection: Any) -> list[ForeignKeyMetadata]:
+        """Read foreign keys from ``sys`` catalogue views.
+
+        One query. ``sys.foreign_key_columns`` carries the column ordering
+        that keeps a composite key aligned with its parent.
+
+        Args:
+            connection: An open SQL Server connection.
+
+        Returns:
+            The constraints, with composite keys regrouped.
+
+        Example:
+            keys = SqlServerDialect().fetch_foreign_keys(connection)
+        """
+        cursor = connection.cursor()
+        cursor.execute(FOREIGN_KEY_METADATA_SQL)
+        return _group_foreign_key_rows(cursor.fetchall())
 
     def select_aggregates_sql(
         self,

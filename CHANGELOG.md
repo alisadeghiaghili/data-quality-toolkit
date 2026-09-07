@@ -13,6 +13,26 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Added
+
+- **Foreign-key discovery and orphan-row detection (`F2`).** Schema discovery
+  now reads foreign keys alongside columns, on the same connection, on all
+  three engines. Orphan rows -- rows whose reference names a parent that does
+  not exist -- are counted with one `COUNT(*)` anti-join per key, materialising
+  nothing.
+
+  Two properties in that query are load-bearing. **Composite keys are matched
+  whole**: comparing column by column reports a row as satisfied when only half
+  of it matches, which is a clean database that is not clean. And **a NULL
+  foreign key is not an orphan** -- a row with no reference references nothing,
+  which the null count already answers; counting it otherwise would inflate
+  every orphan count on every nullable key in the database.
+
+  Results surface as the `referential_integrity` dimension, which the dashboard
+  had rendered "not measured" since it was built. A metric is produced for every
+  key whether or not orphans are found: an intact relationship scoring 1.0 and a
+  relationship nobody checked are different answers.
+
 ## [1.3.0] — 2026-09-07
 
 ### Added

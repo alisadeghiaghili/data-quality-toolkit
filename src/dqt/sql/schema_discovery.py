@@ -15,11 +15,11 @@ ignored ``ConnectionConfig.read_only`` entirely.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dqt.common.models import ConnectionConfig
 from dqt.sql._connect import get_connection, get_dialect_for
-from dqt.sql.dialects import ColumnMetadata
+from dqt.sql.dialects import ColumnMetadata, ForeignKeyMetadata
 
 
 @dataclass(slots=True)
@@ -56,6 +56,47 @@ class DiscoveredColumn:
 
 
 @dataclass(slots=True)
+class DiscoveredForeignKey:
+    """One foreign-key constraint, as a whole rather than column by column.
+
+    A composite key is **one** of these with several columns, not several
+    with one each. SQLite reports it as several ``PRAGMA`` rows sharing an
+    id, and reading those as independent keys would compare each column
+    against one parent column alone -- calling a row matched when only half
+    of it matches.
+
+    Attributes:
+        schema_name: Schema of the referencing table.
+        table_name: The referencing (child) table.
+        columns: The referencing columns, in key order.
+        referenced_schema: Schema of the referenced table.
+        referenced_table: The referenced (parent) table.
+        referenced_columns: The referenced columns, in the same order as
+            *columns*. Position ``i`` of one corresponds to position ``i`` of
+            the other.
+        constraint_name: The constraint's name where the engine reports one.
+
+    Example:
+        key = DiscoveredForeignKey(
+            schema_name="main",
+            table_name="orders",
+            columns=("customer_id",),
+            referenced_schema="main",
+            referenced_table="customers",
+            referenced_columns=("id",),
+        )
+    """
+
+    schema_name: str
+    table_name: str
+    columns: tuple[str, ...]
+    referenced_schema: str
+    referenced_table: str
+    referenced_columns: tuple[str, ...]
+    constraint_name: str = ""
+
+
+@dataclass(slots=True)
 class DiscoveredTable:
     """Metadata for one discovered database table.
 
@@ -75,6 +116,7 @@ class DiscoveredTable:
     schema_name: str
     table_name: str
     columns: list[DiscoveredColumn]
+    foreign_keys: list[DiscoveredForeignKey] = field(default_factory=list)
 
 
 def discover_schema(connection_config: ConnectionConfig) -> list[DiscoveredTable]:
@@ -109,9 +151,54 @@ def discover_schema(connection_config: ConnectionConfig) -> list[DiscoveredTable
     connection = get_connection(connection_config)
     try:
         column_rows = dialect.fetch_column_metadata(connection)
+        # Read on the same connection rather than a second one. Discovery is
+        # already a round trip, and opening another to ask a related question
+        # of the same catalogue would double it for nothing.
+        foreign_key_rows = dialect.fetch_foreign_keys(connection)
     finally:
         connection.close()
-    return _group_columns_into_tables(column_rows)
+
+    tables = _group_columns_into_tables(column_rows)
+    _attach_foreign_keys(tables, foreign_key_rows)
+    return tables
+
+
+def _attach_foreign_keys(
+    tables: list[DiscoveredTable], foreign_key_rows: list[ForeignKeyMetadata]
+) -> None:
+    """Hang each constraint on the table that declares it.
+
+    A constraint naming a table discovery did not return is dropped rather
+    than attached to nothing. That happens when the child table is filtered
+    out -- a view, a system table -- and a dangling key would be a reference
+    nothing downstream could resolve.
+
+    Args:
+        tables: Discovered tables, modified in place.
+        foreign_key_rows: Adapter-layer constraint rows.
+
+    Returns:
+        None.
+
+    Example:
+        _attach_foreign_keys(tables, rows)
+    """
+    by_key = {(table.schema_name, table.table_name): table for table in tables}
+    for row in foreign_key_rows:
+        table = by_key.get((row.schema_name, row.table_name))
+        if table is None:
+            continue
+        table.foreign_keys.append(
+            DiscoveredForeignKey(
+                schema_name=row.schema_name,
+                table_name=row.table_name,
+                columns=row.columns,
+                referenced_schema=row.referenced_schema,
+                referenced_table=row.referenced_table,
+                referenced_columns=row.referenced_columns,
+                constraint_name=row.constraint_name,
+            )
+        )
 
 
 def _group_columns_into_tables(column_rows: list[ColumnMetadata]) -> list[DiscoveredTable]:

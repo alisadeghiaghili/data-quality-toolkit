@@ -29,7 +29,12 @@ Public surface::
 from __future__ import annotations
 
 from dqt.exceptions import ConnectionConfigError
-from dqt.sql.dialects.base import ColumnMetadata, Dialect, ReadOnlyEnforcement
+from dqt.sql.dialects.base import (
+    ColumnMetadata,
+    Dialect,
+    ForeignKeyMetadata,
+    ReadOnlyEnforcement,
+)
 from dqt.sql.dialects.postgresql import POSTGRESQL
 from dqt.sql.dialects.sqlite import SQLITE
 from dqt.sql.dialects.sqlserver import SQLSERVER
@@ -123,6 +128,7 @@ __all__ = [
     "SQLSERVER",
     "SUPPORTED_DIALECT_NAMES",
     "ColumnMetadata",
+    "ForeignKeyMetadata",
     "Dialect",
     "ReadOnlyEnforcement",
     "get_dialect",

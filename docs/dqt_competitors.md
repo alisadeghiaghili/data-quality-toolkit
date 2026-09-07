@@ -28,7 +28,7 @@ Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 | # | Floor requirement | Aug 17 | **Now** | Where DQT actually is, at `1.1.0` |
 |---|---|---|---|---|
 | F1 | **Profiling** — column stats (min, max, mean, distinct, null count/ratio) | PARTIAL | **MET** | All five, in **one aggregate query per table** whatever the column count — a test counts the statements SQLite actually executes, because a per-column implementation returns identical numbers. `MIN`/`MAX`/`AVG` are gated on the column's type by the **dialect**, since `TEXT` orders fine on SQLite and errors on SQL Server. Distinct counting is on by default and can be declined; an estimate is flagged as one. Patterns are still absent — see F11. |
-| F2 | **Profiling** — table stats (row counts, orphan FK rows, referential integrity) | NOT MET | **NOT MET** | Row counts, plus sampling metadata when a sample was taken. Still no orphan-FK detection and no FK discovery. |
+| F2 | **Profiling** — table stats (row counts, orphan FK rows, referential integrity) | NOT MET | **MET** | Foreign keys discovered on all three engines, on the same connection as the column catalogue. Orphan rows counted with one `COUNT(*)` anti-join per key, no rows materialised. Composite keys are matched **whole** — a per-column comparison calls a row satisfied when half of it matches — and a NULL reference is not an orphan. Surfaces as the `referential_integrity` dimension, which the dashboard had always rendered "not measured". |
 | F3 | **Diagnostics** — all six canonical dimensions with structured issue objects | NOT MET | **NOT MET** | `completeness` only, one of six. `DQDiagnostics` says so in its own docstring. Issue objects remain well-structured. |
 | F4 | **Rules** — column rules (range, regex, type, uniqueness, NOT NULL) | PARTIAL | **MET** | Five expressions, all working and tested: `NOT NULL`, `UNIQUE`, `RANGE`, `REGEX`, `REFERENCE`. `DQT-04` fixed `regex` on SQLite. Rules compile to grouped aggregate SQL, one scan per table. **`REGEX` is refused on SQL Server** — T-SQL has no such operator, and refusing is deliberate rather than reporting zero violations. |
 | F5 | **Rules** — table rules (FK integrity, duplication, conditional constraints) | NOT MET | **NOT MET** | Column scope only. `RuleScope` has a `column_pattern`; nothing evaluates a table-level predicate. |
@@ -43,8 +43,8 @@ Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 | F14 | **CLI** — profile, check rules, generate reports | PARTIAL | **MET** | `dqt profile`, `dqt check` (rules only, for CI — no column statistics computed) and `dqt serve`. `serve` is what makes the dashboard startable without Python, and it is where the loopback rule stopped being a docstring: it binds `127.0.0.1` and **refuses** a reachable address unless told something authenticates in front. |
 | F15 | **Read-only query/API surface** for downstream consumers | PARTIAL | **MET** | Six JSON endpoints and five server-rendered HTML screens, tested, and frozen under the `1.0` API contract. No JS and no build step. **No authentication** — by design, and the reason the documented way to run it binds loopback. |
 
-**Score: 8 of 15 met, 4 partial, 3 not met** — up from 0 of 15 in August.
-F1, F10 and F14 closed on 2026-09-07, along with the roadmap's own `DQT-09`.
+**Score: 9 of 15 met, 4 partial, 2 not met** — up from 0 of 15 in August.
+F1, F10, F14 and F2 closed on 2026-09-07, along with the roadmap's own `DQT-09`.
 
 A sequenced plan for the remaining ten, with its dependencies and the one
 decision that blocks a full score, is in
