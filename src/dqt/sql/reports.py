@@ -92,6 +92,62 @@ def generate_report(
 # ---------------------------------------------------------------------------
 
 
+def column_rows(result: PipelineResult) -> list[list[object]]:
+    """Return one row per profiled column, as plain values.
+
+    Shared by both renderers so that *what* a report describes is decided
+    once. Values are undecorated -- a score is a float, not a badge -- and
+    each renderer applies its own presentation.
+
+    Args:
+        result: The completed run.
+
+    Returns:
+        Rows of ``[schema, table, column, db_type, semantic_type, nulls,
+        distinct, min, max, mean, score]``.
+
+    Example:
+        rows = column_rows(result)
+    """
+    raise NotImplementedError
+
+
+def _import_pdf_backend() -> Any:
+    """Import the PDF library, or explain which extra provides it.
+
+    Returns:
+        The ``fpdf`` module.
+
+    Raises:
+        ConfigurationError: If the extra is not installed.
+
+    Example:
+        fpdf = _import_pdf_backend()
+    """
+    raise NotImplementedError
+
+
+def generate_pdf_report(
+    result: PipelineResult,
+    output_path: Path | str | None = None,
+    language: str = "en",
+) -> Path:
+    """Write a printable PDF of a completed run.
+
+    Args:
+        result: Completed PipelineResult from ``DQTPipeline.run()``.
+        output_path: Destination file, or a directory to name a file in.
+        language: ``"en"`` or ``"fa"``.
+
+    Returns:
+        The resolved path of the written file.
+
+    Example:
+        path = generate_pdf_report(result, "report.pdf")
+    """
+    raise NotImplementedError
+
+
 def _score_badge(score: float) -> Raw:
     """Render a score as a bar and a percentage.
 
