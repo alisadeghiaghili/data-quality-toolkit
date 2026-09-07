@@ -62,6 +62,9 @@ computed with SQL, against the live database, without extracting the data.
 ## What it does
 
 - **Schema discovery** — enumerate schemas, tables, and columns.
+- **Referential integrity** — foreign keys are discovered and orphan rows
+  counted with an anti-join: one `COUNT(*)` per key, no rows materialised.
+  Composite keys are matched whole, and a NULL reference is not an orphan.
 - **Classification** — optional semantic typing: email, IBAN/Sheba, Iranian
   national ID, mobile and landline numbers, Shamsi dates. **Off by default**,
   because it is the only stage that reads real values rather than aggregating

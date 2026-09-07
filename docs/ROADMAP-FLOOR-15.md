@@ -149,11 +149,15 @@ now fully closed.
 
 | | Item | Size | Notes |
 |---|---|---|---|
-| 5 | **`F2`** FK discovery + orphan-row detection | M | Each dialect already has a `fetch_column_metadata`; this adds the constraint query beside it. Orphan counting is an anti-join — the shape `knowledge.py` already uses. |
+| 5 | **`F2`** FK discovery + orphan-row detection | M | **Done 2026-09-07.** Constraint query beside the column one, on the same connection. Composite keys regrouped in the dialect so the domain cannot mistake half a key for a whole one. |
 | 6 | **`F5`** table-level rules | M | Needs `F2` for FK integrity. `RuleScope` already permits `column_name=None`; nothing evaluates it. |
 | 7 | **`F3`** the remaining five dimensions | L | Needs `F1` and `F2`. This is the largest single item and the one that most changes what the product *is* — `completeness` alone is one sixth of the promise. |
 
 Target: **`1.3.0`** / **`1.4.0`**. After this wave: **11 met**.
+
+`F2` has landed, so the score is **9 of 15**. `F3` is now unblocked on both
+sides: `F1` gave it the statistics a validity or uniqueness diagnostic needs,
+and `F2` gave it referential integrity.
 
 ### Wave 3 — the measurement layer
 

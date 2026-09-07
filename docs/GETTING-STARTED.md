@@ -129,6 +129,11 @@ completeness score. A cell reading `n/a` means the statistic was not produced
 rather than that it is zero — a text column has no mean, and saying `0` would
 be a number DQT never computed.
 
+DQT also reads your **foreign keys** and counts orphan rows — rows whose
+reference names a parent that does not exist. Those appear under the
+`referential_integrity` dimension. A row whose foreign key is NULL is *not* an
+orphan: it references nothing, which the null count already tells you.
+
 All of it costs **one query per table**, whatever the column count, so a wide
 table is not a slow one.
 

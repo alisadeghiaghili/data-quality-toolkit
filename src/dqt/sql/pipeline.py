@@ -55,6 +55,7 @@ from dqt.sql.diagnostics import DQDiagnostics
 from dqt.sql.metrics import compute_run_metrics
 from dqt.sql.monitoring import monitor
 from dqt.sql.profiling import SqlProfiler, TableProfile
+from dqt.sql.referential import count_orphans
 from dqt.sql.reports import generate_html_report
 from dqt.sql.rules import apply_rules as _apply_rules_engine
 from dqt.sql.schema_discovery import DiscoveredTable, discover_schema
@@ -203,8 +204,13 @@ class DQTPipeline:
             discovered_tables=discovered_tables,
         )
 
+        # Stage 4b: referential integrity
+        referential_issues, referential_metrics = self.check_referential_integrity(
+            discovered_tables, run_id=run_id
+        )
+
         # Merge all issues
-        all_issues = diagnostic_issues + rule_issues
+        all_issues = diagnostic_issues + rule_issues + referential_issues
 
         # Assemble intermediate result
         result = self._build_result(
@@ -221,7 +227,7 @@ class DQTPipeline:
         run_metrics = self.compute_metrics(profiled_tables, run_id=run_id)
 
         # Stage 7: monitoring
-        result.metrics = self.monitor(result.metrics + run_metrics)
+        result.metrics = self.monitor(result.metrics + run_metrics + referential_metrics)
 
         result.ended_at = datetime.now(UTC)
         stage_errors.extend(self._rule_file_errors)
@@ -463,6 +469,75 @@ class DQTPipeline:
                 continue
             filtered.append(table)
         return filtered
+
+    def check_referential_integrity(
+        self, discovered_tables: list[DiscoveredTable], run_id: str
+    ) -> tuple[list[DQIssue], list[DQMetric]]:
+        """Count orphan rows for every discovered foreign key.
+
+        Produces a metric per key **whether or not it finds anything**. An
+        intact relationship scoring 1.0 and a relationship nobody checked are
+        different answers, and the dashboard has rendered referential
+        integrity as "not measured" since it was built -- silence here would
+        be indistinguishable from not having looked.
+
+        Args:
+            discovered_tables: Tables with their constraints.
+            run_id: The current run.
+
+        Returns:
+            Issues for keys with orphans, and a metric for every key.
+
+        Example:
+            issues, metrics = pipeline.check_referential_integrity(tables, "run-1")
+        """
+        issues: list[DQIssue] = []
+        metrics: list[DQMetric] = []
+
+        for table in discovered_tables:
+            for key in table.foreign_keys:
+                orphans = count_orphans(self._connection_config, key)
+                columns = ", ".join(key.columns)
+                target = f"{key.referenced_table}({', '.join(key.referenced_columns)})"
+                # Scored against the whole relationship rather than the row
+                # count: "are there any" is the question, and a single orphan
+                # is a broken constraint however large the table.
+                metrics.append(
+                    DQMetric(
+                        run_id=run_id,
+                        # A quality judgement, so `dimension` and not
+                        # `metric_name`: DQMetric carries exactly one of the
+                        # two, and the orphan count itself rides in `value`.
+                        dimension="referential_integrity",
+                        score=1.0 if orphans == 0 else 0.0,
+                        schema_name=key.schema_name,
+                        table_name=key.table_name,
+                        value=float(orphans),
+                        metadata={
+                            "columns": list(key.columns),
+                            "referenced_table": key.referenced_table,
+                            "referenced_columns": list(key.referenced_columns),
+                        },
+                    )
+                )
+                if orphans:
+                    issues.append(
+                        DQIssue(
+                            issue_id=f"{run_id}-fk-{key.table_name}-{'-'.join(key.columns)}",
+                            run_id=run_id,
+                            dimension="referential_integrity",
+                            severity="error",
+                            message=(
+                                f"{orphans} row(s) in '{key.table_name}' reference a "
+                                f"'{key.referenced_table}' row that does not exist "
+                                f"({columns} -> {target})."
+                            ),
+                            schema_name=key.schema_name,
+                            table_name=key.table_name,
+                            column_name=key.columns[0] if len(key.columns) == 1 else None,
+                        )
+                    )
+        return issues, metrics
 
     def classify_columns(
         self, profiled_tables: list[TableProfile]
