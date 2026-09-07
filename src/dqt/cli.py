@@ -309,22 +309,23 @@ def _build_pipeline_config(
     include_schemas = None
     if args.schema:
         include_schemas = [args.schema]
-    elif file_cfg.get("include_schemas"):
+    elif "include_schemas" in file_cfg:
         include_schemas = file_cfg["include_schemas"]
 
-    return DQPipelineConfig(
-        connection_id=args.connection_id,
-        include_schemas=include_schemas,
-        exclude_schemas=file_cfg.get("exclude_schemas"),
-        include_tables=file_cfg.get("include_tables"),
-        exclude_tables=file_cfg.get("exclude_tables"),
-        rule_files=file_cfg.get("rule_files", []),
-    )
+    # The file is handed to the model rather than copied key by key. Every
+    # key added to DQPipelineConfig after this function was written had been
+    # silently dropped -- sampling, profiling, classification -- and an
+    # enumeration is a list somebody has to remember to extend. The model
+    # already knows its own fields, and `extra="forbid"` now sees a
+    # misspelled key instead of ignoring it.
+    settings: dict[str, Any] = dict(file_cfg)
+    settings["connection_id"] = args.connection_id
+    if include_schemas is not None:
+        settings["include_schemas"] = include_schemas
+    settings.setdefault("rule_files", [])
 
+    return DQPipelineConfig(**settings)
 
-# ---------------------------------------------------------------------------
-# Rich output helpers
-# ---------------------------------------------------------------------------
 
 _SEVERITY_STYLE = {
     "critical": "bold red",

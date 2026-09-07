@@ -119,6 +119,7 @@ def classify_table(
         results[column.column_name] = classify_column(
             column.column_name,
             values,
+            minimum_match_ratio=config.minimum_match_ratio,
             max_sample_values=config.sample_size,
             apply_persian_normalization=config.persian_normalization,
         )

@@ -576,6 +576,11 @@ class ClassificationConfig(BaseModel):
         sample_size: Maximum rows to read per table. Defaults to ``1000``.
             Bounding this is what keeps the stage's memory flat regardless
             of table size.
+        minimum_match_ratio: How much of a column must match a validator
+            before DQT will call the column that type -- and therefore before
+            it will call the remainder invalid. Defaults to ``0.8``. Below
+            this the column is ``unknown``, and an unknown column has no
+            expectation attached, so none of its values are called invalid.
         persian_normalization: Whether to fold Persian and Arabic digit and
             letter variants before matching. Defaults to ``False``. Useful
             where the same national ID is stored with Persian digits in one
@@ -590,7 +595,36 @@ class ClassificationConfig(BaseModel):
 
     enabled: bool = False
     sample_size: int = Field(default=1000, gt=0, description="Maximum rows read per table.")
+    minimum_match_ratio: float = Field(
+        default=0.8, gt=0.0, le=1.0, description="Match share before a column is typed."
+    )
     persian_normalization: bool = False
+
+
+class TimelinessConfig(BaseModel):
+    """When data counts as stale.
+
+    DQT reports the age of a table's newest row without being told anything.
+    It cannot say whether that age is a **problem**: forty days is alarming
+    for an order ledger and unremarkable for an archive, and nothing in the
+    data distinguishes them.
+
+    So the age is always a measurement and becomes a judgement only here. A
+    default would produce confident findings about tables DQT knows nothing
+    about, which is the failure this project is organised against.
+
+    Attributes:
+        max_age_days: How old the newest row may be before the table is
+            reported stale. Required -- there is no defensible default.
+
+    Example::
+
+        cfg = TimelinessConfig(max_age_days=7)
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_age_days: int = Field(gt=0, description="Maximum acceptable age of the newest row.")
 
 
 class ProfilingConfig(BaseModel):
@@ -746,6 +780,8 @@ class DQPipelineConfig(BaseModel):
         sampling: Optional :class:`SamplingConfig` for large-table sampling.
         profiling: Optional :class:`ProfilingConfig` choosing which column
             statistics to compute.
+        timeliness: Optional :class:`TimelinessConfig` saying how old the
+            newest row may be. Without it the age is measured but not judged.
         classification: Optional :class:`ClassificationConfig` enabling
             semantic typing. Off unless given, because it is the only stage
             that reads real values rather than aggregates.
@@ -782,6 +818,7 @@ class DQPipelineConfig(BaseModel):
     sampling: SamplingConfig | None = None
     profiling: ProfilingConfig | None = None
     classification: ClassificationConfig | None = None
+    timeliness: TimelinessConfig | None = None
     metric_thresholds: dict[str, float] | None = None
     rule_files: list[str] = Field(default_factory=list)
 
@@ -967,6 +1004,7 @@ __all__ = [
     "ClassificationConfig",
     "ColumnResult",
     "TableResult",
+    "TimelinessConfig",
     "SchemaResult",
     "Rule",
     "RuleResult",
