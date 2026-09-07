@@ -13,6 +13,31 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Added
+
+- **Dimension scores rolled up to table and run (`F7`).** Per-column scores
+  arrived with `F1`, `F2` and `F3`. Per-table did not exist, and the run-level
+  number existed only as a read query -- `RunStore` averaged the column rows on
+  the way out.
+
+  Moving it into the metrics is the point. A rollup that lives in a read query
+  cannot be trended (`run_metrics` is what the history reads), cannot answer
+  "which of my forty tables is worst on completeness", and has to be
+  re-derived by every JSON consumer that is not the dashboard.
+
+  **The run-level number did not move.** It is the mean over columns, as
+  before -- not the mean of table means, which would weigh a one-column lookup
+  table equally with a forty-column fact table and quietly change every chart
+  already drawn.
+
+  Rolled-up rows declare their `scope` and how many scores they averaged: a
+  mean over one column and a mean over forty read identically otherwise.
+
+  `average_score_by_dimension` now reads the rollup instead of averaging, in
+  one statement, **falling back to the old average for runs stored before
+  this**. Without the fallback every historical run in an existing store would
+  lose its dimension scores -- which is deleting history, just less obviously.
+
 ## [1.5.0] — 2026-09-07
 
 ### Added
