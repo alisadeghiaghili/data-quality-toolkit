@@ -251,10 +251,49 @@ rules:
 Point a config file at it and pass that to `--config`. There are working
 examples in `examples/rules/`.
 
-Five expressions are available: `NOT NULL`, `UNIQUE`, `RANGE`, `REGEX`, and
-`REFERENCE` (values must appear in a reference list or table). Rules are
-**column-scoped** — there are no table-level rules such as foreign-key
-integrity yet.
+Eight expressions are available. Five apply to a **column** — `NOT NULL`,
+`UNIQUE`, `RANGE`, `REGEX` and `REFERENCE` (values must appear in a reference
+list or table).
+
+Three apply to a **table**, and answer questions no column rule can:
+
+```yaml
+  # A composite key your schema does not declare.
+  - name: order_line_is_unique
+    dimension: uniqueness
+    severity: critical
+    scope: {table_pattern: "order_lines"}
+    expression: UNIQUE_TOGETHER
+    params: {columns: [order_id, line_no]}
+
+  # Referential integrity for a relationship the database does NOT enforce --
+  # which is exactly where orphan rows accumulate.
+  - name: customer_must_exist
+    dimension: referential_integrity
+    severity: error
+    scope: {table_pattern: "order_lines"}
+    expression: FOREIGN_KEY
+    params:
+      columns: [customer_id]
+      references_table: customers
+      references_columns: [id]
+
+  # "When status is shipped, shipped_at must be set."
+  - name: shipped_needs_a_date
+    dimension: consistency
+    severity: error
+    scope: {table_pattern: "order_lines"}
+    expression: CONDITIONAL_NOT_NULL
+    params: {when_column: status, when_equals: shipped, then_column: shipped_at}
+```
+
+Omit `column_pattern` for a table rule — it runs once per table, not once per
+column.
+
+**No rule takes SQL from you.** Column and table names are quoted and checked
+against the table before any query runs; values are bound parameters. That is
+deliberate: a rule carrying a raw predicate would be more expressive and would
+hand a config file the ability to run arbitrary SQL.
 
 **`REGEX` does not work on SQL Server.** T-SQL has no regular-expression
 operator, so DQT *refuses* the rule rather than reporting zero violations. On

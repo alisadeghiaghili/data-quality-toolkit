@@ -666,8 +666,18 @@ def _cmd_check(args: argparse.Namespace) -> int:
     if args.config:
         rule_paths.extend(_load_config_file(args.config).get("rule_files", []))
 
+    # Naming the same file in both --rules and a config's rule_files loaded
+    # it twice, so every violation was counted twice. Nothing errored and the
+    # numbers looked plausible, which is the worst way for a count to be
+    # wrong. Resolved before comparing, so "rules.yaml" and "./rules.yaml"
+    # are recognised as one file.
+    seen: set[Path] = set()
     rules: list[Any] = []
     for path in rule_paths:
+        resolved = Path(path).resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
         rules.extend(load_rules(path))
 
     if not rules:
