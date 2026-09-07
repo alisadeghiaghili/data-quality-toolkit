@@ -38,17 +38,20 @@ Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 | F9 | **Knowledge/Domain** — reference tables for validation | NOT MET | **MET** | `sql/knowledge.py`, reachable through the `REFERENCE` rule expression: values must appear in a reference list or table, matched with an anti-join over `SELECT DISTINCT` so duplicate reference rows cannot inflate the denominator. Optional Persian character folding. |
 | F10 | **Classification** — semantic column typing | NOT MET | **MET** | Runs as a pipeline stage and populates `ColumnResult.semantic_type`, rendered in the report beside the database type. **Off by default** — not for cost but for what it reads: it is the only stage that pulls real values into Python, and the validators are most useful exactly where the values are most sensitive. One bounded query per table when enabled. |
 | F11 | **Missingness (internal)** — null stats and patterns | PARTIAL | **MET** | Counts and ratios, plus **co-occurrence patterns**: which columns are NULL in the same rows, as one bounded `GROUP BY` per table. The boundary with `missingly` is drawn deliberately — that package *infers the mechanism* (`mcar_test`, a statistical inference over a DataFrame); this *counts co-occurrence*, which is a `GROUP BY` and asserts nothing about why. DQT reports the pattern; missingly explains it. Off by default, because it costs a second scan. |
-| F12 | **Reports** — HTML/PDF, per-table/column metrics, issues, trends | PARTIAL | **PARTIAL** | Self-contained HTML — verified to contain zero external references, so it survives being emailed. Bilingual EN/FA with RTL, an embedded font, and WCAG AA contrast computed in CI. A trend chart exists on the rule-history screen. **No PDF.** |
+| F12 | **Reports** — HTML/PDF, per-table/column metrics, issues, trends | PARTIAL | **MET** | Self-contained HTML — verified to contain zero external references, so it survives being emailed — plus a printable **PDF** behind the `pdf` extra, so a lean install stays lean. Bilingual EN/FA with RTL in both; the PDF reuses the font the HTML already embeds, converted from `woff2` at runtime by a library the PDF backend already depends on, and its Persian is verified by reading the file back through a PDF parser. Both renderers share one row builder, so a statistic added later cannot appear in one and not the other. |
 | F13 | **Code quality** — English docstrings, unit + integration tests, CI (pytest/mypy/ruff) | PARTIAL | **MET** | 1079 tests passing, coverage 95.51% against a 95 floor, `mypy --strict` clean, `ruff` clean, `doc_audit` and `arch_audit` at zero. Python 3.11 / 3.12 / 3.14, and **all three databases exercised against live servers in CI** — including SQL Server, which is what closed the biggest hole in this row. |
 | F14 | **CLI** — profile, check rules, generate reports | PARTIAL | **MET** | `dqt profile`, `dqt check` (rules only, for CI — no column statistics computed) and `dqt serve`. `serve` is what makes the dashboard startable without Python, and it is where the loopback rule stopped being a docstring: it binds `127.0.0.1` and **refuses** a reachable address unless told something authenticates in front. |
 | F15 | **Read-only query/API surface** for downstream consumers | PARTIAL | **MET** | Six JSON endpoints and five server-rendered HTML screens, tested, and frozen under the `1.0` API contract. No JS and no build step. **No authentication** — by design, and the reason the documented way to run it binds loopback. |
 
-**Score: 14 of 15 met, 1 partial, 0 not met** — up from 0 of 15 in August.
-F1, F2, F3, F5, F10 and F14 closed on 2026-09-07, along with the roadmap's own
-`DQT-09`. **Nothing is outright unmet any more**; the one partial is F12 (PDF), placed last
-by the owner on 2026-09-07 and possibly never — it buys a format at the cost
-of a runtime dependency, against a lean footprint this document names as one
-of only three real differentiators.
+**Score: 15 of 15 met, 0 partial, 0 not met** — up from 0 of 15 in August.
+Every row closed on 2026-09-07, along with the roadmap's own `DQT-09`.
+
+**F12 was the one this document argued against**, on the grounds that a PDF
+buys a format at the cost of a runtime dependency, against a lean footprint
+named here as one of only three real differentiators. That argument was not
+wrong, and it was not overruled — it was **answered**: the dependency lives
+behind an extra, so an install that does not want a PDF carries none of it.
+The objection was to the cost, and the cost was removed rather than accepted.
 
 A sequenced plan for the remaining ten, with its dependencies and the one
 decision that blocks a full score, is in

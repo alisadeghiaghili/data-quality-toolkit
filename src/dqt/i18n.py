@@ -72,6 +72,10 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
     "partial": {"en": "partial", "fa": "ناقص"},
     "failed": {"en": "failed", "fa": "ناموفق"},
     # Screen and report labels
+    # Added for the PDF report (`F12`). The HTML report carries its title in
+    # the document structure; a PDF has no <title>, so the heading on the
+    # page is the only place it can say what it is.
+    "report_title": {"en": "Data Quality Report", "fa": "گزارش کیفیت داده"},
     "overview": {"en": "Overview", "fa": "نمای کلی"},
     "run": {"en": "Run", "fa": "اجرا"},
     "runs": {"en": "Runs", "fa": "اجراها"},

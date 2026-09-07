@@ -14,7 +14,9 @@ The output is a single HTML file with inline CSS; no external dependencies.
 from __future__ import annotations
 
 import html
+import tempfile
 from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,8 @@ from typing import Any
 from dqt._html import Raw, document, element, table
 from dqt._theme import STYLESHEET
 from dqt.common.models import DQMetric, PipelineResult, get_args_of_dq_dimension
+from dqt.exceptions import ConfigurationError
+from dqt.i18n import Language, translate
 from dqt.viz import Chart, bar_chart, scorecard, severity_indicator
 
 # ---------------------------------------------------------------------------
@@ -90,6 +94,339 @@ def generate_report(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnReportRow:
+    """One profiled column, as both renderers describe it.
+
+    Named rather than positional on purpose. A shared ``list[object]`` is
+    the arrangement where inserting a statistic silently shifts every field
+    after it in one renderer and not the other -- and both would still
+    typecheck, still run, and quietly mislabel every column in the report.
+
+    Attributes:
+        schema_name: Schema the column belongs to.
+        table_name: Table the column belongs to.
+        column_name: The column.
+        db_type: Its database type, or ``"n/a"``.
+        semantic_type: What classification recognised it as, or ``"n/a"``.
+        null_count: NULL values, or ``"n/a"`` when not measured.
+        distinct_count: Distinct values, or ``"n/a"``.
+        minimum: Smallest value, or ``"n/a"``.
+        maximum: Largest value, or ``"n/a"``.
+        mean: Arithmetic mean, or ``"n/a"`` for a type with no mean.
+        completeness: Score in ``[0, 1]``.
+
+    Example:
+        row = ColumnReportRow(
+            schema_name="main",
+            table_name="customers",
+            column_name="email",
+            db_type="TEXT",
+            semantic_type="email",
+            null_count=1,
+            distinct_count=3,
+            minimum="a@x.com",
+            maximum="z@x.com",
+            mean="n/a",
+            completeness=0.75,
+        )
+    """
+
+    schema_name: str
+    table_name: str
+    column_name: str
+    db_type: str
+    semantic_type: str
+    null_count: object
+    distinct_count: object
+    minimum: object
+    maximum: object
+    mean: object
+    completeness: float
+
+
+def column_rows(result: PipelineResult) -> list[ColumnReportRow]:
+    """Return one row per profiled column, as plain values.
+
+    Shared by both renderers so that *what* a report describes is decided
+    once. Values are undecorated -- a score is a float, not a badge -- and
+    each renderer applies its own presentation.
+
+    When `F1` added the mean and the distinct count, a second
+    hand-maintained column list is exactly where they would have gone
+    missing.
+
+    Args:
+        result: The completed run.
+
+    Returns:
+        One :class:`ColumnReportRow` per column, tables in name order.
+
+    Example:
+        rows = column_rows(result)
+    """
+    rows: list[ColumnReportRow] = []
+    for _key, table_result in sorted(result.tables.items()):
+        for column in table_result.columns:
+            metric = _metric_lookup(
+                result.metrics,
+                "completeness",
+                schema=column.schema_name,
+                table=column.table_name,
+                column=column.column_name,
+            )
+            null_count = int(metric.value) if metric and metric.value is not None else "n/a"
+            statistics = metric.metadata if metric and metric.metadata else {}
+            rows.append(
+                ColumnReportRow(
+                    schema_name=column.schema_name,
+                    table_name=column.table_name,
+                    column_name=column.column_name,
+                    db_type=column.db_type or "n/a",
+                    semantic_type=column.semantic_type or "n/a",
+                    null_count=null_count,
+                    distinct_count=_statistic(statistics, "distinct_count"),
+                    minimum=_statistic(statistics, "min_value"),
+                    maximum=_statistic(statistics, "max_value"),
+                    mean=_statistic(statistics, "mean_value"),
+                    completeness=(metric.score if metric and metric.score is not None else 1.0),
+                )
+            )
+    return rows
+
+
+#: Cached across calls so the woff2 is decoded once per process rather than
+#: once per report.
+_CONVERTED_FONT: Path | None = None
+
+
+def _import_pdf_backend() -> Any:
+    """Import the PDF library, or explain which extra provides it.
+
+    Follows the pattern the SQL Server dialect uses for ``pyodbc``: a bare
+    ``ModuleNotFoundError`` tells a DBA nothing about what to install.
+
+    Returns:
+        The ``fpdf`` module.
+
+    Raises:
+        ConfigurationError: If the extra is not installed.
+
+    Example:
+        fpdf = _import_pdf_backend()
+    """
+    try:
+        import fpdf
+    except ImportError as error:
+        raise ConfigurationError(
+            "Writing a PDF needs the 'pdf' extra, which is not installed. "
+            "Install it with: pip install 'dqt[pdf]'"
+        ) from error
+    return fpdf
+
+
+def _pdf_font_path() -> Path:
+    """Return a TrueType copy of the report font, converting once per process.
+
+    The package ships Vazirmatn as ``woff2`` because that is what the HTML
+    report embeds. No PDF library accepts a web font, so it is converted
+    here -- by ``fonttools``, which the PDF backend already depends on, so
+    the conversion costs no extra dependency and no second font asset ships.
+    Reusing the same font is what keeps the two reports from disagreeing
+    about which typeface they are.
+
+    Written to a temporary directory rather than beside the packaged font.
+    The first version wrote into the installed package, which works in a
+    development checkout and fails wherever ``site-packages`` is read-only
+    -- a container image, a system install, a locked-down server. It also
+    left an untracked file in the source tree.
+
+    Returns:
+        Path to a ``.ttf``, created on first use and reused thereafter.
+
+    Raises:
+        ConfigurationError: If the conversion fails.
+
+    Example:
+        path = _pdf_font_path()
+    """
+    global _CONVERTED_FONT
+    if _CONVERTED_FONT is not None and _CONVERTED_FONT.exists():
+        return _CONVERTED_FONT
+
+    source = Path(__file__).resolve().parents[1] / "fonts" / "Vazirmatn-Regular.woff2"
+    target = Path(tempfile.gettempdir()) / "dqt-Vazirmatn-Regular.ttf"
+
+    if not target.exists():
+        try:
+            from fontTools.ttLib import TTFont
+
+            font = TTFont(str(source))
+            # Clearing the flavor turns a web font back into a plain
+            # TrueType one; the glyph data itself is untouched.
+            font.flavor = None
+            font.save(str(target))
+        except Exception as error:  # noqa: BLE001 - the cause is what matters
+            raise ConfigurationError(
+                f"Could not prepare the report font for PDF output: {error}"
+            ) from error
+
+    _CONVERTED_FONT = target
+    return target
+
+
+def generate_pdf_report(
+    result: PipelineResult,
+    output_path: Path | str | None = None,
+    language: Language = "en",
+) -> Path:
+    """Write a printable PDF of a completed run.
+
+    A companion to :func:`generate_html_report` rather than a copy of it:
+    the HTML report is the interactive artifact, this is the one that goes
+    in an email to somebody who will never run DQT. Both describe the same
+    columns, because :func:`column_rows` decides that once.
+
+    Text shaping is enabled, which is what makes Persian render as joined
+    letters in the right order rather than as disconnected forms.
+
+    Args:
+        result: Completed PipelineResult from ``DQTPipeline.run()``.
+        output_path: Destination file, or a directory to name a file in.
+            Defaults to ``dqt_report_<run_id>.pdf`` in the working
+            directory.
+        language: ``"en"`` or ``"fa"``. Only affects the headings; the data
+            is the data.
+
+    Returns:
+        The resolved path of the written file.
+
+    Raises:
+        ConfigurationError: If the ``pdf`` extra is not installed.
+
+    Example:
+        path = generate_pdf_report(result, "report.pdf")
+    """
+    fpdf = _import_pdf_backend()
+
+    destination = Path(output_path) if output_path else Path.cwd()
+    if destination.is_dir():
+        destination = destination / f"dqt_report_{result.run_id}.pdf"
+
+    document = fpdf.FPDF(orientation="L", unit="mm", format="A4")
+    document.set_auto_page_break(auto=True, margin=12)
+    document.add_font("vazirmatn", "", str(_pdf_font_path()))
+    document.set_font("vazirmatn", size=9)
+    # HarfBuzz shaping. Without it Persian renders as isolated letter forms
+    # in visual order, which is legible to nobody.
+    document.set_text_shaping(True)
+    document.add_page()
+
+    title = translate("report_title", language)
+    document.set_font_size(16)
+    document.cell(text=title, new_x="LMARGIN", new_y="NEXT")
+    document.set_font_size(9)
+    document.cell(
+        text=(
+            f"Run {result.run_id}  |  status: {result.status}  |  "
+            f"{len(result.tables)} table(s), {len(result.issues)} issue(s)"
+        ),
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
+    document.ln(4)
+
+    _pdf_table(
+        document,
+        ["Schema", "Table", "Column", "Type", "Semantic", "Nulls", "Distinct", "Score"],
+        [
+            [
+                row.schema_name,
+                row.table_name,
+                row.column_name,
+                row.db_type,
+                row.semantic_type,
+                row.null_count,
+                row.distinct_count,
+                f"{row.completeness:.2f}",
+            ]
+            for row in column_rows(result)
+        ],
+    )
+
+    if result.issues:
+        document.ln(4)
+        document.set_font_size(12)
+        document.cell(text="Issues", new_x="LMARGIN", new_y="NEXT")
+        document.set_font_size(9)
+        _pdf_table(
+            document,
+            ["Severity", "Table", "Column", "Dimension", "Message"],
+            [
+                [
+                    issue.severity,
+                    issue.table_name or "",
+                    issue.column_name or "",
+                    issue.dimension or "",
+                    issue.message,
+                ]
+                for issue in result.issues
+            ],
+            widths=(22, 34, 30, 38, 150),
+        )
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    document.output(str(destination))
+    return destination
+
+
+def _pdf_table(
+    document: Any,
+    headers: list[str],
+    rows: list[list[object]],
+    widths: tuple[float, ...] | None = None,
+) -> None:
+    """Draw one table into a PDF document.
+
+    Cells are truncated rather than wrapped. A profile report is a wide,
+    scannable grid; a wrapped message turns every row into three and makes
+    the page unreadable, and the HTML report remains the place to read a
+    long message in full.
+
+    Args:
+        document: The open ``FPDF`` document.
+        headers: Column headings.
+        rows: Rows of values.
+        widths: Column widths in millimetres, or None to divide evenly.
+
+    Returns:
+        None.
+
+    Example:
+        _pdf_table(document, ["A"], [["1"]])
+    """
+    available = document.w - 2 * document.l_margin
+    if widths is None:
+        widths = tuple(available / len(headers) for _ in headers)
+
+    document.set_font_size(8)
+    for header, width in zip(headers, widths, strict=True):
+        document.cell(width, 6, header, border=1)
+    document.ln()
+
+    for row in rows:
+        for value, width in zip(row, widths, strict=True):
+            text = "" if value is None else str(value)
+            # Roughly two characters per millimetre at this size. Measuring
+            # each string would be exact and would cost a text-shaping pass
+            # per cell, which is the wrong trade for a printable summary.
+            limit = max(3, int(width / 1.7))
+            if len(text) > limit:
+                text = text[: limit - 1] + "\u2026"
+            document.cell(width, 5, text, border=1)
+        document.ln()
 
 
 def _score_badge(score: float) -> Raw:
@@ -496,34 +833,24 @@ def _render(result: PipelineResult) -> str:
         )
         table_rows.append([schema, name, row_count, _score_badge(average), issue_count])
 
-    column_rows: list[list[object]] = []
-    for _key, table_result in sorted(result.tables.items()):
-        for column in table_result.columns:
-            metric = _metric_lookup(
-                result.metrics,
-                "completeness",
-                schema=column.schema_name,
-                table=column.table_name,
-                column=column.column_name,
-            )
-            null_count = int(metric.value) if metric and metric.value is not None else "n/a"
-            score = metric.score if metric and metric.score is not None else 1.0
-            statistics = metric.metadata if metric and metric.metadata else {}
-            column_rows.append(
-                [
-                    column.schema_name,
-                    column.table_name,
-                    column.column_name,
-                    column.db_type or "n/a",
-                    column.semantic_type or "n/a",
-                    null_count,
-                    _statistic(statistics, "distinct_count"),
-                    _statistic(statistics, "min_value"),
-                    _statistic(statistics, "max_value"),
-                    _statistic(statistics, "mean_value"),
-                    _score_badge(score),
-                ]
-            )
+    # Built from the shared rows, decorated here. The renderer owns the
+    # badge; what a report describes is decided once, in column_rows.
+    rendered_column_rows: list[list[object]] = [
+        [
+            row.schema_name,
+            row.table_name,
+            row.column_name,
+            row.db_type,
+            row.semantic_type,
+            row.null_count,
+            row.distinct_count,
+            row.minimum,
+            row.maximum,
+            row.mean,
+            _score_badge(row.completeness),
+        ]
+        for row in column_rows(result)
+    ]
 
     issue_rows: list[list[object]] = [
         [
@@ -576,7 +903,7 @@ def _render(result: PipelineResult) -> str:
                 "Mean",
                 "Completeness",
             ],
-            column_rows,
+            rendered_column_rows,
         ),
         issue_section,
         Raw(_external_section(result)),

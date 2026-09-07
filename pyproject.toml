@@ -46,6 +46,11 @@ dev = [
     # contributes no coverage, which would make the 90% gate measure less than
     # it claims to.
     "pandas>=2.0",
+    # tests/unit/sql/test_pdf_report.py reads the generated PDF back through
+    # a real parser rather than checking the bytes it just wrote, because the
+    # failure that matters -- glyphs embedded without a correct ToUnicode
+    # mapping -- produces a file that looks right and copies as mojibake.
+    "pypdf>=4.0",
 ]
 postgres = [
     # One driver per database (DQT-08). psycopg 3 is the maintained line and
@@ -64,6 +69,21 @@ sqlserver = [
 ui = [
     "fastapi>=0.110",
     "uvicorn>=0.30",
+]
+pdf = [
+    # Behind an extra deliberately. A lean dependency footprint is one of
+    # only three differentiators dqt_competitors.md credits DQT with, and
+    # every PDF library is heavy -- fpdf2 brings Pillow and fontTools with
+    # it. Someone who does not want a PDF pays nothing for one.
+    #
+    # uharfbuzz is what shapes Arabic-script text. Without it Persian
+    # renders as isolated letter forms in visual order, which is legible to
+    # nobody, so it is a hard requirement of this extra rather than an
+    # optional nicety. brotli is what lets fontTools read the packaged
+    # woff2 font.
+    "fpdf2>=2.8",
+    "uharfbuzz>=0.39",
+    "brotli>=1.1",
 ]
 bridges = [
     # dqt.bridges.missingly reads a bounded sample into a DataFrame and hands
@@ -120,15 +140,29 @@ no_implicit_reexport = true
 module = "tests.*"
 disallow_untyped_defs = false
 
-# psycopg/pyodbc/fastapi are optional extras (postgres, sqlserver, ui) not
-# installed in the base dev environment — treat them as untyped rather than
-# failing import. psycopg2 is gone: DQT-08 settled on one PostgreSQL driver.
+# psycopg/pyodbc/fastapi/fpdf are optional extras (postgres, sqlserver, ui,
+# pdf) not installed in the base dev environment — treat them as untyped
+# rather than failing import. psycopg2 is gone: DQT-08 settled on one
+# PostgreSQL driver. fontTools ships no py.typed marker; it arrives with fpdf2
+# rather than being asked for directly, and is used in one place to convert
+# the packaged woff2 font to TrueType.
 [[tool.mypy.overrides]]
-module = ["psycopg", "pyodbc", "fastapi"]
+module = ["psycopg", "pyodbc", "fastapi", "fpdf", "fontTools.*"]
 ignore_missing_imports = true
 
 # Route decorators resolve to Any because fastapi itself is untyped here;
 # that's a consequence of the override above, not a real typing gap.
+# fpdf2 drags Pillow in, and Pillow's stubs reach into numpy. mypy then
+# analyses numpy's own stubs under `python_version = "3.11"` and fails on
+# `type X = ...`, which is 3.12 syntax -- an error inside a package DQT never
+# imports, produced by a version of numpy nobody here chose. Not following
+# them is the honest fix: these are transitive artifacts of an optional
+# extra, and DQT's own types do not depend on any of them.
+[[tool.mypy.overrides]]
+module = ["fpdf.*", "PIL.*", "numpy.*", "fontTools.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = "dqt.ui.app"
 disallow_untyped_decorators = false

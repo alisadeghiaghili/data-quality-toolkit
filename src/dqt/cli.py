@@ -58,6 +58,7 @@ from dqt.common.models import ConnectionConfig, DQPipelineConfig, PipelineResult
 from dqt.exceptions import ConfigurationError
 from dqt.exit_codes import FAIL_ON_CHOICES, ExitCode, decide_exit_code
 from dqt.sql.pipeline import DQTPipeline
+from dqt.sql.reports import generate_pdf_report
 from dqt.sql.rules import apply_rules
 from dqt.sql.schema_discovery import discover_schema
 
@@ -145,6 +146,20 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=list(FAIL_ON_CHOICES),
         default="error",
         help=_FAIL_ON_HELP,
+    )
+    profile.add_argument(
+        "--pdf",
+        action="store_true",
+        help=(
+            "Also write a printable PDF beside the HTML report. Needs the "
+            "'pdf' extra: pip install 'dqt[pdf]'"
+        ),
+    )
+    profile.add_argument(
+        "--language",
+        choices=["en", "fa"],
+        default="en",
+        help="Language for the PDF report's headings (default: en).",
     )
     profile.add_argument(
         "--dry-run",
@@ -521,6 +536,10 @@ def _cmd_profile(args: argparse.Namespace) -> int:
 
     for stage_error in result.stage_errors:
         _err.print(f"[yellow]{stage_error.stage}:[/yellow] {stage_error.message}")
+
+    if getattr(args, "pdf", False):
+        pdf_path = generate_pdf_report(result, args.report_dir, language=args.language)
+        _err.print(f"[bold]PDF:[/bold] {pdf_path}")
 
     # Only the report path goes to stdout for shell capture
     _out.print(str(report_path))

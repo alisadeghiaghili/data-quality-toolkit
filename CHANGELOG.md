@@ -13,6 +13,30 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Added
+
+- **A printable PDF report (`F12`) -- the capability floor is now 15 of 15.**
+  `dqt profile --pdf`, or `generate_pdf_report()` from Python.
+
+  **Behind the `pdf` extra** (`pip install "dqt[pdf]"`). Every PDF library is
+  heavy, and a lean dependency footprint is one of only three differentiators
+  `dqt_competitors.md` credits DQT with -- so nobody who does not want a PDF
+  pays for one. Without the extra, `--pdf` names what to install rather than
+  failing with a bare `ModuleNotFoundError`.
+
+  **Persian renders correctly**, as joined letters in the right order. The font
+  the HTML report already embeds is reused, converted from `woff2` at runtime
+  by `fonttools` -- which the PDF backend already depends on -- so no second
+  font asset ships and the two reports cannot disagree about which typeface
+  they are. The tests read the PDF back through a real parser, because the
+  failure that matters is a file that looks right on screen and copies as
+  mojibake.
+
+  **The content is shared, not duplicated.** Both renderers consume one
+  `column_rows()` builder returning a named structure, so a statistic added
+  later cannot reach one report and not the other -- and cannot silently shift
+  by one position in a shared list of anonymous values.
+
 ## [1.7.0] — 2026-09-07
 
 ### Added
