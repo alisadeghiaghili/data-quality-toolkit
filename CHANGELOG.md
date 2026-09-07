@@ -15,6 +15,37 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **Drift detection; `monitor()` is no longer a pass-through (`F8`).** It has
+  returned its input unchanged since the pipeline was built, which made
+  Monitoring a named facet that did nothing.
+
+  Every metric now records how far it moved since the previous run against the
+  same store. A **fall** past a configured `max_score_drop` is reported as an
+  issue; without that setting the movement is recorded and nothing is judged --
+  a score that swings ten points a day is alarming on a customer table and
+  normal on a staging table that is truncated and reloaded.
+
+  **An improvement is never reported.** A tolerance on the absolute change is
+  the natural implementation and would alert whenever the data got cleaner.
+
+  **A first observation has no drift, not zero drift.** Zero would put a flat
+  line on the left edge of every trend and make a column first seen today
+  indistinguishable from one stable for a year.
+
+  Tables drift as well as columns, because `F7` scores them.
+
+  This needed **no schema change**: `run_metrics` already carried a metric's
+  identity and already had a unique index on it. A second index was added for
+  the query shape, which changes no stored data.
+
+### Fixed
+
+- **The HTML report crashed on an issue with no dimension.** `sorted()` over
+  the issue-by-dimension counts compared `None` against `str`. Latent until a
+  drift finding about a raw measurement produced one.
+
+### Added
+
 - **Dimension scores rolled up to table and run (`F7`).** Per-column scores
   arrived with `F1`, `F2` and `F3`. Per-table did not exist, and the run-level
   number existed only as a read query -- `RunStore` averaged the column rows on

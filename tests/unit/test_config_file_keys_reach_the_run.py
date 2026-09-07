@@ -78,6 +78,7 @@ class TestNoKeyIsSilentlyDropped:
             "profiling": {"distinct_counts": False},
             "classification": {"enabled": True},
             "timeliness": {"max_age_days": 7},
+            "monitoring": {"max_score_drop": 0.1},
         }
 
         missing = set(DQPipelineConfig.model_fields) - set(payload)

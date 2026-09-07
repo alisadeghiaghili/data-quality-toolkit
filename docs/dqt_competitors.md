@@ -34,7 +34,7 @@ Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 | F5 | **Rules** — table rules (FK integrity, duplication, conditional constraints) | NOT MET | **MET** | All three, one target per table rather than one per column. `UNIQUE_TOGETHER` is a composite key the schema does not declare; `FOREIGN_KEY` is referential integrity for relationships the database does **not** enforce, which is where orphans actually accumulate; `CONDITIONAL_NOT_NULL` covers the shape most real conditional constraints take. **None takes SQL from the user** — identifiers go through the quoting path and are checked against the table, values are bound. A raw-predicate rule stays undecided in `BACKLOG.md` §3 rather than being settled by implementation. |
 | F6 | **Cleansing** — reversible standardization, dedup, lookup correction with audit trail | PARTIAL | **MET** | `cleanse_plan()` / `cleanse_apply()` / `revert()`. The log is persisted against a `plan_id`, planning works against a read-only connection, and `cleanse_apply` refuses an already-applied plan, a read-only connection, or **data that drifted since the plan was computed**. Deduplication deletes and `revert` re-inserts the whole row. **Open gap:** `revert()` does not make that drift check — an edit made after apply is overwritten without warning. |
 | F7 | **Metrics** — per table/column/dimension scores | PARTIAL | **MET** | Per column from F1/F2/F3; per table and per run rolled up as stored `DQMetric` rows rather than computed in a read query. That move is the point: a rollup living in `RunStore` could not be trended, could not answer "which of my forty tables is worst", and had to be re-derived by every JSON consumer that is not the dashboard. The run score is the mean over columns, not the mean of table means, so no chart already drawn moved. |
-| F8 | **Monitoring** — metric snapshots over time + drift detection | NOT MET | **PARTIAL** | Run history is stored and **rule pass-rate over time is charted** in the UI (`trend_line`, `load_rule_history`). But `monitor()` is still the identity function, there is no metric-level trend and no drift or anomaly detection. |
+| F8 | **Monitoring** — metric snapshots over time + drift detection | NOT MET | **MET** | `monitor()` is no longer the identity function. Every metric records how far it moved since the previous run, and a **fall** past a configured tolerance is reported. Needed **no schema change**: `run_metrics` already carried the identity and already had a unique index on it. An improvement is never reported — a tolerance on the absolute change would alert whenever the data got cleaner — and a first observation has no drift rather than zero drift. |
 | F9 | **Knowledge/Domain** — reference tables for validation | NOT MET | **MET** | `sql/knowledge.py`, reachable through the `REFERENCE` rule expression: values must appear in a reference list or table, matched with an anti-join over `SELECT DISTINCT` so duplicate reference rows cannot inflate the denominator. Optional Persian character folding. |
 | F10 | **Classification** — semantic column typing | NOT MET | **MET** | Runs as a pipeline stage and populates `ColumnResult.semantic_type`, rendered in the report beside the database type. **Off by default** — not for cost but for what it reads: it is the only stage that pulls real values into Python, and the validators are most useful exactly where the values are most sensitive. One bounded query per table when enabled. |
 | F11 | **Missingness (internal)** — null stats and patterns | PARTIAL | **PARTIAL** | Counts and ratios internally. Co-occurrence patterns exist only through the optional `missingly` bridge, which is external by design. |
@@ -43,10 +43,10 @@ Status: `MET` · `PARTIAL` · `NOT MET`. Evidence is source-read, not inferred.
 | F14 | **CLI** — profile, check rules, generate reports | PARTIAL | **MET** | `dqt profile`, `dqt check` (rules only, for CI — no column statistics computed) and `dqt serve`. `serve` is what makes the dashboard startable without Python, and it is where the loopback rule stopped being a docstring: it binds `127.0.0.1` and **refuses** a reachable address unless told something authenticates in front. |
 | F15 | **Read-only query/API surface** for downstream consumers | PARTIAL | **MET** | Six JSON endpoints and five server-rendered HTML screens, tested, and frozen under the `1.0` API contract. No JS and no build step. **No authentication** — by design, and the reason the documented way to run it binds loopback. |
 
-**Score: 12 of 15 met, 3 partial, 0 not met** — up from 0 of 15 in August.
+**Score: 13 of 15 met, 2 partial, 0 not met** — up from 0 of 15 in August.
 F1, F2, F3, F5, F10 and F14 closed on 2026-09-07, along with the roadmap's own
-`DQT-09`. **Nothing is outright unmet any more**; the three partials are F8 (drift),
-F11 (missingness patterns) and F12 (PDF, deliberately last).
+`DQT-09`. **Nothing is outright unmet any more**; the two partials are F11 (missingness
+patterns) and F12 (PDF, deliberately last and possibly never).
 
 A sequenced plan for the remaining ten, with its dependencies and the one
 decision that blocks a full score, is in
@@ -76,9 +76,12 @@ Two rows deserve reading twice:
   A distinct count is what a uniqueness *diagnostic* needs; bounds are what a
   validity diagnostic needs. Those rows are now "expose what exists" rather
   than "build it".
-* **F8 improved by accident of the UI, not by design.** Rule history charts
-  because someone built a rules screen, not because a monitoring facet was
-  built. `monitor()` is still the identity function.
+* **F8 was recorded in `ROADMAP-2.0.md` as needing a schema change. It did
+  not.** That document said so from memory of the schema and explicitly
+  flagged the claim as unverified. `run_metrics` already carried a metric's
+  identity and already had a unique index on it. This is the **second** 2.0
+  entry wrong the same way -- sampling was the first -- and both deferred a
+  useful feature by a major version on an unchecked assumption.
 
 **Release rule:** a floor item may not be marked `MET` on the strength of a
 module existing, or of a module plus a test that only asserts the code does what

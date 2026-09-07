@@ -118,7 +118,29 @@ have deferred a useful feature by a major version. The closing section already
 says the roadmap reasons from code rather than usage; it should also have said
 that reasoning from code means *checking* the code.
 
-### 1.4 `monitor()` is the identity function, and Monitoring is a named facet
+### 1.4 ~~`monitor()` is the identity function~~ — **done in `1.5.x`, and this entry was wrong too**
+
+**What this section said.** That building real monitoring needed
+`run_metrics` to be queryable by metric identity across runs, and that
+whether the schema supported that was **unverified** -- "I did not check the
+index situation, and this document does not claim it either way."
+
+**It supported it already.** `run_metrics` carries schema, table, column,
+dimension and metric name, and has a `UNIQUE` index on exactly that natural
+key. Following one metric across runs needed no schema change, so no store
+is refused and no history deleted. A second index was added for the query
+shape, which changes no stored data and needs no version bump.
+
+**This is the second entry in this document wrong in the same direction.**
+The first was sampling (§1.3). Both said "this needs a schema change", both
+reasoned from memory of the schema rather than reading it, and both would
+have deferred a useful feature by a major version. One instance is a
+mistake; two is a method failing, and the method was writing a roadmap
+without opening the file it was about.
+
+The original text, for the record:
+
+### 1.4 (superseded) `monitor()` is the identity function, and Monitoring is a named facet
 
 **Verified:** `src/dqt/sql/monitoring.py` is 26 lines and returns its input
 unchanged. The docs are honest about it — `CONVENTIONS-DQT.md` marks it

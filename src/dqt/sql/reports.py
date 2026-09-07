@@ -424,7 +424,13 @@ def _issue_chart_section(result: PipelineResult) -> Raw:
     """
     counts = Counter(issue.dimension for issue in result.issues)
     chart = bar_chart(
-        [(dimension, float(count)) for dimension, count in sorted(counts.items())],
+        # Keyed on the rendered string, because an issue may carry no
+        # dimension -- a drift finding about a raw measurement does not --
+        # and sorting None against str raises rather than ordering.
+        [
+            (str(dimension or "unspecified"), float(count))
+            for dimension, count in sorted(counts.items(), key=lambda item: str(item[0] or ""))
+        ],
         title="Issues by dimension",
     )
     return element("section", element("h2", "Issues by dimension"), _chart_block(chart))
