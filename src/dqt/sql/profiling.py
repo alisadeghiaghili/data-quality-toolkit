@@ -62,6 +62,11 @@ class ColumnProfile:
         distinct_count: Number of distinct non-NULL values, or ``None`` when
             distinct counting was declined. ``None`` and ``0`` are different
             answers -- the second is what an all-NULL column genuinely has.
+        normalized_distinct_count: Distinct values after folding case and
+            surrounding whitespace, or ``None`` for a column the question was
+            not asked of. Smaller than *distinct_count* means the same value
+            is written more than one way -- a consistency finding rather than
+            a uniqueness one.
         distinct_is_approximate: Whether *distinct_count* is an estimate.
             Set from what the engine actually did, not from what was asked
             for, so a request an engine cannot honour reads as exact.
@@ -86,6 +91,7 @@ class ColumnProfile:
     max_value: Any = None
     mean_value: float | None = None
     distinct_count: int | None = None
+    normalized_distinct_count: int | None = None
     distinct_is_approximate: bool = False
 
 
@@ -137,6 +143,8 @@ class _ColumnPlan:
         maximum: Position of its ``MAX``, or None on the same terms.
         mean: Position of its ``AVG``, or None when the type is not numeric.
         distinct: Position of its distinct count, or None when declined.
+        normalized_distinct: Position of its case- and space-folded distinct
+            count, or None for a column the question does not suit.
         distinct_is_approximate: Whether the distinct expression was the
             dialect's estimator. Recorded from what was *built*, not what was
             asked for.
@@ -151,6 +159,7 @@ class _ColumnPlan:
     maximum: int | None = None
     mean: int | None = None
     distinct: int | None = None
+    normalized_distinct: int | None = None
     distinct_is_approximate: bool = False
 
     def read(self, row: Any, row_count: int) -> ColumnProfile:
@@ -168,6 +177,7 @@ class _ColumnPlan:
         """
         mean = None if self.mean is None or row[self.mean] is None else float(row[self.mean])
         distinct = None if self.distinct is None else int(row[self.distinct])
+        folded = None if self.normalized_distinct is None else int(row[self.normalized_distinct])
         return ColumnProfile(
             schema_name=self.column.schema_name,
             table_name=self.column.table_name,
@@ -179,6 +189,7 @@ class _ColumnPlan:
             max_value=None if self.maximum is None else row[self.maximum],
             mean_value=mean,
             distinct_count=distinct,
+            normalized_distinct_count=folded,
             distinct_is_approximate=self.distinct_is_approximate,
         )
 
@@ -346,7 +357,35 @@ class SqlProfiler:
             plan.distinct = len(expressions)
             expressions.append(estimated or f"COUNT(DISTINCT {quoted})")
 
+            # Only where the answer can differ. Case-folding a number is
+            # meaningless work in the hot query, and an estimate cannot be
+            # compared against an exact count to decide anything.
+            if not estimated and self._is_text_like(column.data_type):
+                folded = self._dialect.normalized_text_expression(quoted)
+                plan.normalized_distinct = len(expressions)
+                expressions.append(f"COUNT(DISTINCT {folded})")
+
         return plan
+
+    def _is_text_like(self, data_type: str) -> bool:
+        """Whether folding case and whitespace could change this column's values.
+
+        Orderable but not numeric. A date column passes and folds to itself,
+        which costs one aggregate and reports no false finding; a number is
+        excluded because the question cannot mean anything about it.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``True`` when the column may hold text.
+
+        Example:
+            assert profiler._is_text_like("TEXT") is True
+        """
+        return self._dialect.supports_min_max(data_type) and not self._dialect.supports_mean(
+            data_type
+        )
 
     def _profile_table(self, conn: Any, table: DiscoveredTable) -> TableProfile:
         """Profile one table with a single aggregate query.
