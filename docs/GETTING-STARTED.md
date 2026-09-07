@@ -180,6 +180,32 @@ somewhere stable:
 dqt profile --dsn "..." --store C:/dqt/dqt_runs.db --report-dir C:/dqt/reports
 ```
 
+### A printable PDF (optional)
+
+The HTML report is the one you read; the PDF is the one you print or send to
+someone who will never open a terminal.
+
+```bash
+pip install "dqt[pdf]"
+dqt profile --dsn "..." --pdf
+dqt profile --dsn "..." --pdf --language fa      # Persian headings
+```
+
+It is **behind an extra on purpose**. Every PDF library is heavy, and a lean
+install is one of the few things DQT genuinely does better than the
+alternatives — so if you do not want a PDF, you do not pay for one. Without
+the extra, `--pdf` tells you exactly what to install rather than failing
+obscurely.
+
+**Persian renders properly**, not as disconnected letters. The same font the
+HTML report embeds is reused, and the text is shaped with HarfBuzz. The PDF
+tests read the file back through a PDF parser to prove it, because the failure
+that matters here is a document that looks right on screen and turns to
+nonsense the moment anyone copies or searches it.
+
+Both reports describe the same columns — that is decided once in the code, so
+a statistic added later cannot appear in one and not the other.
+
 ### Exit codes
 
 Useful for a scheduled job, and stable across `1.x`:

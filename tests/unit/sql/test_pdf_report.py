@@ -171,9 +171,7 @@ class TestPersianSurvives:
 class TestTheContentIsShared:
     """Two renderers deciding what to show is two places to forget."""
 
-    def test_both_reports_describe_the_same_columns(
-        self, result: object, tmp_path: Path
-    ) -> None:
+    def test_both_reports_describe_the_same_columns(self, result: object, tmp_path: Path) -> None:
         """A statistic added to one must appear in the other.
 
         Not a rendering comparison -- the two look nothing alike -- but a
@@ -187,7 +185,7 @@ class TestTheContentIsShared:
         text = _text_of(generate_pdf_report(result, tmp_path / "shared.pdf"))  # type: ignore[arg-type]
 
         assert rows, "no columns were described at all"
-        for column_name in {str(row[2]) for row in rows}:
+        for column_name in {row.column_name for row in rows}:
             assert column_name in text, f"{column_name} is in the shared rows but not the PDF"
 
 
@@ -201,25 +199,15 @@ class TestAMissingExtraIsRefused:
 
         A bare ``ModuleNotFoundError: fpdf`` tells a DBA nothing about what
         to install.
-        """
-        import dqt.sql.reports as reports_module
 
-        monkeypatch.setattr(reports_module, "_import_pdf_backend", _refuse)
+        The import itself is made to fail, rather than the wrapper that
+        translates it. The first version of this test replaced
+        ``_import_pdf_backend`` -- which is the function doing the
+        translating, so it asserted nothing about the behaviour it named.
+        """
+        import sys
+
+        monkeypatch.setitem(sys.modules, "fpdf", None)
 
         with pytest.raises(Exception, match=r"dqt\[pdf\]"):
             generate_pdf_report(result, tmp_path / "missing.pdf")  # type: ignore[arg-type]
-
-
-def _refuse() -> object:
-    """Stand in for an absent PDF backend.
-
-    Returns:
-        Never returns.
-
-    Raises:
-        ImportError: Always.
-
-    Example:
-        _refuse()
-    """
-    raise ImportError("No module named 'fpdf'")

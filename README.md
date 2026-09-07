@@ -96,7 +96,9 @@ computed with SQL, against the live database, without extracting the data.
   run. A **fall** past a configured tolerance is reported; an improvement never
   is, and a metric seen for the first time has no drift rather than zero drift.
 - **Reporting** — a self-contained HTML report with score bars and severity
-  badges.
+  badges, and optionally a printable **PDF** (`pip install "dqt[pdf]"`, then
+  `dqt profile --pdf`). Persian renders correctly in both. The PDF is behind an
+  extra because every PDF library is heavy and a lean install is worth more.
 - **Read-only HTTP API** — an optional FastAPI surface over the stored results.
 
 Supported databases: **SQLite**, **PostgreSQL** and **SQL Server**, all three
