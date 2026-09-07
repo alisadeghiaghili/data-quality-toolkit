@@ -13,6 +13,8 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-09-07
+
 ### Added
 
 - **Table-level rules (`F5`).** Every rule DQT could express was about one
