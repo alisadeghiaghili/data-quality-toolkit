@@ -285,6 +285,7 @@ class SqlProfiler:
                 if column.row_count > 0:
                     completeness = 1.0 - (column.null_count / column.row_count)
 
+                metrics.extend(self._quality_metrics(column, run_id))
                 metrics.append(
                     DQMetric(
                         run_id=run_id,
@@ -386,6 +387,75 @@ class SqlProfiler:
         return self._dialect.supports_min_max(data_type) and not self._dialect.supports_mean(
             data_type
         )
+
+    def _quality_metrics(self, column: ColumnProfile, run_id: str) -> list[DQMetric]:
+        """Score uniqueness and consistency for one column.
+
+        Produced **whether or not anything is wrong**. A dimension with no
+        metric renders as "not measured", which is indistinguishable from
+        measured-and-fine -- the distinction `F2` made load-bearing for
+        referential integrity, and the same argument applies here.
+
+        A column the statistic was not computed for is skipped rather than
+        scored 1.0, because that would claim a check nobody ran.
+
+        Args:
+            column: One profiled column.
+            run_id: The current run.
+
+        Returns:
+            Zero, one or two metrics.
+
+        Example:
+            metrics = profiler._quality_metrics(column, "run-1")
+        """
+        metrics: list[DQMetric] = []
+        present = column.row_count - column.null_count
+
+        if column.distinct_count is not None and not column.distinct_is_approximate:
+            # The share of non-NULL values that are their own value. An empty
+            # column is vacuously unique rather than a division by zero.
+            score = 1.0 if present == 0 else column.distinct_count / present
+            metrics.append(
+                DQMetric(
+                    run_id=run_id,
+                    dimension="uniqueness",
+                    score=min(score, 1.0),
+                    schema_name=column.schema_name,
+                    table_name=column.table_name,
+                    column_name=column.column_name,
+                    value=float(present - column.distinct_count),
+                    metadata={
+                        "distinct_count": column.distinct_count,
+                        "non_null_count": present,
+                    },
+                )
+            )
+
+        if column.distinct_count is not None and column.normalized_distinct_count is not None:
+            # The share of spellings that survive folding. All of them
+            # surviving means every value is written one way.
+            score = (
+                1.0
+                if column.distinct_count == 0
+                else column.normalized_distinct_count / column.distinct_count
+            )
+            metrics.append(
+                DQMetric(
+                    run_id=run_id,
+                    dimension="consistency",
+                    score=min(score, 1.0),
+                    schema_name=column.schema_name,
+                    table_name=column.table_name,
+                    column_name=column.column_name,
+                    value=float(column.distinct_count - column.normalized_distinct_count),
+                    metadata={
+                        "distinct_count": column.distinct_count,
+                        "normalized_distinct_count": column.normalized_distinct_count,
+                    },
+                )
+            )
+        return metrics
 
     def _profile_table(self, conn: Any, table: DiscoveredTable) -> TableProfile:
         """Profile one table with a single aggregate query.
