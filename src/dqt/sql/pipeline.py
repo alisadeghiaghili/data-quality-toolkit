@@ -36,6 +36,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from dqt._version import __version__
+from dqt.classification import ClassificationResult
 from dqt.common.config_loader import load_rules
 from dqt.common.models import (
     ColumnResult,
@@ -60,6 +61,54 @@ from dqt.sql.reports import generate_html_report
 from dqt.sql.rules import apply_rules as _apply_rules_engine
 from dqt.sql.schema_discovery import DiscoveredTable, discover_schema
 from dqt.sql.semantic_typing import classify_table
+
+
+def _as_datetime(value: object) -> datetime | None:
+    """Read a profiled maximum as a timestamp, or decline.
+
+    A column's maximum arrives as whatever the driver returned: a real
+    ``datetime`` on PostgreSQL and SQL Server, an ISO-8601 string on SQLite,
+    which has no date type. Both are timestamps and both should be aged.
+
+    Anything else declines, and declining is the important half. Reading a
+    name or a product code as a date would produce an age for every text
+    column in the database, most of them nonsense -- and a nonsense age
+    becomes a nonsense staleness verdict as soon as a threshold is set.
+
+    Args:
+        value: A profiled maximum.
+
+    Returns:
+        A timezone-aware datetime, or None when *value* is not a timestamp.
+
+    Example:
+        assert _as_datetime("not a date") is None
+    """
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace(" ", "T"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _semantic_type_of(result: ClassificationResult | None) -> str | None:
+    """Read a semantic type off a classification result, if there is one.
+
+    Args:
+        result: The classifier's answer, or None when the column was never
+            examined.
+
+    Returns:
+        The semantic type as a string, or None.
+
+    Example:
+        assert _semantic_type_of(None) is None
+    """
+    return None if result is None else str(result.semantic_type)
 
 
 class DQTPipeline:
@@ -209,8 +258,24 @@ class DQTPipeline:
             discovered_tables, run_id=run_id
         )
 
+        # Stage 4c: the two dimensions that need an expectation supplied.
+        # Classification runs once here and feeds both the validity check and
+        # the semantic types on the result; running it twice would double the
+        # only stage that reads real values.
+        semantic_types = self.classify_columns(profiled_tables)
+        validity_issues, validity_metrics = self.check_validity(semantic_types, run_id=run_id)
+        timeliness_issues, timeliness_metrics = self.check_timeliness(
+            profiled_tables, run_id=run_id
+        )
+
         # Merge all issues
-        all_issues = diagnostic_issues + rule_issues + referential_issues
+        all_issues = (
+            diagnostic_issues
+            + rule_issues
+            + referential_issues
+            + validity_issues
+            + timeliness_issues
+        )
 
         # Assemble intermediate result
         result = self._build_result(
@@ -219,6 +284,7 @@ class DQTPipeline:
             profiled_tables=profiled_tables,
             issues=all_issues,
             rule_runs=rule_runs,
+            semantic_types=semantic_types,
         )
 
         # Stage 5: cleansing (stub)
@@ -227,7 +293,13 @@ class DQTPipeline:
         run_metrics = self.compute_metrics(profiled_tables, run_id=run_id)
 
         # Stage 7: monitoring
-        result.metrics = self.monitor(result.metrics + run_metrics + referential_metrics)
+        result.metrics = self.monitor(
+            result.metrics
+            + run_metrics
+            + referential_metrics
+            + validity_metrics
+            + timeliness_metrics
+        )
 
         result.ended_at = datetime.now(UTC)
         stage_errors.extend(self._rule_file_errors)
@@ -539,9 +611,181 @@ class DQTPipeline:
                     )
         return issues, metrics
 
+    def check_validity(
+        self,
+        semantic_types: dict[tuple[str, str, str], ClassificationResult],
+        run_id: str,
+    ) -> tuple[list[DQIssue], list[DQMetric]]:
+        """Report values that do not fit the type their column was recognised as.
+
+        Validity needs an expectation, and classification is where one comes
+        from: a column the validators recognise as email at 96% has 4% that
+        are not emails. Without classification this returns nothing, because
+        there is no expectation to test against -- and ``RANGE`` and
+        ``REGEX`` rules remain the other way to supply one.
+
+        A column classified ``unknown`` is skipped rather than reported as
+        wholly invalid. Nothing was recognised, so nothing is expected, and
+        counting every value as a mismatch would make free-text columns the
+        worst-scoring thing in every database DQT is pointed at.
+
+        Args:
+            semantic_types: Classification results, keyed by column.
+            run_id: The current run.
+
+        Returns:
+            Issues for columns with non-conforming values, and a metric for
+            every recognised column.
+
+        Example:
+            issues, metrics = pipeline.check_validity(results, run_id="run-1")
+        """
+        issues: list[DQIssue] = []
+        metrics: list[DQMetric] = []
+
+        for (schema_name, table_name, column_name), result in semantic_types.items():
+            if str(result.semantic_type) == "unknown" or result.considered_count == 0:
+                continue
+
+            mismatched = result.considered_count - result.matched_count
+            score = result.matched_count / result.considered_count
+            metrics.append(
+                DQMetric(
+                    run_id=run_id,
+                    dimension="validity",
+                    score=score,
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    column_name=column_name,
+                    value=float(mismatched),
+                    metadata={
+                        "semantic_type": str(result.semantic_type),
+                        "considered_count": result.considered_count,
+                        "matched_count": result.matched_count,
+                    },
+                )
+            )
+            if mismatched:
+                issues.append(
+                    DQIssue(
+                        issue_id=f"{run_id}:{schema_name}:{table_name}:{column_name}:validity",
+                        run_id=run_id,
+                        dimension="validity",
+                        severity="warning",
+                        message=(
+                            f"Column {column_name!r} looks like "
+                            f"{result.semantic_type}, but {mismatched} of "
+                            f"{result.considered_count} sampled value(s) do not fit."
+                        ),
+                        evidence={
+                            "semantic_type": str(result.semantic_type),
+                            "mismatched_count": mismatched,
+                            "considered_count": result.considered_count,
+                        },
+                        schema_name=schema_name,
+                        table_name=table_name,
+                        column_name=column_name,
+                    )
+                )
+        return issues, metrics
+
+    def check_timeliness(
+        self, profiled_tables: list[TableProfile], run_id: str
+    ) -> tuple[list[DQIssue], list[DQMetric]]:
+        """Measure how old each dated column's newest value is, and judge it if told how.
+
+        The age is always a **measurement** -- it carries ``metric_name`` and
+        no dimension, because DQT can say "the newest row is 40 days old"
+        without being told anything about the table.
+
+        It becomes a **judgement** only when
+        :class:`~dqt.common.models.TimelinessConfig` supplies a maximum age.
+        Forty days is alarming for an order ledger and unremarkable for an
+        archive, and nothing in the data distinguishes them; a default here
+        would produce confident findings about tables DQT knows nothing
+        about.
+
+        Args:
+            profiled_tables: Tables whose columns carry a profiled maximum.
+            run_id: The current run.
+
+        Returns:
+            Issues for stale columns, and the age measurements plus any
+            scores.
+
+        Example:
+            issues, metrics = pipeline.check_timeliness(profiles, "run-1")
+        """
+        config = self._pipeline_config.timeliness
+        now = datetime.now(UTC)
+        issues: list[DQIssue] = []
+        metrics: list[DQMetric] = []
+
+        for table in profiled_tables:
+            for column in table.columns:
+                newest = _as_datetime(column.max_value)
+                if newest is None:
+                    continue
+
+                age_days = (now - newest).total_seconds() / 86400.0
+                metrics.append(
+                    DQMetric(
+                        run_id=run_id,
+                        metric_name="max_age_days",
+                        score=1.0,
+                        schema_name=column.schema_name,
+                        table_name=column.table_name,
+                        column_name=column.column_name,
+                        value=age_days,
+                        metadata={"newest_value": newest.isoformat()},
+                    )
+                )
+
+                if config is None:
+                    continue
+
+                stale = age_days > config.max_age_days
+                metrics.append(
+                    DQMetric(
+                        run_id=run_id,
+                        dimension="timeliness",
+                        score=0.0 if stale else 1.0,
+                        schema_name=column.schema_name,
+                        table_name=column.table_name,
+                        column_name=column.column_name,
+                        value=age_days,
+                        metadata={"max_age_days": config.max_age_days},
+                    )
+                )
+                if stale:
+                    issues.append(
+                        DQIssue(
+                            issue_id=(
+                                f"{run_id}:{column.schema_name}:{column.table_name}:"
+                                f"{column.column_name}:stale"
+                            ),
+                            run_id=run_id,
+                            dimension="timeliness",
+                            severity="warning",
+                            message=(
+                                f"The newest {column.column_name!r} is "
+                                f"{age_days:.1f} days old, past the "
+                                f"{config.max_age_days}-day maximum."
+                            ),
+                            evidence={
+                                "age_days": round(age_days, 1),
+                                "max_age_days": config.max_age_days,
+                            },
+                            schema_name=column.schema_name,
+                            table_name=column.table_name,
+                            column_name=column.column_name,
+                        )
+                    )
+        return issues, metrics
+
     def classify_columns(
         self, profiled_tables: list[TableProfile]
-    ) -> dict[tuple[str, str, str], str]:
+    ) -> dict[tuple[str, str, str], ClassificationResult]:
         """Infer a semantic type per column, when classification is enabled.
 
         Returns an empty mapping when it is not, and issues no query in that
@@ -557,9 +801,14 @@ class DQTPipeline:
                 stage does not rediscover the schema.
 
         Returns:
-            ``(schema, table, column)`` to semantic type. A column that was
-            examined and matched nothing maps to ``"unknown"``; a column that
-            was never examined is absent, and reads back as ``None``.
+            ``(schema, table, column)`` to the classifier's whole result.
+            The semantic type alone is not enough: validity needs the match
+            ratio behind it, and running the classifier twice to get both
+            would double the only stage that reads real values.
+
+            A column that was examined and matched nothing is present with a
+            semantic type of ``"unknown"``; a column that was never examined
+            is absent.
 
         Example:
             types = pipeline.classify_columns(profiles)
@@ -569,15 +818,13 @@ class DQTPipeline:
             return {}
 
         dialect = get_dialect_for(self._connection_config)
-        found: dict[tuple[str, str, str], str] = {}
+        found: dict[tuple[str, str, str], ClassificationResult] = {}
         connection = get_connection(self._connection_config)
         try:
             for table in self.discover_schema():
                 results = classify_table(connection, dialect, table, config)
                 for column_name, result in results.items():
-                    found[(table.schema_name, table.table_name, column_name)] = str(
-                        result.semantic_type
-                    )
+                    found[(table.schema_name, table.table_name, column_name)] = result
         finally:
             connection.close()
         return found
@@ -589,6 +836,7 @@ class DQTPipeline:
         profiled_tables: list[TableProfile],
         issues: list[DQIssue],
         rule_runs: list[RuleRunResult],
+        semantic_types: dict[tuple[str, str, str], ClassificationResult] | None = None,
     ) -> PipelineResult:
         """Assemble a :class:`~dqt.common.models.PipelineResult` from stage outputs.
 
@@ -602,6 +850,8 @@ class DQTPipeline:
             profiled_tables: Table profiles from :meth:`profile_data`.
             issues: Merged issues from diagnostics + rules.
             rule_runs: Rule summaries from :meth:`apply_rules`.
+                semantic_types: Classification results keyed by column, or
+                None when classification did not run.
 
         Returns:
             Partially-complete :class:`~dqt.common.models.PipelineResult`
@@ -614,8 +864,7 @@ class DQTPipeline:
             profiling=self._pipeline_config.profiling,
         )
         profile_metrics = profiler.build_metrics(profiled_tables, run_id=run_id)
-        semantic_types = self.classify_columns(profiled_tables)
-
+        semantic_types = semantic_types or {}
         table_results: dict[str, TableResult] = {}
         schema_tables: dict[str, list[str]] = {}
 
@@ -645,11 +894,13 @@ class DQTPipeline:
                         table_name=column_profile.table_name,
                         column_name=column_profile.column_name,
                         db_type=column_profile.data_type,
-                        semantic_type=semantic_types.get(
-                            (
-                                column_profile.schema_name,
-                                column_profile.table_name,
-                                column_profile.column_name,
+                        semantic_type=_semantic_type_of(
+                            semantic_types.get(
+                                (
+                                    column_profile.schema_name,
+                                    column_profile.table_name,
+                                    column_profile.column_name,
+                                )
                             )
                         ),
                         metrics=column_metrics,

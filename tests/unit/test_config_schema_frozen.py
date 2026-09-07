@@ -32,6 +32,7 @@ from dqt.common.models import (
     RuleConfig,
     RuleScope,
     SamplingConfig,
+    TimelinessConfig,
 )
 
 #: Every key DQT accepts in a config file, by the model that reads it.
@@ -51,12 +52,25 @@ FROZEN_CONFIG_SCHEMA: dict[str, set[str]] = {
         # identically, which is what makes them a minor rather than a break.
         "profiling",
         "classification",
+        # Added 2026-09-07 for F3. Optional, so a config written before it
+        # parses unchanged -- and its absence is meaningful rather than a
+        # missing default: without it DQT measures data age but declines to
+        # call it stale.
+        "timeliness",
         "metric_thresholds",
         "rule_files",
     },
     "SamplingConfig": {"strategy", "limit", "seed"},
     "ProfilingConfig": {"distinct_counts", "approximate_distinct"},
-    "ClassificationConfig": {"enabled", "sample_size", "persian_normalization"},
+    "ClassificationConfig": {
+        "enabled",
+        "sample_size",
+        # Added 2026-09-07 for F3: it decides when a column is confidently
+        # typed, and therefore when its remainder counts as invalid.
+        "minimum_match_ratio",
+        "persian_normalization",
+    },
+    "TimelinessConfig": {"max_age_days"},
     "RuleConfig": {"name", "dimension", "severity", "scope", "expression", "params"},
     "RuleScope": {"schema_pattern", "table_pattern", "column_pattern"},
 }
@@ -64,6 +78,7 @@ FROZEN_CONFIG_SCHEMA: dict[str, set[str]] = {
 _MODELS = {
     "ProfilingConfig": ProfilingConfig,
     "ClassificationConfig": ClassificationConfig,
+    "TimelinessConfig": TimelinessConfig,
     "ConnectionConfig": ConnectionConfig,
     "DQPipelineConfig": DQPipelineConfig,
     "SamplingConfig": SamplingConfig,
