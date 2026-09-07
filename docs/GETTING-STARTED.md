@@ -129,10 +129,27 @@ completeness score. A cell reading `n/a` means the statistic was not produced
 rather than that it is zero — a text column has no mean, and saying `0` would
 be a number DQT never computed.
 
-Four of the six quality dimensions are measured: **completeness**,
-**uniqueness**, **consistency** and **referential integrity**. A dimension
-scores even when nothing is wrong, so "measured and fine" reads differently
-from "not measured".
+All six quality dimensions are measured, but two of them need you to say
+what you expect.
+
+**Four are answerable from the data alone** — completeness, uniqueness,
+consistency and referential integrity. A dimension scores even when nothing is
+wrong, so "measured and fine" reads differently from "not measured".
+
+**Validity** needs an expectation, which classification supplies: turn it on
+(§5b) and a column recognised as email will report the values that are not
+emails.
+
+**Timeliness** reports how old your newest row is without being told anything,
+but will not call it *stale* until you say what stale means:
+
+```yaml
+timeliness:
+  max_age_days: 7
+```
+
+Forty days is alarming for an order ledger and unremarkable for an archive.
+DQT will not guess which yours is.
 
 **Consistency** is the one people ask about. It does not mean "valid" — it
 means *written the same way every time*. A `tier` column holding `gold`,

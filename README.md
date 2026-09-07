@@ -62,11 +62,13 @@ computed with SQL, against the live database, without extracting the data.
 ## What it does
 
 - **Schema discovery** — enumerate schemas, tables, and columns.
-- **Diagnostics** — four of the six quality dimensions are measured:
-  completeness, uniqueness, consistency and referential integrity. Consistency
-  is the one worth naming: it finds values that are *the same thing written
-  more than one way* — `Tehran`, `tehran`, ` Tehran ` — which a distinct
-  count cannot see, because they genuinely are distinct.
+- **Diagnostics** — all six quality dimensions. Completeness, uniqueness,
+  consistency and referential integrity are answerable from the data alone.
+  **Validity and timeliness are not**, and DQT says so rather than guessing:
+  validity is measured when classification supplies an expectation, and data
+  age is reported as a measurement always but only called *stale* against a
+  maximum you configure. Whether ninety days is stale depends on whether the
+  table is a ledger or an archive, and nothing in the data says which.
 - **Referential integrity** — foreign keys are discovered and orphan rows
   counted with an anti-join: one `COUNT(*)` per key, no rows materialised.
   Composite keys are matched whole, and a NULL reference is not an orphan.

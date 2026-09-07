@@ -13,7 +13,43 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Config-file keys were silently dropped by the CLI (`NEW-AC`).**
+  `_build_pipeline_config` enumerated the five keys it forwarded, so every key
+  added to `DQPipelineConfig` afterwards was parsed and ignored: `sampling`
+  since `1.1.0`, `profiling` and `classification` since `1.2.0`.
+
+  **This means the sampling feature shipped in `1.1.0` never worked from a
+  config file.** Its unit tested the pipeline object directly, so the only path
+  a DBA actually uses was never exercised. A user writing `sampling: {limit:
+  5000}` got a full scan and numbers that looked exactly like the ones they
+  asked for, with no error.
+
+  The builder no longer enumerates. The file is handed to the model, which
+  knows its own fields -- and `extra="forbid"` now sees a misspelled key
+  instead of ignoring it, so `exclude_tabels` fails loudly rather than letting
+  DQT profile every table the author meant to skip.
+
 ### Added
+
+- **Validity and timeliness diagnostics -- all six dimensions now (`F3`).**
+  `DQDiagnostics` produced one of six when this work began.
+
+  These last two differ in kind from the other four, and DQT says so rather
+  than guessing. A NULL is a NULL whatever the table is for; whether `"n/a"` is
+  a valid email depends on what the column is *for*, and whether a 90-day-old
+  table is stale depends on whether it is a ledger or an archive.
+
+  **Validity** is measured when classification supplies an expectation -- a
+  column recognised as email at 75% has 25% that are not emails. A column
+  classified `unknown` is skipped rather than reported wholly invalid, which
+  would make free-text columns the worst-scoring thing in every database.
+
+  **Timeliness** reports the age of the newest row as a *measurement* always,
+  and scores it as a *judgement* only against a configured `max_age_days`.
+  `DQMetric` carries exactly one of `metric_name` or `dimension` precisely so a
+  number and a verdict cannot be confused.
 
 - **Uniqueness and consistency diagnostics (`F3`, four of six dimensions).**
   `DQDiagnostics` produced one of six; it now produces three, and
