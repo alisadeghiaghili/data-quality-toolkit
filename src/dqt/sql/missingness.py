@@ -68,4 +68,48 @@ def missingness_patterns(
     Example:
         patterns = missingness_patterns(connection_config, table, config)
     """
-    raise NotImplementedError
+    nullable = [column for column in table.columns if not column.is_primary_key]
+    if len(nullable) < 2:
+        # A pattern needs at least two columns to say anything the null count
+        # does not already say.
+        return []
+
+    dialect = get_dialect_for(connection_config)
+    qualified = dialect.qualified_identifier(table.schema_name, table.table_name)
+
+    # A per-row signature: one character per column, '1' where it is NULL.
+    # Concatenating rather than grouping by the columns themselves keeps the
+    # GROUP BY key one value wide however many columns the table has, and
+    # keeps the returned rows small -- the alternative sends every grouped
+    # column's value back for every group.
+    signature = " || ".join(
+        f"(CASE WHEN {dialect.quote_identifier(column.column_name)} IS NULL THEN '1' ELSE '0' END)"
+        for column in nullable
+    )
+
+    statement = (
+        f"SELECT {signature} AS dqt_pattern, COUNT(*) AS dqt_rows "
+        f"FROM {qualified} "
+        f"GROUP BY {signature} "
+        f"ORDER BY COUNT(*) DESC "
+        f"LIMIT {int(config.top_patterns)}"
+    )
+
+    connection = get_connection(connection_config)
+    try:
+        rows = connection.execute(statement).fetchall()
+    finally:
+        connection.close()
+
+    patterns: list[MissingnessPattern] = []
+    for row in rows:
+        marks = str(row[0])
+        columns = tuple(
+            column.column_name for column, mark in zip(nullable, marks, strict=False) if mark == "1"
+        )
+        # Rows missing nothing are the largest group on a healthy table, and
+        # a single missing column is what the null count already reports.
+        if len(columns) < 2:
+            continue
+        patterns.append(MissingnessPattern(columns=columns, row_count=int(row[1])))
+    return patterns

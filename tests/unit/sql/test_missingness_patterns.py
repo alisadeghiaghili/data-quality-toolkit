@@ -203,9 +203,7 @@ class TestTheQueryIsBounded:
     ) -> None:
         """Not one per column, and not one per pattern."""
         db_file = make_sqlite_db("patterns-cost.db", SEEDED)
-        statements = _traced(
-            db_file, tmp_path, MissingnessConfig(enabled=True)
-        )
+        statements = _traced(db_file, tmp_path, MissingnessConfig(enabled=True))
         grouping = [s for s in statements if "GROUP BY" in s.upper()]
 
         assert len(grouping) == 1, f"expected one grouping query, got {len(grouping)}"
@@ -220,9 +218,7 @@ class TestTheQueryIsBounded:
         bounding evidence.
         """
         db_file = make_sqlite_db("patterns-limit.db", SEEDED)
-        statements = _traced(
-            db_file, tmp_path, MissingnessConfig(enabled=True, top_patterns=2)
-        )
+        statements = _traced(db_file, tmp_path, MissingnessConfig(enabled=True, top_patterns=2))
         grouping = next(s for s in statements if "GROUP BY" in s.upper())
 
         assert "LIMIT 2" in grouping.upper()
