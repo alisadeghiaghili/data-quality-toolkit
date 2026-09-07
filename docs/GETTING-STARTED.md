@@ -369,6 +369,20 @@ dqt serve --store C:\dqt\dqt_runs.db
 
 Then open <http://127.0.0.1:8000/ui>. Use `--port` for a different port.
 
+### What the screens show
+
+- **Overview** — the most recent run, quality by dimension, recent runs.
+- **Run** — that run's dimension scores, **what got worse since the previous
+  run**, issue counts, and its tables.
+- **Columns** — every profiled column with its type, semantic type, nulls,
+  distinct count, minimum, maximum, mean and completeness. This is the screen
+  to open when you want to know what is actually in a table.
+- **Issues** and **Rules**, with a pass-rate trend per rule.
+
+The "changed since the previous run" panel only appears when there *is* a
+previous run. An empty panel would read as "nothing changed", which is a
+different claim from "there was nothing to compare against".
+
 ### DQT refuses to publish itself, and you should know why
 
 `dqt serve` binds `127.0.0.1` — reachable only from the machine it runs on —

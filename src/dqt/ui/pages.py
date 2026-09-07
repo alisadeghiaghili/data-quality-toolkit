@@ -35,7 +35,7 @@ from dqt._theme import STYLESHEET
 from dqt.common.models import get_args_of_dq_dimension
 from dqt.fonts import embedded_font_face
 from dqt.i18n import Language, ltr_span, translate
-from dqt.viz import Chart, bar_chart, scorecard, severity_indicator, trend_line
+from dqt.viz import Chart, bar_chart, score_bar, scorecard, severity_indicator, trend_line
 
 __all__ = [
     "issues_page",
@@ -339,6 +339,7 @@ def run_page(
     tables: Sequence[Mapping[str, Any]],
     dimension_scores: Mapping[str, float | None],
     issues_by_severity: Mapping[str, int],
+    score_changes: Sequence[Mapping[str, object]] = (),
     language: Language = "en",
 ) -> str:
     """Render the explorer: which table is worst.
@@ -346,6 +347,9 @@ def run_page(
     Args:
         run: The run being explored.
         tables: Table summaries, each with at least ``table_name``.
+        score_changes: Dimension scores that fell since the previous run,
+            worst first. Empty when there was no previous run, which renders
+            no section at all rather than an empty one.
         dimension_scores: Score per dimension; absent means not measured.
         issues_by_severity: Issue counts by severity.
         language: Which language to render in.
@@ -386,10 +390,23 @@ def run_page(
         _breadcrumbs((translate("overview", language), "/ui"), (heading, None)),
         _run_header(run, language),
         _dimension_cards(dimension_scores, language),
+        # Above the tables deliberately: "what got worse since last night" is
+        # the first question a DBA opens this screen with, and burying it
+        # under a table listing answers it last.
+        score_changes_section(score_changes, language),
         _counts_chart(
             issues_by_severity,
             title=translate("issues_by_severity", language),
             language=language,
+        ),
+        element(
+            "p",
+            element(
+                "a",
+                "Columns",
+                attrs={"href": f"/ui/runs/{run['run_id']}/columns"},
+            ),
+            attrs={"class": "meta"},
         ),
         element("h2", translate("tables", language)),
         body,
@@ -401,6 +418,212 @@ def run_page(
                 attrs={"href": f"/ui/runs/{run['run_id']}/issues"},
             ),
         ),
+    )
+
+
+def columns_page(
+    run: Mapping[str, object],
+    columns: Sequence[Mapping[str, object]],
+    language: Language = "en",
+) -> str:
+    """Render the per-column detail for one run.
+
+    The statistics the HTML report has shown since `F1`, on the surface a
+    DBA actually watches. A value that was never computed renders as
+    ``n/a``, matching the report exactly -- a blank cell would read as zero
+    or as a broken template, and the two surfaces disagreeing about what
+    "not measured" looks like is worse than either choice alone.
+
+    Args:
+        run: The run's summary row.
+        columns: One mapping per column, from ``get_column_details``.
+        language: Which language to render in.
+
+    Returns:
+        The page HTML.
+
+    Example:
+        html = columns_page({"run_id": "r"}, [])
+    """
+    rows: list[list[object]] = [
+        [
+            column.get("schema_name") or "",
+            column.get("table_name") or "",
+            column.get("column_name") or "",
+            column.get("semantic_type") or "n/a",
+            _whole(column.get("null_count")),
+            _or_absent(column.get("distinct_count")),
+            _or_absent(column.get("min_value")),
+            _or_absent(column.get("max_value")),
+            _or_absent(column.get("mean_value")),
+            score_bar_cell(column.get("score")),
+        ]
+        for column in columns
+    ]
+
+    body = (
+        table(
+            [
+                translate("schema", language),
+                translate("table", language),
+                translate("column", language),
+                "Semantic",
+                "Nulls",
+                "Distinct",
+                "Min",
+                "Max",
+                "Mean",
+                translate("completeness", language),
+            ],
+            rows,
+        )
+        if rows
+        else element("p", translate("no_tables", language))
+    )
+
+    return _page(
+        f"Columns - {run['run_id']}",
+        language,
+        _breadcrumbs(
+            (translate("overview", language), "/ui"),
+            (
+                f"{translate('run', language)} {run['run_id']}",
+                f"/ui/runs/{run['run_id']}",
+            ),
+            ("Columns", None),
+        ),
+        _run_header(run, language),
+        element("h2", "Columns"),
+        body,
+    )
+
+
+def _score_text(value: object, signed: bool = False) -> str:
+    """Format a score for display, or say it is missing.
+
+    The store returns loosely-typed rows, so a score arriving as something
+    other than a number means the row was written by a version that did not
+    record it -- worth showing as absent rather than crashing the screen a
+    DBA opened to find out what went wrong.
+
+    Args:
+        value: A score, or anything else.
+        signed: Whether to show a leading ``+`` for an increase.
+
+    Returns:
+        The formatted score, or ``"n/a"``.
+
+    Example:
+        assert _score_text(0.5) == "0.50"
+    """
+    if not isinstance(value, int | float):
+        return "n/a"
+    return f"{float(value):+.2f}" if signed else f"{float(value):.2f}"
+
+
+def _whole(value: object) -> object:
+    """Render a count without a pointless decimal point.
+
+    Counts arrive as floats because ``DQMetric.value`` is one. A null count
+    of ``2.0`` on a screen reads as a measurement with precision it does not
+    have.
+
+    Args:
+        value: A count, possibly None.
+
+    Returns:
+        The count as an integer where it is whole, else unchanged.
+
+    Example:
+        assert _whole(2.0) == 2
+    """
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return _or_absent(value)
+
+
+def _or_absent(value: object) -> object:
+    """Render a value, or ``n/a`` when it was never computed.
+
+    Args:
+        value: A statistic, possibly None.
+
+    Returns:
+        The value, or the string ``"n/a"``.
+
+    Example:
+        assert _or_absent(None) == "n/a"
+    """
+    return "n/a" if value is None else value
+
+
+def score_bar_cell(score: object) -> Raw:
+    """Render a score as a proportion bar, or as absent.
+
+    Args:
+        score: A score in ``[0, 1]``, or None.
+
+    Returns:
+        Markup for the cell.
+
+    Example:
+        cell = score_bar_cell(0.5)
+    """
+    if not isinstance(score, int | float):
+        return Raw("n/a")
+    return _chart_block(score_bar(float(score), label=""))
+
+
+def score_changes_section(changes: Sequence[Mapping[str, object]], language: Language) -> Raw:
+    """Render what fell since the previous run, or nothing at all.
+
+    A run with no predecessor renders no section rather than an empty one.
+    `F8` is careful to distinguish "no drift" from "zero drift", and an
+    empty panel headed "Changed since the previous run" would undo that
+    distinction at the last step -- it reads as "nothing changed", which is
+    a different claim from "there was nothing to compare against".
+
+    Args:
+        changes: Falls, worst first, from ``get_score_changes``.
+        language: Which language to render in.
+
+    Returns:
+        The section markup, or empty markup when there is nothing to say.
+
+    Example:
+        section = score_changes_section([], "en")
+    """
+    if not changes:
+        return Raw("")
+
+    # A change with no table is the whole database; one with a table but no
+    # column is that table as a whole. Rendering either as an empty cell
+    # reads as missing data rather than as the widest scope, which is the
+    # opposite of what it means.
+    rows: list[list[object]] = [
+        [
+            change.get("table_name") or "(all tables)",
+            change.get("column_name") or "(whole table)",
+            translate(str(change.get("dimension")), language),
+            _score_text(change.get("previous_score")),
+            _score_text(change.get("score")),
+            _score_text(change.get("delta"), signed=True),
+        ]
+        for change in changes
+    ]
+    return Raw(
+        element("h2", "Changed since the previous run")
+        + table(
+            [
+                translate("table", language),
+                translate("column", language),
+                translate("dimension", language),
+                "Was",
+                "Now",
+                "Change",
+            ],
+            rows,
+        )
     )
 
 

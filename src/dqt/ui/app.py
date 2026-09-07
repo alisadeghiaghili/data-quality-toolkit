@@ -62,6 +62,7 @@ except ImportError:
 
 from dqt import __version__
 from dqt.ui.api import (
+    get_column_details,
     get_dimension_scores,
     get_issue_counts_by_dimension,
     get_issue_counts_by_severity,
@@ -70,11 +71,13 @@ from dqt.ui.api import (
     get_run_metrics,
     get_run_rule_results,
     get_run_summary,
+    get_score_changes,
     list_runs,
     list_tables_for_run,
 )
 from dqt.ui.pages import (
     ISSUE_PAGE_SIZE,
+    columns_page,
     issues_page,
     overview_page,
     rule_history_page,
@@ -369,6 +372,31 @@ def screen_run(run_id: str) -> str:
         tables=tables,
         dimension_scores=dict(get_dimension_scores(store, run_id)),
         issues_by_severity=get_issue_counts_by_severity(store, run_id),
+        score_changes=get_score_changes(store, run_id),
+    )
+
+
+@app.get("/ui/runs/{run_id}/columns", tags=["screens"], response_class=HTMLResponse)
+def screen_run_columns(run_id: str) -> str:
+    """Per-column statistics for one run.
+
+    Args:
+        run_id: The run to show.
+
+    Returns:
+        The rendered page.
+
+    Raises:
+        HTTPException: 404 when the run is unknown. An empty grid would read
+            as "this run profiled nothing", which is a different claim.
+
+    Example:
+        client.get("/ui/runs/run-001/columns")
+    """
+    store = _store_path()
+    return columns_page(
+        run=_require_run(store, run_id),
+        columns=get_column_details(store, run_id),
     )
 
 
