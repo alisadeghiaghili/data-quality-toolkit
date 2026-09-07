@@ -6,7 +6,7 @@
 
 ## Status: stable
 
-Version `1.3.0`. The `1.x` line means the public API will not break without
+Version `1.4.0`. The `1.x` line means the public API will not break without
 a major version. Four surfaces are frozen and each is held by a test: the
 export list, the CLI's flags and exit codes, the config file's keys and
 defaults, and the six JSON endpoints. The HTML screens are deliberately
