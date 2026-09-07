@@ -510,10 +510,21 @@ class RunStore:
         themselves dimension rows, so a mean over everything counts each
         column once and then counts it again through its table's summary.
 
-        Runs stored before `F7` carry no rollup, so those fall back to the
-        original average. Dropping the fallback would blank the dimension
-        scores on every historical run in an existing store -- which is the
-        same as deleting history, just less obviously.
+        **The fallback is not only for old stores.** Two cases reach it, and
+        the second is permanent:
+
+        * Runs stored before `F7` carry no rollup at all. Dropping the
+          fallback would blank the dimension scores on every historical run
+          in an existing store -- deleting history, just less obviously.
+        * A dimension scored only at **table** scope has no column scores to
+          roll up, so it never gets a run-level row.
+          ``referential_integrity`` is that dimension in every current run:
+          it is a property of a relationship rather than of a column. Its
+          score reaches a caller entirely through this fallback.
+
+        So this is load-bearing today, not a compatibility shim awaiting
+        removal. `tests/unit/common/test_dimension_score_fallback.py` holds
+        that line.
 
         Args:
             run_id: The run to read.
