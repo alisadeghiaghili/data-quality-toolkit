@@ -203,7 +203,7 @@ class _CompiledCheck:
 
     rule_index: int
     table: DiscoveredTable
-    column_name: str
+    column_name: str | None
     from_clause: str
     expressions: tuple[str, ...]
     binds: tuple[Any, ...]
@@ -382,7 +382,7 @@ def _issue(
     run_id: str,
     rule: RuleConfig,
     table: DiscoveredTable,
-    column_name: str,
+    column_name: str | None,
     *,
     message: str,
     evidence: dict[str, Any],
@@ -424,11 +424,150 @@ def _issue(
     )
 
 
+def _compile_table_check(
+    run_id: str,
+    rule: RuleConfig,
+    rule_index: int,
+    table: DiscoveredTable,
+    dialect: Dialect,
+    expression: str,
+) -> _CompiledCheck:
+    """Compile a check that is about a table rather than a column.
+
+    Args:
+        run_id: The current run.
+        rule: The rule to compile.
+        rule_index: Its position in the rule list.
+        table: The target table.
+        dialect: Resolved dialect.
+        expression: The already-normalised expression keyword.
+
+    Returns:
+        The compiled check, with ``column_name`` set to None.
+
+    Raises:
+        RuleEvaluationError: If the rule's parameters do not describe a
+            runnable check.
+
+    Example:
+        check = _compile_table_check(run_id, rule, 0, table, dialect, "UNIQUE_TOGETHER")
+    """
+    qualified_table = dialect.qualified_identifier(table.schema_name, table.table_name)
+
+    if expression == "UNIQUE_TOGETHER":
+        columns = _require_columns(rule, "columns", table)
+        expressions, binds = _fragment_unique_together(qualified_table, columns, dialect)
+        combination = ", ".join(columns)
+
+        def decode_unique_together(values: Sequence[Any]) -> list[DQIssue]:
+            duplicated = int(values[0])
+            if duplicated == 0:
+                return []
+            return [
+                _issue(
+                    run_id,
+                    rule,
+                    table,
+                    None,
+                    message=(
+                        f"({combination}) is not unique in '{table.table_name}': "
+                        f"{duplicated} combination(s) appear more than once."
+                    ),
+                    evidence={"columns": list(columns), "duplicated_combinations": duplicated},
+                )
+            ]
+
+        return _CompiledCheck(
+            rule_index, table, None, qualified_table, expressions, binds, decode_unique_together
+        )
+
+    if expression == "FOREIGN_KEY":
+        columns = _require_columns(rule, "columns", table)
+        parent_name = rule.params.get("references_table")
+        if not isinstance(parent_name, str) or not parent_name:
+            raise RuleEvaluationError("FOREIGN_KEY requires params.references_table.")
+        raw_parent_columns = rule.params.get("references_columns")
+        if not isinstance(raw_parent_columns, list | tuple) or not raw_parent_columns:
+            raise RuleEvaluationError(
+                "FOREIGN_KEY requires params.references_columns as a non-empty list."
+            )
+        parent_columns = tuple(str(item) for item in raw_parent_columns)
+        parent_table = dialect.qualified_identifier(
+            rule.params.get("references_schema") or table.schema_name, parent_name
+        )
+        expressions, binds = _fragment_foreign_key(
+            qualified_table, columns, parent_table, parent_columns, dialect
+        )
+        child = ", ".join(columns)
+        parent = f"{parent_name}({', '.join(parent_columns)})"
+
+        def decode_foreign_key(values: Sequence[Any]) -> list[DQIssue]:
+            orphans = int(values[0])
+            if orphans == 0:
+                return []
+            return [
+                _issue(
+                    run_id,
+                    rule,
+                    table,
+                    None,
+                    message=(
+                        f"{orphans} row(s) in '{table.table_name}' reference a "
+                        f"'{parent_name}' row that does not exist ({child} -> {parent})."
+                    ),
+                    evidence={
+                        "orphan_rows": orphans,
+                        "columns": list(columns),
+                        "references": parent,
+                    },
+                )
+            ]
+
+        return _CompiledCheck(
+            rule_index, table, None, qualified_table, expressions, binds, decode_foreign_key
+        )
+
+    when_column = _require_columns(rule, "when_column", table)
+    then_column = _require_columns(rule, "then_column", table)
+    if "when_equals" not in rule.params:
+        raise RuleEvaluationError("CONDITIONAL_NOT_NULL requires params.when_equals.")
+    expected = rule.params["when_equals"]
+    expressions, binds = _fragment_conditional_not_null(
+        when_column[0], then_column[0], expected, dialect
+    )
+
+    def decode_conditional(values: Sequence[Any]) -> list[DQIssue]:
+        breaches = int(values[0] or 0)
+        if breaches == 0:
+            return []
+        return [
+            _issue(
+                run_id,
+                rule,
+                table,
+                None,
+                message=(
+                    f"{breaches} row(s) in '{table.table_name}' have "
+                    f"{when_column[0]} = {expected!r} but no {then_column[0]}."
+                ),
+                evidence={
+                    "breach_count": breaches,
+                    "when_column": when_column[0],
+                    "then_column": then_column[0],
+                },
+            )
+        ]
+
+    return _CompiledCheck(
+        rule_index, table, None, qualified_table, expressions, binds, decode_conditional
+    )
+
+
 def _evaluation_error_issue(
     run_id: str,
     rule: RuleConfig,
     table: DiscoveredTable,
-    column_name: str,
+    column_name: str | None,
     error: Exception,
 ) -> DQIssue:
     """Report that a rule could not be evaluated.
@@ -462,12 +601,188 @@ def _evaluation_error_issue(
     )
 
 
+#: Expressions evaluated once per table rather than once per column. A rule
+#: naming one of these is compiled with ``column_name=None``: the check is
+#: about a combination of columns, so compiling it per column would evaluate
+#: the same thing once for every column in the table.
+TABLE_LEVEL_EXPRESSIONS = frozenset({"UNIQUE_TOGETHER", "FOREIGN_KEY", "CONDITIONAL_NOT_NULL"})
+
+
+def _require_columns(rule: RuleConfig, key: str, table: DiscoveredTable) -> tuple[str, ...]:
+    """Read a list of column names from a rule and check they exist.
+
+    Identifiers cannot be bound as parameters, so the only defence available
+    is to refuse a name that is not a column of the table. Quoting alone
+    would make an injected name harmless but would also let a typo reach the
+    driver and fail mid-scan, reported as a database error rather than as the
+    configuration mistake it is.
+
+    Args:
+        rule: The rule being compiled.
+        key: Which parameter to read.
+        table: The table the rule targets.
+
+    Returns:
+        The column names, in the order given.
+
+    Raises:
+        RuleEvaluationError: If the parameter is missing, empty, or names a
+            column the table does not have.
+
+    Example:
+        columns = _require_columns(rule, "columns", table)
+    """
+    raw = rule.params.get(key)
+    # A single column may be written as a bare string. Requiring a list for
+    # `when_column: status` would be ceremony with no meaning behind it.
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list | tuple) or not raw:
+        raise RuleEvaluationError(
+            f"{rule.expression} requires params.{key} as a non-empty list of column names."
+        )
+
+    known = {column.column_name for column in table.columns}
+    names = tuple(str(item) for item in raw)
+    unknown = [name for name in names if name not in known]
+    if unknown:
+        raise RuleEvaluationError(
+            f"{rule.expression} names column(s) {unknown} that '{table.table_name}' "
+            f"does not have. Known columns: {sorted(known)}."
+        )
+    return names
+
+
+def _fragment_unique_together(
+    qualified_table: str, columns: tuple[str, ...], dialect: Dialect
+) -> tuple[tuple[str, ...], tuple[Any, ...]]:
+    """Return a scalar subquery counting duplicated column combinations.
+
+    ``COUNT(DISTINCT a, b)`` is not portable -- PostgreSQL accepts a row
+    constructor, SQLite and SQL Server do not -- so the combination is
+    grouped instead and the groups with more than one row are counted.
+
+    It rides in the same ``SELECT`` as every other check on this table, as a
+    scalar subquery. The engine reads more than a single pass because of the
+    grouping, but no rule gets a statement of its own.
+
+    Args:
+        qualified_table: An already-quoted table reference.
+        columns: The columns whose combination must be unique.
+        dialect: Dialect used for quoting.
+
+    Returns:
+        The expression and its binds.
+
+    Example:
+        expressions, binds = _fragment_unique_together('"t"', ("a", "b"), dialect)
+    """
+    quoted = ", ".join(dialect.quote_identifier(name) for name in columns)
+    return (
+        (
+            f"(SELECT COUNT(*) FROM (SELECT {quoted} FROM {qualified_table} "
+            f"GROUP BY {quoted} HAVING COUNT(*) > 1) AS dqt_duplicated)",
+        ),
+        (),
+    )
+
+
+def _fragment_foreign_key(
+    qualified_table: str,
+    columns: tuple[str, ...],
+    parent_table: str,
+    parent_columns: tuple[str, ...],
+    dialect: Dialect,
+) -> tuple[tuple[str, ...], tuple[Any, ...]]:
+    """Return a scalar subquery counting rows whose reference is unmatched.
+
+    The same anti-join :mod:`dqt.sql.referential` uses for declared
+    constraints, and it must get the same two things right: every column of
+    the key joins at once, and a row whose own key is NULL is excluded
+    before the parent side is examined. Nothing joins to NULL, so leaving
+    them in counts every unset reference as broken.
+
+    Args:
+        qualified_table: An already-quoted child table reference.
+        columns: The referencing columns.
+        parent_table: An already-quoted parent table reference.
+        parent_columns: The referenced columns, aligned by position.
+        dialect: Dialect used for quoting.
+
+    Returns:
+        The expression and its binds.
+
+    Example:
+        expressions, binds = _fragment_foreign_key(
+            '"orders"', ("customer_id",), '"customers"', ("id",), dialect
+        )
+    """
+    if len(columns) != len(parent_columns):
+        raise RuleEvaluationError(
+            f"FOREIGN_KEY names {len(columns)} column(s) but "
+            f"{len(parent_columns)} referenced column(s); they must correspond."
+        )
+
+    on_terms = " AND ".join(
+        f"c.{dialect.quote_identifier(child)} = p.{dialect.quote_identifier(parent)}"
+        for child, parent in zip(columns, parent_columns, strict=True)
+    )
+    present = " AND ".join(f"c.{dialect.quote_identifier(name)} IS NOT NULL" for name in columns)
+    probe = f"p.{dialect.quote_identifier(parent_columns[0])}"
+    return (
+        (
+            f"(SELECT COUNT(*) FROM {qualified_table} AS c "
+            f"LEFT JOIN {parent_table} AS p ON {on_terms} "
+            f"WHERE {present} AND {probe} IS NULL)",
+        ),
+        (),
+    )
+
+
+def _fragment_conditional_not_null(
+    when_column: str, then_column: str, expected: Any, dialect: Dialect
+) -> tuple[tuple[str, ...], tuple[Any, ...]]:
+    """Return an aggregate counting rows that meet the condition but not the requirement.
+
+    A plain ``SUM(CASE WHEN ...)``, so this one is an ordinary aggregate and
+    shares the single pass with no subquery at all.
+
+    Rows failing the condition contribute zero rather than being filtered.
+    A ``WHERE`` here would silently narrow every other check sharing the
+    statement -- the invariant this module is built on.
+
+    Args:
+        when_column: The column the condition tests.
+        then_column: The column required to be present.
+        expected: The value *when_column* must equal, bound as a parameter.
+        dialect: Dialect used for quoting and placeholders.
+
+    Returns:
+        The expression and its binds.
+
+    Example:
+        expressions, binds = _fragment_conditional_not_null(
+            "status", "shipped_at", "shipped", dialect
+        )
+    """
+    when_quoted = dialect.quote_identifier(when_column)
+    then_quoted = dialect.quote_identifier(then_column)
+    placeholder = dialect.parameter_placeholder
+    return (
+        (
+            f"SUM(CASE WHEN {when_quoted} = {placeholder} AND {then_quoted} IS NULL "
+            "THEN 1 ELSE 0 END)",
+        ),
+        (expected,),
+    )
+
+
 def _compile_check(
     run_id: str,
     rule: RuleConfig,
     rule_index: int,
     table: DiscoveredTable,
-    column_name: str,
+    column_name: str | None,
     dialect: Dialect,
 ) -> _CompiledCheck:
     """Compile one rule against one column into shareable aggregates.
@@ -493,8 +808,24 @@ def _compile_check(
         check = _compile_check(run_id, rule, 0, table, "email", dialect)
     """
     qualified_table = dialect.qualified_identifier(table.schema_name, table.table_name)
-    quoted_column = dialect.quote_identifier(column_name)
     expression = rule.expression.strip().upper()
+
+    # Dispatched before the column is quoted, because a table-level check has
+    # no column and quoting None is not a question with an answer.
+    if expression in TABLE_LEVEL_EXPRESSIONS:
+        return _compile_table_check(run_id, rule, rule_index, table, dialect, expression)
+
+    # Everything past the dispatch above is column-level, so a missing column
+    # is not a user's mistake -- it means an expression was added to
+    # TABLE_LEVEL_EXPRESSIONS without a branch in _compile_table_check, and
+    # saying so is more useful than a None reaching the quoting path.
+    if column_name is None:
+        raise RuleEvaluationError(
+            f"{rule.expression!r} was compiled without a column but is not handled as a "
+            "table-level expression. This is a DQT bug, not a configuration mistake."
+        )
+
+    quoted_column = dialect.quote_identifier(column_name)
 
     if expression == "NOT NULL":
         expressions, binds = _fragment_not_null(quoted_column)
@@ -874,18 +1205,26 @@ def apply_rules(
     # Compile first, connect second. A rule whose parameters cannot describe a
     # check is a configuration mistake, and finding it costs no database work.
     for rule_index, rule in enumerate(rules):
+        table_level = rule.expression.strip().upper() in TABLE_LEVEL_EXPRESSIONS
         for table in discovered_tables:
-            for column in table.columns:
-                if not _matches_scope(table, column.column_name, rule):
+            # A table-scoped rule has one target per table, whatever the
+            # column count. Compiling it per column would evaluate the same
+            # check once for every column and report the table as failing
+            # once per column with it.
+            targets: list[str | None] = (
+                [None] if table_level else [c.column_name for c in table.columns]
+            )
+            for column_name in targets:
+                if not _matches_scope(table, column_name, rule):
                     continue
                 targets_checked[rule_index] += 1
                 try:
                     compiled.append(
-                        _compile_check(run_id, rule, rule_index, table, column.column_name, dialect)
+                        _compile_check(run_id, rule, rule_index, table, column_name, dialect)
                     )
                 except Exception as error:  # noqa: BLE001
                     issues_by_rule[rule_index].append(
-                        _evaluation_error_issue(run_id, rule, table, column.column_name, error)
+                        _evaluation_error_issue(run_id, rule, table, column_name, error)
                     )
                     targets_error[rule_index] += 1
 

@@ -31,6 +31,7 @@ sharpest edge is that **checking nothing must not look like passing**.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -253,3 +254,50 @@ class TestCheckRunsRulesWithoutProfiling:
         assert not [s for s in statements if "MIN(" in s.upper() or "AVG(" in s.upper()], (
             f"check computed column statistics: {statements}"
         )
+
+
+class TestARuleFileIsLoadedOnce:
+    """Naming the same file twice must not double its findings."""
+
+    def test_config_and_flag_naming_the_same_file_do_not_double_it(
+        self,
+        make_sqlite_db: Callable[[str, str], Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``--rules r.yaml`` beside a config listing ``r.yaml`` is one rule set.
+
+        Found running the table-rule examples: every rule reported twice, so
+        every violation was counted twice. Nothing errors, and the numbers
+        look plausible -- a doubled duplicate count is still a duplicate
+        count -- which is what makes it worth a test rather than a shrug.
+        """
+        db_file = make_sqlite_db("dedupe.db", SEEDED)
+        rules = tmp_path / "rules.yaml"
+        rules.write_text(RULES, encoding="utf-8")
+        config = tmp_path / "cfg.json"
+        config.write_text(
+            json.dumps({"connection_id": "c", "rule_files": [str(rules)]}), encoding="utf-8"
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "dqt",
+                "check",
+                "--dsn",
+                f"sqlite:///{db_file}",
+                "--rules",
+                str(rules),
+                "--config",
+                str(config),
+            ],
+        )
+
+        with pytest.raises(SystemExit):
+            main()
+
+        printed = capsys.readouterr()
+        combined = printed.out + printed.err
+
+        assert combined.count("email_present") == 1, combined
