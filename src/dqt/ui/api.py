@@ -255,6 +255,104 @@ def get_rule_history(
     return _store(store_path).load_rule_history(rule_name, limit=limit)
 
 
+def get_column_details(store_path: str | Path, run_id: str) -> list[dict[str, Any]]:
+    """Return one entry per profiled column, read back from a stored run.
+
+    The HTML report builds the same view from a live ``PipelineResult``;
+    the screens cannot, because they serve a run that finished last night.
+    The statistics survive that gap because `F1` writes them into the
+    completeness metric's metadata rather than only into the profile object.
+
+    Args:
+        store_path: Path to the RunStore SQLite file.
+        run_id: The run to read.
+
+    Returns:
+        Dicts with ``schema_name``, ``table_name``, ``column_name``,
+        ``semantic_type``, ``null_count``, ``distinct_count``, ``min_value``,
+        ``max_value``, ``mean_value`` and ``score``. Sorted by table then
+        column, so the screen is stable between refreshes.
+
+    Example:
+        columns = get_column_details("dqt_runs.db", run_id="run-001")
+    """
+    # The semantic type rides on the *validity* metric, not the completeness
+    # one -- classification is what produces it, and validity is what
+    # classification scores. Reading it off the completeness metric returned
+    # "n/a" for every column even when classification had run, which is the
+    # kind of wrong that looks like a disabled feature.
+    semantic_types = {
+        (metric.get("table_name"), metric.get("column_name")): (metric.get("metadata") or {}).get(
+            "semantic_type"
+        )
+        for metric in get_run_metrics(store_path, run_id, dimension="validity")
+    }
+
+    rows: list[dict[str, Any]] = []
+    for metric in get_run_metrics(store_path, run_id, dimension="completeness"):
+        if not metric.get("column_name"):
+            continue
+        metadata = metric.get("metadata") or {}
+        rows.append(
+            {
+                "schema_name": metric.get("schema_name"),
+                "table_name": metric.get("table_name"),
+                "column_name": metric.get("column_name"),
+                "semantic_type": semantic_types.get(
+                    (metric.get("table_name"), metric.get("column_name"))
+                ),
+                "null_count": metric.get("value"),
+                "distinct_count": metadata.get("distinct_count"),
+                "min_value": metadata.get("min_value"),
+                "max_value": metadata.get("max_value"),
+                "mean_value": metadata.get("mean_value"),
+                "score": metric.get("score"),
+            }
+        )
+    return sorted(rows, key=lambda row: (str(row["table_name"]), str(row["column_name"])))
+
+
+def get_score_changes(store_path: str | Path, run_id: str) -> list[dict[str, Any]]:
+    """Return the dimension scores that fell since the previous run.
+
+    Reads the deltas `F8` writes onto each metric, so this asks the store a
+    question rather than recomputing a comparison the pipeline already made.
+
+    Only falls, and only where a previous observation exists. A run with no
+    predecessor returns nothing rather than a list of zeroes -- the same
+    distinction `F8` makes between no drift and zero drift, kept at the
+    point it would otherwise be lost.
+
+    Args:
+        store_path: Path to the RunStore SQLite file.
+        run_id: The run to read.
+
+    Returns:
+        Dicts with ``table_name``, ``column_name``, ``dimension``,
+        ``previous_score``, ``score`` and ``delta``, worst fall first.
+
+    Example:
+        changes = get_score_changes("dqt_runs.db", run_id="run-001")
+    """
+    changes: list[dict[str, Any]] = []
+    for metric in get_run_metrics(store_path, run_id):
+        metadata = metric.get("metadata") or {}
+        delta = metadata.get("delta")
+        if not isinstance(delta, int | float) or delta >= 0 or not metric.get("dimension"):
+            continue
+        changes.append(
+            {
+                "table_name": metric.get("table_name"),
+                "column_name": metric.get("column_name"),
+                "dimension": metric.get("dimension"),
+                "previous_score": metadata.get("previous_score"),
+                "score": metric.get("score"),
+                "delta": delta,
+            }
+        )
+    return sorted(changes, key=lambda row: float(row["delta"]))
+
+
 def get_issue_counts_by_severity(store_path: str | Path, run_id: str) -> dict[str, int]:
     """Return how many issues of each severity a run produced.
 

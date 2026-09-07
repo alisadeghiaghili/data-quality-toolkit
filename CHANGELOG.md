@@ -15,6 +15,31 @@ Dates are the merge dates on `main`.
 
 ### Added
 
+- **A columns screen, and drift on the dashboard (`NEW-AE`).** DQT gained
+  minimum, maximum, mean, distinct counts, semantic types and drift between
+  `1.1.0` and `1.7.0`, and **none of it reached the HTML screens**. The JSON
+  endpoints carried it the whole time; the surface a DBA actually watches did
+  not, which is awkward for a tool whose stated differentiator is DBA-first
+  framing.
+
+  `/ui/runs/{run_id}/columns` shows every profiled column with its statistics,
+  and the run screen now leads with **what got worse since the previous run** --
+  the question someone opens a dashboard in the morning to answer.
+
+  A run with no predecessor renders no drift panel rather than an empty one:
+  "nothing changed" and "there was nothing to compare against" are different
+  claims, and `F8` is careful to distinguish them.
+
+### Fixed
+
+- **The columns screen reported every semantic type as `n/a`.** It read the
+  type from the completeness metric, which never carries one -- classification
+  writes it onto the *validity* metric. Wrong in the way that looks like a
+  disabled feature. Found by looking at the rendered page rather than by a
+  test.
+
+### Added
+
 - **A printable PDF report (`F12`) -- the capability floor is now 15 of 15.**
   `dqt profile --pdf`, or `generate_pdf_report()` from Python.
 

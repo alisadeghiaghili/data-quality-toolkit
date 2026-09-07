@@ -99,7 +99,10 @@ computed with SQL, against the live database, without extracting the data.
   badges, and optionally a printable **PDF** (`pip install "dqt[pdf]"`, then
   `dqt profile --pdf`). Persian renders correctly in both. The PDF is behind an
   extra because every PDF library is heavy and a lean install is worth more.
-- **Read-only HTTP API** — an optional FastAPI surface over the stored results.
+- **Read-only HTTP API and dashboard** — an optional FastAPI surface over the
+  stored results, with server-rendered screens: overview, run, **columns**
+  (every statistic profiling computed), issues, and rules with a pass-rate
+  trend. The run screen leads with what got worse since the previous run.
 
 Supported databases: **SQLite**, **PostgreSQL** and **SQL Server**, all three
 exercised against a live server in CI. MySQL is not supported.
