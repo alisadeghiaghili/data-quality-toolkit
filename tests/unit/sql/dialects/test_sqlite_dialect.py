@@ -142,6 +142,62 @@ class TestApproximateDistinct:
         assert SQLITE.approximate_distinct_expression('"c"') is None
 
 
+class TestSupportsDistinct:
+    """SQLite's dynamic typing has no type that refuses equality comparison (`NEW-AF`)."""
+
+    @pytest.mark.parametrize("data_type", ["integer", "TEXT", "blob", "json", "boolean"])
+    def test_every_type_supports_distinct(self, data_type):
+        assert SQLITE.supports_distinct(data_type) is True
+
+
+class TestIsTextType:
+    """SQLite's own affinity rule: a substring match, not a whole-name one (`NEW-AF`).
+
+    Hand-derived from SQLite's documented type-affinity algorithm: a
+    declared type gets TEXT affinity when its name contains "CHAR", "CLOB"
+    or "TEXT" anywhere in it, case-insensitively -- unlike the whole-name
+    matching every other set in this module uses.
+    """
+
+    @pytest.mark.parametrize(
+        "data_type",
+        ["TEXT", "VARCHAR(50)", "NCHAR(10)", "CLOB", "character", "text"],
+    )
+    def test_types_containing_the_affinity_keywords_are_text(self, data_type):
+        assert SQLITE.is_text_type(data_type) is True
+
+    @pytest.mark.parametrize("data_type", ["INTEGER", "REAL", "blob", "boolean", "date"])
+    def test_types_without_the_keywords_are_not_text(self, data_type):
+        assert SQLITE.is_text_type(data_type) is False
+
+
+class TestMeanExpression:
+    """`NEW-AF`: SQLite needs no cast, unlike PostgreSQL's ``money`` or SQL Server's integers."""
+
+    def test_sqlite_needs_no_cast(self):
+        assert SQLITE.mean_expression('"score"', "integer") == 'AVG("score")'
+
+    def test_the_declared_type_does_not_change_the_expression(self):
+        # SQLite's AVG needs no per-type cast, unlike SQL Server's or
+        # PostgreSQL's -- the expression is the same whatever the type is.
+        assert SQLITE.mean_expression('"score"', "real") == SQLITE.mean_expression(
+            '"score"', "integer"
+        )
+
+
+class TestExactTextExpression:
+    """`NEW-AF`: forces a byte-exact comparison regardless of the column's own collation."""
+
+    def test_forces_binary_collation(self):
+        assert SQLITE.exact_text_expression('"city"') == '"city" COLLATE BINARY'
+
+    def test_overrides_a_column_declared_collate_nocase(self):
+        # The whole point: a NOCASE column's own COUNT(DISTINCT col) folds
+        # case, and this expression must not.
+        expression = SQLITE.exact_text_expression('"city"')
+        assert "COLLATE BINARY" in expression
+
+
 class TestConnect:
     def test_memory_database_is_opened_writable_despite_read_only(self, tmp_path):
         # Documented DQT-03 carve-out: a fresh in-memory database is not a

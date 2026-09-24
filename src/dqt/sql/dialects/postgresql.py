@@ -31,6 +31,7 @@ from dqt.sql.dialects.base import (
     ForeignKeyMetadata,
     ReadOnlyEnforcement,
     _group_foreign_key_rows,
+    _unimplemented,
     ansi_select_aggregates_sql,
     normalized_type_name,
     quote_with_doubled_delimiter,
@@ -473,6 +474,69 @@ class PostgresqlDialect:
         """
         return normalized_type_name(data_type) in _NUMERIC_TYPES
 
+    def supports_distinct(self, data_type: str) -> bool:
+        """Whether this type can be compared for equality at all.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``False`` for PostgreSQL's ``json`` and its geometric types,
+            which have no equality operator and so cannot appear inside
+            ``COUNT(DISTINCT ...)``. ``True`` otherwise, including for
+            ``jsonb`` and ``bytea``, which are comparable even though they do
+            not order.
+
+        Example:
+            assert PostgresqlDialect().supports_distinct("json") is False
+            assert PostgresqlDialect().supports_distinct("jsonb") is True
+        """
+        _unimplemented("PostgresqlDialect.supports_distinct")
+
+    def is_text_type(self, data_type: str) -> bool:
+        """Whether this type is one of PostgreSQL's character types.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``True`` for ``text``, the ``varchar``/``character varying``
+            family, ``bpchar``, ``citext`` and ``name``. ``False`` for
+            ``date``, ``timestamp``, ``boolean``, ``uuid`` and every other
+            orderable-but-not-numeric type -- none of those store character
+            data, and PostgreSQL has no implicit cast from any of them to
+            ``text``.
+
+        Example:
+            assert PostgresqlDialect().is_text_type("character varying") is True
+            assert PostgresqlDialect().is_text_type("timestamp") is False
+        """
+        _unimplemented("PostgresqlDialect.is_text_type")
+
+    def mean_expression(self, quoted_column: str, data_type: str) -> str:
+        """Return the ``AVG`` expression, casting ``money`` through ``numeric``.
+
+        PostgreSQL has no ``AVG(money)`` at all -- ``ERROR: function
+        avg(money) does not exist`` -- so a plain ``money`` column needs its
+        value read as ``numeric`` first. Every other mean-supporting type
+        averages directly.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+            data_type: The column's declared type.
+
+        Returns:
+            ``AVG(CAST(<column> AS NUMERIC))`` for ``money``, otherwise
+            ``AVG(<column>)``.
+
+        Example:
+            assert (
+                PostgresqlDialect().mean_expression('"price"', "money")
+                == 'AVG(CAST("price" AS NUMERIC))'
+            )
+        """
+        _unimplemented("PostgresqlDialect.mean_expression")
+
     def normalized_text_expression(self, quoted_column: str) -> str:
         """Fold case and surrounding whitespace for a consistency comparison.
 
@@ -486,6 +550,27 @@ class PostgresqlDialect:
             expression = dialect.normalized_text_expression('"city"')
         """
         return f"LOWER(TRIM({quoted_column}))"
+
+    def exact_text_expression(self, quoted_column: str) -> str:
+        """Force a byte-exact comparison regardless of the column's collation.
+
+        ``COLLATE "C"`` is PostgreSQL's byte-comparison collation, always
+        available regardless of what locale the database or column was
+        created with. The ``CAST`` to ``text`` is what lets this apply to
+        ``citext``, whose whole purpose is case-insensitive comparison and
+        which would otherwise ignore the collation override.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+
+        Returns:
+            ``CAST(<column> AS TEXT) COLLATE "C"``.
+
+        Example:
+            expression = PostgresqlDialect().exact_text_expression('"city"')
+            assert expression == 'CAST("city" AS TEXT) COLLATE "C"'
+        """
+        _unimplemented("PostgresqlDialect.exact_text_expression")
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Report that stock PostgreSQL has no approximate distinct count.

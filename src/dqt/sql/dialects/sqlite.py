@@ -31,6 +31,7 @@ from dqt.sql.dialects.base import (
     ColumnMetadata,
     ForeignKeyMetadata,
     ReadOnlyEnforcement,
+    _unimplemented,
     ansi_select_aggregates_sql,
     normalized_type_name,
     quote_with_doubled_delimiter,
@@ -599,6 +600,60 @@ class SqliteDialect:
         """
         return normalized_type_name(data_type) in _NUMERIC_TYPES
 
+    def supports_distinct(self, data_type: str) -> bool:
+        """Report that SQLite can distinct-count every type it stores.
+
+        Args:
+            data_type: The column's declared type (unused).
+
+        Returns:
+            Always ``True``. SQLite's dynamic typing has no type that
+            refuses equality comparison the way PostgreSQL's ``json`` or SQL
+            Server's ``text`` do.
+
+        Example:
+            assert SqliteDialect().supports_distinct("blob") is True
+        """
+        _unimplemented("SqliteDialect.supports_distinct")
+
+    def is_text_type(self, data_type: str) -> bool:
+        """Whether this column stores text, by SQLite's own affinity rule.
+
+        This is SQLite's documented type-affinity rule, and the one
+        deliberate exception to whole-name matching elsewhere in this
+        module: SQLite decides a declared type's affinity by whether it
+        *contains* ``"CHAR"``, ``"CLOB"`` or ``"TEXT"`` as a substring, not
+        by matching the whole name, so ``VARCHAR``, ``NCHAR`` and ``CLOB``
+        must all match here even though :data:`_NUMERIC_TYPES` and
+        :data:`_UNORDERED_TYPES` elsewhere in this file match whole names.
+
+        Args:
+            data_type: The column's declared type. Matched case-insensitively.
+
+        Returns:
+            ``True`` when the normalized type name contains ``"char"``,
+            ``"clob"`` or ``"text"``.
+
+        Example:
+            assert SqliteDialect().is_text_type("VARCHAR(50)") is True
+        """
+        _unimplemented("SqliteDialect.is_text_type")
+
+    def mean_expression(self, quoted_column: str, data_type: str) -> str:
+        """Return a bare ``AVG`` expression; SQLite needs no cast.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+            data_type: The column's declared type (unused).
+
+        Returns:
+            ``AVG(<column>)``.
+
+        Example:
+            assert SqliteDialect().mean_expression('"score"', "integer") == 'AVG("score")'
+        """
+        _unimplemented("SqliteDialect.mean_expression")
+
     def normalized_text_expression(self, quoted_column: str) -> str:
         """Fold case and surrounding whitespace for a consistency comparison.
 
@@ -612,6 +667,26 @@ class SqliteDialect:
             expression = dialect.normalized_text_expression('"city"')
         """
         return f"LOWER(TRIM({quoted_column}))"
+
+    def exact_text_expression(self, quoted_column: str) -> str:
+        """Force a byte-exact comparison regardless of the column's collation.
+
+        A column declared ``COLLATE NOCASE`` makes its own
+        ``COUNT(DISTINCT ...)`` case-insensitive, which would hide exactly
+        the spelling variants consistency exists to find. ``COLLATE BINARY``
+        overrides that for this one expression without altering the column.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+
+        Returns:
+            ``<column> COLLATE BINARY``.
+
+        Example:
+            expression = SqliteDialect().exact_text_expression('"city"')
+            assert expression == '"city" COLLATE BINARY'
+        """
+        _unimplemented("SqliteDialect.exact_text_expression")
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Report that SQLite has no approximate distinct count.

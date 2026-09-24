@@ -36,7 +36,54 @@ from typing import Any
 from dqt.common.models import ConnectionConfig, DQMetric, ProfilingConfig, SamplingConfig
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.dialects import Dialect
+from dqt.sql.dialects.base import _unimplemented
 from dqt.sql.schema_discovery import DiscoveredTable
+
+# Bound on how many bytes of a binary min/max value are rendered into
+# metadata (`NEW-AF`). A profiled bound is shown to a DBA, not analysed by a
+# program, so a truncated preview of a long BLOB's leading bytes is exactly
+# as useful as the whole thing and does not bloat a stored run with an
+# arbitrarily large value.
+_BINARY_METADATA_PREVIEW_BYTES = 32
+
+
+def _json_safe_metadata_value(value: Any) -> Any:
+    """Turn a raw driver value into one :func:`json.dumps` can serialize.
+
+    ``ColumnProfile.min_value``/``max_value`` carry whatever the DBAPI driver
+    returned for ``MIN``/``MAX``: a :class:`decimal.Decimal` for
+    ``numeric``/``money`` on ``psycopg`` and ``pyodbc``, a
+    :class:`datetime.date`/:class:`~datetime.datetime`/:class:`~datetime.time`
+    for a temporal column, raw ``bytes`` for a binary one, or a
+    :class:`uuid.UUID` for ``uuid``/``uniqueidentifier``. None of those are
+    JSON-native, and :func:`dqt.common.storage.RunStore.save_run` used to
+    call :func:`json.dumps` on them with no ``default``, so a run over any
+    such column raised ``TypeError`` after every other stage had already
+    completed -- nothing was stored, and no report was written (`NEW-AF`).
+
+    This is applied only when metric metadata is built. The public
+    :class:`ColumnProfile` itself is unchanged and still carries the raw
+    driver value.
+
+    Args:
+        value: A profiled minimum or maximum, or ``None``.
+
+    Returns:
+        *value* unchanged when it is already ``None``, ``bool``, ``int``,
+        ``float`` or ``str``. A :class:`~decimal.Decimal` becomes
+        ``str(value)``, preserving its exact decimal digits rather than
+        ``float``'s binary rounding. A date, datetime or time becomes its
+        ISO-8601 ``isoformat()``. ``bytes``/``bytearray``/``memoryview``
+        become ``"0x"`` followed by the hex of at most the first 32 bytes,
+        with a trailing ``"…"`` when the value was longer than that.
+        Anything else, including a :class:`uuid.UUID`, becomes ``str(value)``.
+
+    Example:
+        assert _json_safe_metadata_value(Decimal("12.50")) == "12.50"
+        assert _json_safe_metadata_value(date(2024, 1, 2)) == "2024-01-02"
+        assert _json_safe_metadata_value(b"\\x00\\xff") == "0x00ff"
+    """
+    _unimplemented("dqt.sql.profiling._json_safe_metadata_value")
 
 
 @dataclass(slots=True)

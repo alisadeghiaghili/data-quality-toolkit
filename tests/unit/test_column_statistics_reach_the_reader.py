@@ -19,10 +19,12 @@ the only one.
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
 from dqt.common.models import ConnectionConfig, DQPipelineConfig
+from dqt.common.storage import RunStore
 from dqt.sql.pipeline import DQTPipeline
 
 SEEDED = """
@@ -122,6 +124,62 @@ class TestTheMetricCarriesTheStatistics:
 
         assert metric.metadata["null_count"] == 0
         assert metric.metadata["row_count"] == 4
+
+
+class TestBinaryColumnMinMaxDoesNotCrashPersistence:
+    """`NEW-AF`: a raw driver value in metric metadata used to crash `_persist`.
+
+    ``SqlProfiler.build_metrics`` copied ``column.min_value``/``max_value``
+    into ``DQMetric.metadata`` unchanged, and
+    ``RunStore._metric_row`` called ``json.dumps(metric.metadata)`` with no
+    ``default``. SQLite's ``_UNORDERED_TYPES`` holds only ``"blob"`` (matched
+    by whole name), so a column declared ``VARBINARY(16)`` -- a spelling
+    that does not match ``"blob"`` -- passes ``supports_min_max`` and
+    ``MIN``/``MAX`` run over it, returning raw ``bytes``. ``json.dumps``
+    cannot serialize ``bytes``, and that ``TypeError`` was raised inside
+    ``_persist``, which is outside ``run()``'s stage-error guards: nothing
+    was stored, no report was written, and the CLI exited non-zero even
+    though profiling itself had already completed successfully.
+    """
+
+    def test_a_varbinary_column_run_succeeds_and_reports_a_hex_bound(self, tmp_path: Path) -> None:
+        """Ground truth: the single seeded row holds the two bytes ``0x00``, ``0xff``.
+
+        ``MIN``/``MAX`` over one row both equal that row's own value, so the
+        completeness metric's ``min_value`` must be the hex preview of
+        exactly those two bytes: ``"0x00ff"`` -- no truncation marker, since
+        two bytes is far under the 32-byte preview bound.
+        """
+        db_file = tmp_path / "binary.db"
+        connection = sqlite3.connect(db_file)
+        try:
+            connection.execute("CREATE TABLE blobs (id INTEGER PRIMARY KEY, payload VARBINARY(16))")
+            connection.execute("INSERT INTO blobs (id, payload) VALUES (1, ?)", (b"\x00\xff",))
+            connection.commit()
+        finally:
+            connection.close()
+
+        store_path = tmp_path / "runs.db"
+        result, report_path = DQTPipeline(
+            ConnectionConfig(id="s", dsn=f"sqlite:///{db_file}"),
+            DQPipelineConfig(connection_id="s"),
+            store_path=store_path,
+            report_dir=tmp_path,
+        ).run()
+
+        assert result.status == "success"
+        assert report_path.exists()
+
+        store = RunStore(db_path=store_path)
+        assert any(row["run_id"] == result.run_id for row in store.load_runs())
+
+        metric = next(
+            m
+            for m in result.metrics  # type: ignore[attr-defined]
+            if m.column_name == "payload" and m.dimension == "completeness"
+        )
+        assert metric.metadata["min_value"] == "0x00ff"
+        assert metric.metadata["max_value"] == "0x00ff"
 
 
 class TestTheReportShowsThem:
