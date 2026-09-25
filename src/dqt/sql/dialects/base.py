@@ -509,6 +509,91 @@ class Dialect(Protocol):
         """
         ...
 
+    def supports_distinct(self, data_type: str) -> bool:
+        """Whether ``COUNT(DISTINCT ...)`` is meaningful over this type.
+
+        Introduced by `NEW-AF` because ``supports_min_max`` was being asked
+        to answer a question it was never designed for: the profiler used to
+        emit ``COUNT(DISTINCT col)`` unconditionally, for every column, and
+        some types cannot be compared for equality at all. PostgreSQL raises
+        on ``json``, ``point`` and its other geometric types; SQL Server
+        raises on ``text``, ``ntext``, ``image``, ``xml``, ``geography`` and
+        ``geometry``. A single unsupported column then failed the whole
+        table's one aggregate query, not just that column's statistic.
+
+        Deliberately a separate question from :meth:`supports_min_max`:
+        PostgreSQL's ``jsonb`` and ``bytea`` are comparable (and so support
+        this) while remaining unorderable (so ``supports_min_max`` is still
+        ``False`` for them) -- one shared "unordered" set could not answer
+        both questions correctly at once.
+
+        Args:
+            data_type: The column's declared type, as schema discovery
+                reported it. Matched case-insensitively.
+
+        Returns:
+            ``True`` when the profiler may ask for a distinct count on this
+            type. When ``False``, both the raw and the case/space-folded
+            distinct counts are skipped for that column, so uniqueness and
+            consistency are left unmeasured for it rather than scored as if
+            they had been checked.
+
+        Example:
+            assert dialect.supports_distinct("integer") is True
+        """
+        ...
+
+    def is_text_type(self, data_type: str) -> bool:
+        """Whether this type holds text that case and whitespace folding can affect.
+
+        Introduced by `NEW-AF` to replace inferring "text-like" from
+        ``supports_min_max(data_type) and not supports_mean(data_type)``.
+        That inference caught every orderable, non-numeric type -- on
+        PostgreSQL that includes ``date``, ``timestamp``, ``time``,
+        ``interval``, ``boolean`` and ``uuid`` -- and asked for
+        ``COUNT(DISTINCT LOWER(TRIM(col)))`` over them. PostgreSQL has no
+        implicit cast from any of those types to ``text``, so the query
+        failed outright rather than merely wasting an aggregate. Only a
+        column that actually stores character data should be asked this
+        question at all.
+
+        Args:
+            data_type: The column's declared type, as schema discovery
+                reported it. Matched case-insensitively.
+
+        Returns:
+            ``True`` only for types that genuinely store text.
+
+        Example:
+            assert dialect.is_text_type("varchar") is True
+        """
+        ...
+
+    def mean_expression(self, quoted_column: str, data_type: str) -> str:
+        """Return the complete ``AVG`` expression for a mean-supporting column.
+
+        Only called where :meth:`supports_mean` is already ``True``; this
+        method decides *how* to average, not *whether* to. Introduced by
+        `NEW-AF` because bare ``AVG(col)`` is wrong on two engines in ways
+        that never raise: SQL Server's ``AVG`` over an integer column
+        truncates towards the integer (``AVG(1, 2)`` is ``1``, not ``1.5``)
+        and can overflow the accumulator entirely once the sum passes the
+        ``int`` range, and PostgreSQL has no ``AVG(money)`` at all.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+            data_type: The column's declared type, as schema discovery
+                reported it. Matched case-insensitively.
+
+        Returns:
+            A complete ``AVG(...)`` SQL expression for this column.
+
+        Example:
+            expression = dialect.mean_expression('"score"', "integer")
+            assert expression.startswith("AVG(")
+        """
+        ...
+
     def normalized_text_expression(self, quoted_column: str) -> str:
         """Return an expression folding case and surrounding whitespace.
 
@@ -530,6 +615,32 @@ class Dialect(Protocol):
 
         Example:
             expression = dialect.normalized_text_expression('"city"')
+        """
+        ...
+
+    def exact_text_expression(self, quoted_column: str) -> str:
+        """Return an expression whose distinct count is case- and space-sensitive.
+
+        Introduced by `NEW-AF`. A column's raw ``COUNT(DISTINCT col)`` runs
+        under that column's own collation, and a case-insensitive one --
+        SQL Server's default ``*_CI_AS`` collations, or a SQLite column
+        declared ``COLLATE NOCASE`` -- already treats ``'Tehran'`` and
+        ``'tehran'`` as one value. The raw distinct count then equals the
+        folded one, and consistency silently reports a perfect ``1.0``
+        exactly where two spellings of the same value should have been
+        flagged. This expression forces a byte-exact comparison regardless
+        of the column's own collation, so the raw distinct count means the
+        same thing on every column of every dialect.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+
+        Returns:
+            An SQL expression whose ``COUNT(DISTINCT ...)`` is sensitive to
+            case and trailing whitespace whatever the column's collation.
+
+        Example:
+            expression = dialect.exact_text_expression('"city"')
         """
         ...
 

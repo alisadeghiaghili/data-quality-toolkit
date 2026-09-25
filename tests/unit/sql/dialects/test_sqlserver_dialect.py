@@ -133,6 +133,73 @@ class TestApproximateDistinct:
         assert SQLSERVER.approximate_distinct_expression("[c]") == "APPROX_COUNT_DISTINCT([c])"
 
 
+class TestSupportsDistinct:
+    """`NEW-AF`: verified live against SQL Server 2022 -- ``Msg 8117`` on the excluded types.
+
+    ``COUNT(DISTINCT c)`` over ``xml`` raises "Operand data type xml is
+    invalid for count operator." on a live instance; the deprecated
+    ``text``/``ntext``/``image`` LOB types and ``geography``/``geometry``
+    are documented to behave the same way. ``varbinary``/``binary`` are
+    deliberately absent from this set -- they cannot be ordered but they can
+    be compared for equality.
+    """
+
+    @pytest.mark.parametrize(
+        "data_type", ["text", "ntext", "image", "xml", "geography", "geometry"]
+    )
+    def test_types_with_no_equality_operator_do_not_support_distinct(self, data_type):
+        assert SQLSERVER.supports_distinct(data_type) is False
+
+    @pytest.mark.parametrize(
+        "data_type", ["int", "nvarchar", "varbinary", "binary", "bit", "uniqueidentifier"]
+    )
+    def test_comparable_types_support_distinct(self, data_type):
+        assert SQLSERVER.supports_distinct(data_type) is True
+
+
+class TestIsTextType:
+    """`NEW-AF`: only SQL Server's own character types, matched by whole name."""
+
+    @pytest.mark.parametrize("data_type", ["char", "varchar", "nchar", "nvarchar"])
+    def test_character_types_are_text(self, data_type):
+        assert SQLSERVER.is_text_type(data_type) is True
+
+    @pytest.mark.parametrize(
+        "data_type", ["text", "ntext", "datetime2", "int", "bit", "uniqueidentifier"]
+    )
+    def test_non_character_types_are_not_text(self, data_type):
+        assert SQLSERVER.is_text_type(data_type) is False
+
+
+class TestMeanExpression:
+    """`NEW-AF`: verified live -- bare ``AVG`` over ``int`` truncates and can overflow.
+
+    ``AVG(1, 2)`` over a plain ``int`` column returns ``1``, not ``1.5``,
+    and once the sum of an ``int`` column passes the ``int`` range the
+    accumulator itself raises ``Msg 8115``. Casting to ``FLOAT`` avoids
+    both, and applies uniformly -- the expression does not depend on which
+    mean-supporting type it is asked for.
+    """
+
+    def test_casts_through_float(self):
+        assert SQLSERVER.mean_expression("[n]", "int") == "AVG(CAST([n] AS FLOAT))"
+
+    def test_every_mean_supporting_type_gets_the_same_cast(self):
+        assert SQLSERVER.mean_expression("[n]", "money") == SQLSERVER.mean_expression("[n]", "int")
+
+
+class TestExactTextExpression:
+    """`NEW-AF`: verified live -- ``VARBINARY(MAX)`` is byte-exact under the default collation.
+
+    A #temp table holding ``'Tehran'``, ``'tehran'`` and ``'Tehran '`` under
+    SQL Server 2022's default collation reports ``COUNT(DISTINCT c)`` as
+    ``1`` and ``COUNT(DISTINCT CAST(c AS VARBINARY(MAX)))`` as ``3``.
+    """
+
+    def test_casts_to_varbinary_max(self):
+        assert SQLSERVER.exact_text_expression("[city]") == "CAST([city] AS VARBINARY(MAX))"
+
+
 class TestOdbcConnectionString:
     def test_full_dsn_with_credentials_and_port(self):
         assert odbc_connection_string("mssql://sa:pw@localhost:1433/dqt") == (

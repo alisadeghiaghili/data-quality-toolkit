@@ -22,21 +22,92 @@ Two statistics are conditional, for different reasons:
   supports them, and the **dialect** decides that. ``AVG`` over text is not
   a harmless no-op -- PostgreSQL raises, SQLite silently answers ``0.0`` --
   and a reported mean of zero cannot be told from a column that genuinely
-  averages zero.
+  averages zero. The dialect also decides *how* to average
+  (:meth:`~dqt.sql.dialects.base.Dialect.mean_expression`): a bare
+  ``AVG(col)`` truncates and can overflow over an integer column on SQL
+  Server, and PostgreSQL has no ``AVG`` at all over ``money``.
 - ``COUNT(DISTINCT ...)`` holds every distinct value it sees, so it is the
   one statistic that can cost real memory server-side. It is on by default
   and can be declined through :class:`~dqt.common.models.ProfilingConfig`.
+  It is also skipped for a type the dialect reports as unable to compare
+  for equality at all (PostgreSQL's ``json`` and its geometric types; SQL
+  Server's ``text``/``ntext``/``image``/``xml``/``geography``/``geometry``)
+  -- see :meth:`~dqt.sql.dialects.base.Dialect.supports_distinct`. A text
+  column's distinct count is taken byte-exact
+  (:meth:`~dqt.sql.dialects.base.Dialect.exact_text_expression`)
+  regardless of the column's own collation, so a case-insensitive
+  collation cannot make two differently-spelt values look like one.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime, time
+from decimal import Decimal
 from typing import Any
 
 from dqt.common.models import ConnectionConfig, DQMetric, ProfilingConfig, SamplingConfig
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.dialects import Dialect
 from dqt.sql.schema_discovery import DiscoveredTable
+
+# Bound on how many bytes of a binary min/max value are rendered into
+# metadata (`NEW-AF`). A profiled bound is shown to a DBA, not analysed by a
+# program, so a truncated preview of a long BLOB's leading bytes is exactly
+# as useful as the whole thing and does not bloat a stored run with an
+# arbitrarily large value.
+_BINARY_METADATA_PREVIEW_BYTES = 32
+
+
+def _json_safe_metadata_value(value: Any) -> Any:
+    """Turn a raw driver value into one :func:`json.dumps` can serialize.
+
+    ``ColumnProfile.min_value``/``max_value`` carry whatever the DBAPI driver
+    returned for ``MIN``/``MAX``: a :class:`decimal.Decimal` for
+    ``numeric``/``money`` on ``psycopg`` and ``pyodbc``, a
+    :class:`datetime.date`/:class:`~datetime.datetime`/:class:`~datetime.time`
+    for a temporal column, raw ``bytes`` for a binary one, or a
+    :class:`uuid.UUID` for ``uuid``/``uniqueidentifier``. None of those are
+    JSON-native, and :func:`dqt.common.storage.RunStore.save_run` used to
+    call :func:`json.dumps` on them with no ``default``, so a run over any
+    such column raised ``TypeError`` after every other stage had already
+    completed -- nothing was stored, and no report was written (`NEW-AF`).
+
+    This is applied only when metric metadata is built. The public
+    :class:`ColumnProfile` itself is unchanged and still carries the raw
+    driver value.
+
+    Args:
+        value: A profiled minimum or maximum, or ``None``.
+
+    Returns:
+        *value* unchanged when it is already ``None``, ``bool``, ``int``,
+        ``float`` or ``str``. A :class:`~decimal.Decimal` becomes
+        ``str(value)``, preserving its exact decimal digits rather than
+        ``float``'s binary rounding. A date, datetime or time becomes its
+        ISO-8601 ``isoformat()``. ``bytes``/``bytearray``/``memoryview``
+        become ``"0x"`` followed by the hex of at most the first 32 bytes,
+        with a trailing ``"…"`` when the value was longer than that.
+        Anything else, including a :class:`uuid.UUID`, becomes ``str(value)``.
+
+    Example:
+        assert _json_safe_metadata_value(Decimal("12.50")) == "12.50"
+        assert _json_safe_metadata_value(date(2024, 1, 2)) == "2024-01-02"
+        assert _json_safe_metadata_value(b"\\x00\\xff") == "0x00ff"
+    """
+    if value is None or isinstance(value, bool | int | float | str):
+        return value
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, date | datetime | time):
+        return value.isoformat()
+    if isinstance(value, bytes | bytearray | memoryview):
+        raw = bytes(value)
+        preview = "0x" + raw[:_BINARY_METADATA_PREVIEW_BYTES].hex()
+        if len(raw) > _BINARY_METADATA_PREVIEW_BYTES:
+            preview += "…"
+        return preview
+    return str(value)
 
 
 @dataclass(slots=True)
@@ -301,8 +372,13 @@ class SqlProfiler:
                             # None is carried through rather than defaulted.
                             # A text column has no mean, and a zero here
                             # could not be told from one that averages zero.
-                            "min_value": column.min_value,
-                            "max_value": column.max_value,
+                            #
+                            # Made JSON-safe here, not on ColumnProfile: the
+                            # profile itself keeps the raw driver value, and
+                            # only this stored/reported representation needs
+                            # to survive json.dumps (`NEW-AF`).
+                            "min_value": _json_safe_metadata_value(column.min_value),
+                            "max_value": _json_safe_metadata_value(column.max_value),
                             "mean_value": column.mean_value,
                             "distinct_count": column.distinct_count,
                             "distinct_is_approximate": column.distinct_is_approximate,
@@ -321,7 +397,13 @@ class SqlProfiler:
         Which statistics are asked for depends on the column's type, and the
         dialect decides that. ``AVG`` over text is not a harmless no-op --
         PostgreSQL raises and SQLite answers ``0.0`` -- so an ungated
-        profiler either crashes or reports a wrong mean.
+        profiler either crashes or reports a wrong mean. Distinct counting
+        asks two further, separate questions of the dialect: whether the
+        type can be compared for equality at all
+        (:meth:`~dqt.sql.dialects.base.Dialect.supports_distinct`), and
+        whether it stores text
+        (:meth:`~dqt.sql.dialects.base.Dialect.is_text_type`) and so needs a
+        second, case/space-folded count to detect inconsistent spellings.
 
         Args:
             column: The discovered column to profile.
@@ -345,9 +427,14 @@ class SqlProfiler:
 
         if self._dialect.supports_mean(column.data_type):
             plan.mean = len(expressions)
-            expressions.append(f"AVG({quoted})")
+            expressions.append(self._dialect.mean_expression(quoted, column.data_type))
 
-        if self._profiling.distinct_counts:
+        # Distinct counting asks a question of its own: some types cannot be
+        # compared for equality at all (PostgreSQL's json, geometric types;
+        # SQL Server's text/ntext/image/xml/geography/geometry), and a
+        # column the engine refuses to compare is skipped rather than
+        # crashing the table's one aggregate query.
+        if self._profiling.distinct_counts and self._dialect.supports_distinct(column.data_type):
             estimated = None
             if self._profiling.approximate_distinct:
                 estimated = self._dialect.approximate_distinct_expression(quoted)
@@ -356,37 +443,27 @@ class SqlProfiler:
             # engine that has no estimator to offer.
             plan.distinct_is_approximate = estimated is not None
             plan.distinct = len(expressions)
-            expressions.append(estimated or f"COUNT(DISTINCT {quoted})")
+            is_text = self._dialect.is_text_type(column.data_type)
+            if estimated:
+                expressions.append(estimated)
+            elif is_text:
+                # A byte-exact comparison, regardless of the column's own
+                # collation -- a case-insensitive one would otherwise make
+                # this equal the folded count below and hide every spelling
+                # variant that differs only by case (`NEW-AF`).
+                expressions.append(f"COUNT(DISTINCT {self._dialect.exact_text_expression(quoted)})")
+            else:
+                expressions.append(f"COUNT(DISTINCT {quoted})")
 
             # Only where the answer can differ. Case-folding a number is
             # meaningless work in the hot query, and an estimate cannot be
             # compared against an exact count to decide anything.
-            if not estimated and self._is_text_like(column.data_type):
+            if not estimated and is_text:
                 folded = self._dialect.normalized_text_expression(quoted)
                 plan.normalized_distinct = len(expressions)
                 expressions.append(f"COUNT(DISTINCT {folded})")
 
         return plan
-
-    def _is_text_like(self, data_type: str) -> bool:
-        """Whether folding case and whitespace could change this column's values.
-
-        Orderable but not numeric. A date column passes and folds to itself,
-        which costs one aggregate and reports no false finding; a number is
-        excluded because the question cannot mean anything about it.
-
-        Args:
-            data_type: The column's declared type.
-
-        Returns:
-            ``True`` when the column may hold text.
-
-        Example:
-            assert profiler._is_text_like("TEXT") is True
-        """
-        return self._dialect.supports_min_max(data_type) and not self._dialect.supports_mean(
-            data_type
-        )
 
     def _quality_metrics(self, column: ColumnProfile, run_id: str) -> list[DQMetric]:
         """Score uniqueness and consistency for one column.

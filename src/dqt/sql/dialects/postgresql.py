@@ -117,7 +117,9 @@ _NUMERIC_TYPES: frozenset[str] = frozenset(
 #: Types this dialect cannot order. The geometric types are the reason matching is by whole name:
 #: ``point`` and ``interval`` both contain the letters ``int``. ``blob`` is
 #: not a PostgreSQL type and is listed defensively -- if discovery ever
-#: reports one, refusing to order it is the safe answer.
+#: reports one, refusing to order it is the safe answer. ``boolean``/``bool``
+#: and ``uuid`` are here (`NEW-AF`) because PostgreSQL has no ``min``/``max``
+#: for either -- ``ERROR: function min(boolean) does not exist``.
 _UNORDERED_TYPES: frozenset[str] = frozenset(
     {
         "bytea",
@@ -132,6 +134,44 @@ _UNORDERED_TYPES: frozenset[str] = frozenset(
         "polygon",
         "circle",
         "blob",
+        "boolean",
+        "bool",
+        "uuid",
+    }
+)
+
+#: Types this dialect cannot compare for equality at all, so ``COUNT(DISTINCT
+#: ...)`` over them fails outright (`NEW-AF`). Deliberately a *different* set
+#: from ``_UNORDERED_TYPES``: ``jsonb`` and ``bytea`` are comparable, so they
+#: support a distinct count even though neither orders under ``MIN``/``MAX``.
+_NO_DISTINCT_TYPES: frozenset[str] = frozenset(
+    {
+        "json",
+        "xml",
+        "point",
+        "line",
+        "lseg",
+        "box",
+        "path",
+        "polygon",
+        "circle",
+    }
+)
+
+#: Types this dialect stores as character data (`NEW-AF`). Matched by whole
+#: name, unlike SQLite's substring affinity rule: PostgreSQL's
+#: ``information_schema.columns.data_type`` reports one of these exact
+#: spellings for a character column, never a superstring of one.
+_TEXT_TYPES: frozenset[str] = frozenset(
+    {
+        "text",
+        "character varying",
+        "varchar",
+        "character",
+        "char",
+        "bpchar",
+        "citext",
+        "name",
     }
 )
 
@@ -473,6 +513,71 @@ class PostgresqlDialect:
         """
         return normalized_type_name(data_type) in _NUMERIC_TYPES
 
+    def supports_distinct(self, data_type: str) -> bool:
+        """Whether this type can be compared for equality at all.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``False`` for PostgreSQL's ``json`` and its geometric types,
+            which have no equality operator and so cannot appear inside
+            ``COUNT(DISTINCT ...)``. ``True`` otherwise, including for
+            ``jsonb`` and ``bytea``, which are comparable even though they do
+            not order.
+
+        Example:
+            assert PostgresqlDialect().supports_distinct("json") is False
+            assert PostgresqlDialect().supports_distinct("jsonb") is True
+        """
+        return normalized_type_name(data_type) not in _NO_DISTINCT_TYPES
+
+    def is_text_type(self, data_type: str) -> bool:
+        """Whether this type is one of PostgreSQL's character types.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``True`` for ``text``, the ``varchar``/``character varying``
+            family, ``bpchar``, ``citext`` and ``name``. ``False`` for
+            ``date``, ``timestamp``, ``boolean``, ``uuid`` and every other
+            orderable-but-not-numeric type -- none of those store character
+            data, and PostgreSQL has no implicit cast from any of them to
+            ``text``.
+
+        Example:
+            assert PostgresqlDialect().is_text_type("character varying") is True
+            assert PostgresqlDialect().is_text_type("timestamp") is False
+        """
+        return normalized_type_name(data_type) in _TEXT_TYPES
+
+    def mean_expression(self, quoted_column: str, data_type: str) -> str:
+        """Return the ``AVG`` expression, casting ``money`` through ``numeric``.
+
+        PostgreSQL has no ``AVG(money)`` at all -- ``ERROR: function
+        avg(money) does not exist`` -- so a plain ``money`` column needs its
+        value read as ``numeric`` first. Every other mean-supporting type
+        averages directly.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+            data_type: The column's declared type.
+
+        Returns:
+            ``AVG(CAST(<column> AS NUMERIC))`` for ``money``, otherwise
+            ``AVG(<column>)``.
+
+        Example:
+            assert (
+                PostgresqlDialect().mean_expression('"price"', "money")
+                == 'AVG(CAST("price" AS NUMERIC))'
+            )
+        """
+        if normalized_type_name(data_type) == "money":
+            return f"AVG(CAST({quoted_column} AS NUMERIC))"
+        return f"AVG({quoted_column})"
+
     def normalized_text_expression(self, quoted_column: str) -> str:
         """Fold case and surrounding whitespace for a consistency comparison.
 
@@ -486,6 +591,27 @@ class PostgresqlDialect:
             expression = dialect.normalized_text_expression('"city"')
         """
         return f"LOWER(TRIM({quoted_column}))"
+
+    def exact_text_expression(self, quoted_column: str) -> str:
+        """Force a byte-exact comparison regardless of the column's collation.
+
+        ``COLLATE "C"`` is PostgreSQL's byte-comparison collation, always
+        available regardless of what locale the database or column was
+        created with. The ``CAST`` to ``text`` is what lets this apply to
+        ``citext``, whose whole purpose is case-insensitive comparison and
+        which would otherwise ignore the collation override.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+
+        Returns:
+            ``CAST(<column> AS TEXT) COLLATE "C"``.
+
+        Example:
+            expression = PostgresqlDialect().exact_text_expression('"city"')
+            assert expression == 'CAST("city" AS TEXT) COLLATE "C"'
+        """
+        return f'CAST({quoted_column} AS TEXT) COLLATE "C"'
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Report that stock PostgreSQL has no approximate distinct count.

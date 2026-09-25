@@ -208,6 +208,81 @@ class TestConsistencyIsDiagnosed:
         assert [i.dimension for i in issues if i.dimension == "uniqueness"] == ["uniqueness"]
 
 
+class TestCaseInsensitiveCollationDoesNotHideVariants:
+    """`NEW-AF`: a case-insensitive collation used to make consistency blind.
+
+    Before this fix, the raw distinct count was ``COUNT(DISTINCT col)`` --
+    under the column's own collation. On a column declared ``COLLATE
+    NOCASE``, that made ``'Tehran'`` and ``'tehran'`` one value to the raw
+    count itself, so the raw and folded counts collapsed together and
+    consistency reported a perfect (and false) ``1.0``. The fix forces the
+    raw count through ``COLLATE BINARY`` regardless of the column's own
+    collation, so it now means the same thing everywhere.
+    """
+
+    # Hand-derived from the three literal values below, under COLLATE
+    # BINARY (byte-exact, the fixed behaviour) and separately under the
+    # column's declared COLLATE NOCASE (the pre-fix behaviour), to make the
+    # contrast explicit:
+    #
+    #   'Tehran', 'tehran', ' Tehran'
+    #
+    #   Exact (COLLATE BINARY): all three strings differ byte-for-byte
+    #     ('Tehran' vs 'tehran' differ in case; 'Tehran' vs ' Tehran' differ
+    #     by the leading space) -> distinct_count = 3.
+    #   Folded (LOWER(TRIM(col))): every value becomes 'tehran' -> folded = 1.
+    #   consistency = folded / distinct = 1 / 3.
+    #   uniqueness = distinct / present = 3 / 3 = 1.0 (every row is its own
+    #     value -- no duplicate).
+    #
+    #   For contrast, under the column's own NOCASE collation (the old,
+    #   buggy raw count): 'Tehran' and 'tehran' already collate equal
+    #   case-insensitively, while ' Tehran' (extra leading space) does not
+    #   collate equal to either -> old raw distinct = 2, which is what made
+    #   the pre-fix consistency score 1/2 instead of the true 1/3, and wrongly
+    #   flagged one "duplicate" (present 3 - distinct 2 = 1) that is really a
+    #   third, byte-distinct spelling.
+    NOCASE_SEEDED = """
+        CREATE TABLE places (
+            id INTEGER PRIMARY KEY,
+            city TEXT COLLATE NOCASE
+        );
+        INSERT INTO places (id, city) VALUES
+            (1, 'Tehran'),
+            (2, 'tehran'),
+            (3, ' Tehran');
+    """
+
+    def test_the_distinct_and_folded_counts_and_the_consistency_score(
+        self, profiled: Callable[..., object]
+    ) -> None:
+        city = profiled(self.NOCASE_SEEDED)["city"]  # type: ignore[index,call-arg]
+
+        assert city.distinct_count == 3
+        assert city.normalized_distinct_count == 1
+
+        columns = {"city": city}
+        metrics = _quality_metrics_for(columns)
+        consistency = next(m for m in metrics if m.dimension == "consistency")
+        assert consistency.score == pytest.approx(1 / 3)
+
+    def test_uniqueness_is_computed_from_the_exact_distinct_count_not_the_folded_one(
+        self, profiled: Callable[..., object]
+    ) -> None:
+        # present = 3, distinct = 3: every row is its own value, so no
+        # duplicate is reported -- unlike the old, collation-folded distinct
+        # of 2, which wrongly flagged one.
+        city = profiled(self.NOCASE_SEEDED)["city"]  # type: ignore[index,call-arg]
+        columns = {"city": city}
+
+        metrics = _quality_metrics_for(columns)
+        uniqueness = next(m for m in metrics if m.dimension == "uniqueness")
+        assert uniqueness.score == pytest.approx(1.0)
+
+        issues = _diagnose(columns)
+        assert not [i for i in issues if i.dimension == "uniqueness"]
+
+
 class TestDiagnosticsStayPure:
     """`DQDiagnostics` reads profiles. It must not learn to query."""
 
@@ -223,6 +298,30 @@ class TestDiagnosticsStayPure:
 
         for forbidden in ("get_connection", "sqlite3", "psycopg", "pyodbc", "execute("):
             assert forbidden not in source, f"diagnostics.py must not use {forbidden!r}"
+
+
+def _quality_metrics_for(columns: dict[str, object]) -> list[object]:
+    """Score every profiled column with ``SqlProfiler._quality_metrics``.
+
+    A thin wrapper so a test can read a dimension's ``score`` directly,
+    rather than re-deriving it from ``distinct_count``/
+    ``normalized_distinct_count`` itself -- which is what
+    ``SqlProfiler.build_metrics`` does for a real run.
+
+    Args:
+        columns: Column name to :class:`~dqt.sql.profiling.ColumnProfile`.
+
+    Returns:
+        Every uniqueness/consistency metric produced, across all columns.
+
+    Example:
+        metrics = _quality_metrics_for(profiled())
+    """
+    profiler = SqlProfiler(ConnectionConfig(id="s", dsn="sqlite:///:memory:"))
+    metrics: list[object] = []
+    for column in columns.values():  # type: ignore[attr-defined]
+        metrics.extend(profiler._quality_metrics(column, run_id="run-1"))
+    return metrics
 
 
 def _diagnose(columns: object) -> list[object]:

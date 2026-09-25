@@ -271,6 +271,8 @@ _NUMERIC_TYPES: frozenset[str] = frozenset(
 #: Types this dialect cannot order. ``text`` and ``ntext`` are the deprecated LOB types, and ``MIN``
 #: over either is an error -- which is why this question is asked of the
 #: dialect at all. Use ``varchar(max)`` instead; that one orders fine.
+#: ``bit`` is here (`NEW-AF`) because ``MIN``/``MAX`` over it is
+#: ``Msg 8117: Operand data type bit is invalid for min operator.``.
 _UNORDERED_TYPES: frozenset[str] = frozenset(
     {
         "varbinary",
@@ -284,6 +286,23 @@ _UNORDERED_TYPES: frozenset[str] = frozenset(
         "hierarchyid",
         "sql_variant",
         "blob",
+        "bit",
+    }
+)
+
+#: Types this dialect cannot compare for equality at all, so ``COUNT(DISTINCT
+#: ...)`` over them fails outright (`NEW-AF`) with ``Msg 8117: Operand data
+#: type ... is invalid for count operator.``. Deliberately a *different* set
+#: from ``_UNORDERED_TYPES``: ``varbinary``/``binary`` are excluded there for
+#: ordering but do support a distinct count.
+_NO_DISTINCT_TYPES: frozenset[str] = frozenset(
+    {
+        "text",
+        "ntext",
+        "image",
+        "xml",
+        "geography",
+        "geometry",
     }
 )
 
@@ -661,6 +680,70 @@ class SqlServerDialect:
         """
         return normalized_type_name(data_type) in _NUMERIC_TYPES
 
+    def supports_distinct(self, data_type: str) -> bool:
+        """Whether this type can be compared for equality at all.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``False`` for the deprecated LOB types (``text``, ``ntext``,
+            ``image``) and for ``xml``, ``geography`` and ``geometry``, none
+            of which SQL Server will compare for equality --
+            ``COUNT(DISTINCT ...)`` over any of them raises ``Msg 8117``.
+            ``True`` otherwise, including for ``varbinary``/``binary``, which
+            are comparable even though they do not order.
+
+        Example:
+            assert SqlServerDialect().supports_distinct("xml") is False
+            assert SqlServerDialect().supports_distinct("varbinary") is True
+        """
+        return normalized_type_name(data_type) not in _NO_DISTINCT_TYPES
+
+    def is_text_type(self, data_type: str) -> bool:
+        """Whether this type is one of SQL Server's character types.
+
+        Args:
+            data_type: The column's declared type.
+
+        Returns:
+            ``True`` for ``char``, ``varchar``, ``nchar`` and ``nvarchar``.
+            ``False`` for ``text``/``ntext`` (the deprecated LOB types,
+            already excluded from bounds and distinct counting entirely) and
+            for every non-character type.
+
+        Example:
+            assert SqlServerDialect().is_text_type("nvarchar") is True
+            assert SqlServerDialect().is_text_type("datetime2") is False
+        """
+        return normalized_type_name(data_type) in {"char", "varchar", "nchar", "nvarchar"}
+
+    def mean_expression(self, quoted_column: str, data_type: str) -> str:
+        """Return the ``AVG`` expression, cast through ``FLOAT`` to avoid integer arithmetic.
+
+        Bare ``AVG`` over an integer column truncates towards the integer --
+        ``AVG(1, 2)`` is ``1``, not ``1.5`` -- and can overflow its
+        accumulator once the sum passes the ``int`` range (``Msg 8115``).
+        Casting to ``FLOAT`` first avoids both, and does so for every
+        mean-supporting type here, not only the integer ones, so the
+        expression is the same regardless of *data_type*.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+            data_type: The column's declared type (unused; the cast is the
+                same for every type this is called for).
+
+        Returns:
+            ``AVG(CAST(<column> AS FLOAT))``.
+
+        Example:
+            assert (
+                SqlServerDialect().mean_expression("[n]", "int")
+                == "AVG(CAST([n] AS FLOAT))"
+            )
+        """
+        return f"AVG(CAST({quoted_column} AS FLOAT))"
+
     def normalized_text_expression(self, quoted_column: str) -> str:
         """Fold case and surrounding whitespace for a consistency comparison.
 
@@ -674,6 +757,31 @@ class SqlServerDialect:
             expression = dialect.normalized_text_expression('"city"')
         """
         return f"LOWER(TRIM({quoted_column}))"
+
+    def exact_text_expression(self, quoted_column: str) -> str:
+        """Force a byte-exact comparison regardless of the column's collation.
+
+        SQL Server's default collations are case-insensitive
+        (``*_CI_AS``), under which ``'Tehran'`` and ``'tehran'`` are already
+        one value to ``COUNT(DISTINCT ...)``. Casting to ``VARBINARY(MAX)``
+        compares the underlying bytes instead of the collated text, which is
+        sensitive to case and trailing whitespace regardless of the column's
+        collation. Verified against a live SQL Server 2022 instance: a
+        ``#temp`` table holding ``'Tehran'``, ``'tehran'`` and ``'Tehran '``
+        under the default collation reports a raw distinct count of ``1``
+        and a ``VARBINARY(MAX)`` distinct count of ``3``.
+
+        Args:
+            quoted_column: An already-quoted column reference.
+
+        Returns:
+            ``CAST(<column> AS VARBINARY(MAX))``.
+
+        Example:
+            expression = SqlServerDialect().exact_text_expression("[city]")
+            assert expression == "CAST([city] AS VARBINARY(MAX))"
+        """
+        return f"CAST({quoted_column} AS VARBINARY(MAX))"
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Return SQL Server's built-in approximate distinct count.

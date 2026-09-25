@@ -7,7 +7,8 @@ isolated, and leave no files on disk.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -133,6 +134,48 @@ class TestSaveRun:
         assert len(store.load_runs()) == 1
         assert len(store.load_metrics("run-001")) == 1
         assert len(store.load_issues("run-001")) == 1
+
+    def test_metadata_holding_a_decimal_and_a_date_does_not_crash_the_save(
+        self, store: RunStore
+    ) -> None:
+        """`NEW-AF`: defence in depth for a metadata producer that forgot to sanitise.
+
+        ``dqt.sql.profiling`` now turns a raw driver value into a JSON-safe
+        one before it ever reaches a ``DQMetric``, but ``_metric_row`` also
+        serializes with ``default=str`` so that a *future* producer which
+        skips that step degrades to a readable string instead of raising
+        ``TypeError`` inside the one transaction that persists a completed
+        run. This metadata is built directly, bypassing the profiler
+        entirely, to prove the store's own defence rather than the
+        profiler's.
+
+        Hand-derived: ``str(Decimal("12.50")) == "12.50"`` and
+        ``str(date(2024, 1, 2)) == "2024-01-02"`` -- both are what
+        ``json.dumps(..., default=str)`` calls on a value it does not
+        otherwise know how to encode.
+        """
+        metric = DQMetric(
+            run_id="run-002",
+            dimension="completeness",
+            score=1.0,
+            table_name="orders",
+            column_name="amount",
+            metadata={"min_value": Decimal("12.50"), "max_value": date(2024, 1, 2)},
+        )
+        result = PipelineResult(
+            run_id="run-002",
+            connection_id="pg-test",
+            started_at=datetime(2026, 7, 3, 10, 0, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 7, 3, 10, 5, 0, tzinfo=UTC),
+            status="success",
+            metrics=[metric],
+            issues=[],
+        )
+
+        store.save_run(result)
+
+        metrics = store.load_metrics("run-002")
+        assert metrics[0]["metadata"] == {"min_value": "12.50", "max_value": "2024-01-02"}
 
     def test_no_dsn_stored(self, store: RunStore, simple_result: PipelineResult) -> None:
         """Verify DSN is never written into the runs table."""

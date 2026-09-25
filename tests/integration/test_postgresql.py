@@ -21,13 +21,16 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
-from dqt.common.models import ConnectionConfig, RuleConfig, RuleScope
+from dqt.common.models import ConnectionConfig, DQPipelineConfig, RuleConfig, RuleScope
+from dqt.common.storage import RunStore
 from dqt.exceptions import ReadOnlyViolationError
 from dqt.sql._connect import get_connection, get_dialect_for
 from dqt.sql.cleansing import CleansingConfig, cleanse_apply, cleanse_plan
+from dqt.sql.pipeline import DQTPipeline
 from dqt.sql.profiling import SqlProfiler
 from dqt.sql.rules import apply_rules
 from dqt.sql.schema_discovery import discover_schema
@@ -334,3 +337,110 @@ class TestRowIdentityOnPostgresql:
                 connection.commit()
             finally:
                 connection.close()
+
+
+class TestProfilingAcrossPostgresqlTypes:
+    """`NEW-AF`: profiling must not choke on PostgreSQL's non-numeric orderable types.
+
+    Before this fix, ``SqlProfiler._is_text_like`` treated every
+    orderable-but-not-numeric type as text, including ``timestamp``,
+    ``date``, ``boolean`` and ``uuid``, and asked for ``COUNT(DISTINCT
+    LOWER(TRIM(col)))`` over them. PostgreSQL has no implicit cast from any
+    of those types to ``text``, so the whole table's single aggregate query
+    failed outright -- and ``money``, ``boolean`` and ``uuid`` additionally
+    have no ``AVG``/``MIN``/``MAX`` of their own, which raised on top of
+    that. A table combining all of them, which is an ordinary production
+    schema, could not be profiled at all.
+    """
+
+    @pytest.fixture
+    def typed_table(self) -> Iterator[str]:
+        """Create a table spanning PostgreSQL's problem types, then drop it.
+
+        Two rows. ``price`` (money) is 10.50 and 20.25, hand-derived mean
+        (10.50 + 20.25) / 2 = 15.375 -- counted from the literal INSERT
+        below, not from anything DQT reports.
+
+        Yields:
+            The name of the created table.
+
+        Example:
+            def test_something(typed_table):
+                ...
+        """
+        table = f"dqt_types_{uuid.uuid4().hex[:8]}"
+        writable = ConnectionConfig(id="pg-setup", dsn=str(POSTGRES_DSN), read_only=False)
+        connection = get_connection(writable)
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                f"""
+                CREATE TABLE {table} (
+                    id INTEGER PRIMARY KEY,
+                    amount NUMERIC(10,2),
+                    price MONEY,
+                    flag BOOLEAN,
+                    ext_id UUID,
+                    created_at TIMESTAMP,
+                    created_date DATE,
+                    payload JSON,
+                    payload_b JSONB,
+                    label TEXT
+                )
+                """
+            )
+            cursor.execute(
+                f"""
+                INSERT INTO {table}
+                    (id, amount, price, flag, ext_id, created_at, created_date,
+                     payload, payload_b, label)
+                VALUES
+                    (1, 10.55, 10.50, TRUE,
+                     'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+                     '2026-01-01 10:00:00', '2026-01-01',
+                     '{{"a": 1}}', '{{"a": 1}}', 'Tehran'),
+                    (2, 20.45, 20.25, FALSE,
+                     'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22',
+                     '2026-02-01 11:00:00', '2026-02-01',
+                     '{{"b": 2}}', '{{"b": 2}}', 'tehran')
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        yield table
+
+        connection = get_connection(writable)
+        try:
+            connection.cursor().execute(f"DROP TABLE IF EXISTS {table}")
+            connection.commit()
+        finally:
+            connection.close()
+
+    def test_a_full_run_succeeds_with_every_type_present(
+        self, typed_table: str, tmp_path: Path
+    ) -> None:
+        """The whole point: a run over this table used to fail outright.
+
+        Ground truth: ``price`` (money) holds 10.50 and 20.25, so its mean
+        is (10.50 + 20.25) / 2 = 15.375.
+        """
+        config = ConnectionConfig(id="pg", dsn=str(POSTGRES_DSN))
+        pipeline_config = DQPipelineConfig(connection_id="pg", include_tables=[typed_table])
+        store_path = tmp_path / "runs.db"
+
+        result, _ = DQTPipeline(
+            config, pipeline_config, store_path=store_path, report_dir=tmp_path
+        ).run()
+
+        assert result.status == "success"
+        assert result.stage_errors == []
+
+        store = RunStore(db_path=store_path)
+        assert any(run["run_id"] == result.run_id for run in store.load_runs())
+
+        money_metric = next(
+            m for m in result.metrics if m.column_name == "price" and m.dimension == "completeness"
+        )
+        assert money_metric.metadata["mean_value"] == pytest.approx(15.375)

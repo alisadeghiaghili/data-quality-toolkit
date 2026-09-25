@@ -13,6 +13,75 @@ Dates are the merge dates on `main`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Profiling was broken on both production dialects (`NEW-AF`).** Seven
+  confirmed defects, all reproduced live -- SQL Server ones on a real SQL
+  Server 2022 instance.
+
+  **A run over a column holding a `Decimal`, a date/datetime/time, raw bytes,
+  or a UUID lost the whole run.** `SqlProfiler.build_metrics` copied the raw
+  driver value straight into `DQMetric.metadata`, and `RunStore._metric_row`
+  called `json.dumps` on it with no `default`. The `TypeError` happened
+  inside `_persist`, outside `run()`'s stage guards -- every stage had
+  already succeeded, and nothing was stored, and no report was written.
+  Fixed with a small helper that turns a driver value into one `json.dumps`
+  accepts (`Decimal` to its exact decimal string, a temporal value to
+  `isoformat()`, binary to a bounded hex preview, anything else to `str()`)
+  applied where metric metadata is built, plus `RunStore` now serializes
+  metadata with `default=str` as defence in depth against a future producer
+  that forgets to.
+
+  **PostgreSQL: profiling failed outright on an ordinary schema.**
+  `SqlProfiler._is_text_like` inferred "text" from "orderable but not
+  numeric", which caught `date`, `timestamp`, `time`, `interval`, `boolean`
+  and `uuid` too, and asked for `COUNT(DISTINCT LOWER(TRIM(col)))` over them.
+  PostgreSQL has no implicit cast from any of those to `text`, so the
+  table's one aggregate query failed. `money`, `boolean` and `uuid`
+  additionally have no `AVG`/`MIN`/`MAX` of their own, which raised on top
+  of that.
+
+  **`COUNT(DISTINCT ...)` was asked of types that cannot be compared for
+  equality at all** -- PostgreSQL's `json` and its geometric types
+  (`point`, `line`, `lseg`, `box`, `path`, `polygon`, `circle`); SQL
+  Server's `text`, `ntext`, `image`, `xml`, `geography`, `geometry`. A
+  single such column failed the whole table's query, not just that
+  column's statistic.
+
+  **SQL Server: `MIN`/`MAX` over `bit` raised `Msg 8117`.**
+
+  **SQL Server: a bare `AVG` over an integer column was wrong twice over.**
+  It truncates towards the integer (`AVG(1, 2)` reported `1`, not `1.5`),
+  and it can overflow its accumulator once the sum passes the `int` range
+  (`Msg 8115`) -- reachable on a perfectly ordinary running total.
+
+  Fixed by asking the dialect two further, separate questions it had never
+  been asked before: `supports_distinct(data_type)`, for whether a type can
+  be compared for equality at all, and `is_text_type(data_type)`, for
+  whether it genuinely stores character data -- replacing the
+  `_is_text_like` inference entirely. A third method, `mean_expression`,
+  lets the dialect decide *how* to average: PostgreSQL casts `money`
+  through `NUMERIC`, and SQL Server casts every mean-supporting type through
+  `FLOAT` so an integer column neither truncates nor overflows.
+
+### Changed
+
+- **A text column's distinct count is now byte-exact, regardless of the
+  column's own collation (`NEW-AF`).** `COUNT(DISTINCT col)` used to run
+  under the column's own collation, so on a case-insensitive one -- SQL
+  Server's default `*_CI_AS` collations, or a SQLite column declared
+  `COLLATE NOCASE` -- `'Tehran'` and `'tehran'` were already one value to
+  the raw count itself. The raw and folded distinct counts then collapsed
+  together, and consistency reported a perfect, false `1.0` exactly where
+  two spellings of the same value should have been flagged. A new dialect
+  method, `exact_text_expression`, forces a byte-exact comparison
+  (`COLLATE BINARY` on SQLite, `CAST(... AS TEXT) COLLATE "C"` on
+  PostgreSQL, `CAST(... AS VARBINARY(MAX))` on SQL Server) for the raw
+  count, so it now means the same thing on every column of every dialect.
+  This can change a previously-reported consistency score of `1.0` to a
+  lower one on a case-insensitive column that actually holds spelling
+  variants -- the score was wrong before, not the data.
+
 ## [1.8.0] — 2026-09-07
 
 ### Added

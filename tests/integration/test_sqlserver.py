@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from dqt.common.models import ConnectionConfig, DQIssue, RuleConfig, RuleScope
+from dqt.common.models import ConnectionConfig, DQIssue, DQPipelineConfig, RuleConfig, RuleScope
 from dqt.common.storage import RunStore
 from dqt.exceptions import ReadOnlyViolationError
 from dqt.sql._connect import get_connection, get_dialect_for
@@ -37,6 +37,7 @@ from dqt.sql.cleansing import (
     revert,
 )
 from dqt.sql.dialects.base import ReadOnlyEnforcement
+from dqt.sql.pipeline import DQTPipeline
 from dqt.sql.profiling import SqlProfiler
 from dqt.sql.rules import apply_rules
 from dqt.sql.schema_discovery import discover_schema
@@ -547,3 +548,114 @@ class TestTheApproximateDistinctOptionRunsHere:
             estimated[0].evidence["duplicate_extra_rows"]
             == exact[0].evidence["duplicate_extra_rows"]
         )
+
+
+class TestProfilingAcrossSqlServerTypes:
+    """`NEW-AF`: profiling must not choke on SQL Server's problem types.
+
+    Four defects, all reproduced live on this SQL Server 2022 instance and
+    fixed together: ``MIN``/``MAX`` over ``bit`` raised ``Msg 8117``; a bare
+    ``AVG`` over an ``int`` column truncated towards the integer and could
+    overflow its accumulator once the sum passed the ``int`` range (``Msg
+    8115``); ``COUNT(DISTINCT ...)`` was asked of ``xml``, which has no
+    equality operator (``Msg 8117``); and the raw distinct count ran under
+    the column's own default, case-insensitive collation, so two
+    differently-spelt values were already indistinguishable to it and
+    consistency reported a false ``1.0``.
+    """
+
+    @pytest.fixture
+    def typed_table(self) -> Iterator[str]:
+        """Create a table spanning SQL Server's problem types, then drop it.
+
+        Two rows. ``big_int`` is ``2000000000`` on both, whose sum
+        (4000000000) overflows the ``int`` range that a bare ``AVG``
+        accumulates in -- hand-derived mean 2000000000.0. ``small_int`` is 1
+        and 2, hand-derived mean 1.5. ``amount`` (decimal) is 10.55 and
+        20.45, mean 15.50; ``price`` (money) is 10.50 and 20.25, mean
+        15.375. ``name`` holds ``N'Tehran'`` and ``N'tehran'`` under the
+        default (case-insensitive) collation.
+
+        Yields:
+            The name of the created table.
+
+        Example:
+            def test_something(typed_table):
+                ...
+        """
+        table = f"dqt_types_{uuid.uuid4().hex[:8]}"
+        _execute(
+            f"""
+            CREATE TABLE {table} (
+                id INT NOT NULL PRIMARY KEY,
+                amount DECIMAL(10,2),
+                price MONEY,
+                flag BIT,
+                big_int INT,
+                small_int INT,
+                start_date DATE,
+                created_at DATETIME2,
+                external_id UNIQUEIDENTIFIER,
+                name NVARCHAR(200),
+                payload XML
+            )
+            """,
+            f"""
+            INSERT INTO {table}
+                (id, amount, price, flag, big_int, small_int, start_date,
+                 created_at, external_id, name, payload)
+            VALUES
+                (1, 10.55, 10.50, 1, 2000000000, 1, '2026-01-01',
+                 '2026-01-01T10:00:00', NEWID(), N'Tehran', '<a/>'),
+                (2, 20.45, 20.25, 0, 2000000000, 2, '2026-02-01',
+                 '2026-02-01T11:00:00', NEWID(), N'tehran', '<b/>')
+            """,
+        )
+        yield table
+        _execute(f"DROP TABLE IF EXISTS {table}")
+
+    def test_a_full_run_succeeds_with_every_type_present(
+        self, typed_table: str, tmp_path: Path
+    ) -> None:
+        """The whole point: a run over this table used to fail outright.
+
+        Ground truth, hand-derived from the fixture's literal INSERT:
+        ``big_int`` mean = 2000000000.0 (the sum overflows a bare ``int``
+        accumulator; the cast through ``FLOAT`` does not); ``small_int``
+        mean = (1 + 2) / 2 = 1.5; ``name``'s exact distinct count is 2
+        (``'Tehran'`` and ``'tehran'`` differ byte-for-byte) and its folded
+        distinct count is 1, so consistency = 1 / 2 = 0.5 -- not the false
+        ``1.0`` the column's own case-insensitive collation would report.
+        """
+        config = ConnectionConfig(id="mssql", dsn=str(SQLSERVER_DSN))
+        pipeline_config = DQPipelineConfig(connection_id="mssql", include_tables=[typed_table])
+        store_path = tmp_path / "runs.db"
+
+        result, _ = DQTPipeline(
+            config, pipeline_config, store_path=store_path, report_dir=tmp_path
+        ).run()
+
+        assert result.status == "success"
+        assert result.stage_errors == []
+
+        store = RunStore(db_path=store_path)
+        assert any(run["run_id"] == result.run_id for run in store.load_runs())
+
+        def _completeness_metric(column_name: str):
+            return next(
+                m
+                for m in result.metrics
+                if m.column_name == column_name and m.dimension == "completeness"
+            )
+
+        assert _completeness_metric("big_int").metadata["mean_value"] == pytest.approx(
+            2_000_000_000.0
+        )
+        assert _completeness_metric("small_int").metadata["mean_value"] == pytest.approx(1.5)
+
+        consistency = next(
+            m for m in result.metrics if m.column_name == "name" and m.dimension == "consistency"
+        )
+        assert consistency.score == pytest.approx(0.5)
+        assert consistency.metadata["distinct_count"] == 2
+        assert consistency.metadata["normalized_distinct_count"] == 1

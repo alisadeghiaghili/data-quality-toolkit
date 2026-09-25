@@ -106,6 +106,71 @@ class TestApproximateDistinct:
         assert POSTGRESQL.approximate_distinct_expression('"c"') is None
 
 
+class TestSupportsDistinct:
+    """`NEW-AF`: PostgreSQL's json and geometric types have no equality operator.
+
+    Hand-derived from the PostgreSQL manual: ``json`` (unlike ``jsonb``) has
+    no default equality operator, and none of the geometric types (point,
+    line, lseg, box, path, polygon, circle) do either. Every other type here
+    -- including ``jsonb`` and ``bytea``, which do not order -- supports
+    ``=`` and so supports a distinct count.
+    """
+
+    @pytest.mark.parametrize(
+        "data_type", ["json", "point", "line", "lseg", "box", "path", "polygon", "circle"]
+    )
+    def test_types_with_no_equality_operator_do_not_support_distinct(self, data_type):
+        assert POSTGRESQL.supports_distinct(data_type) is False
+
+    @pytest.mark.parametrize(
+        "data_type", ["integer", "text", "jsonb", "bytea", "boolean", "uuid", "timestamp"]
+    )
+    def test_comparable_types_support_distinct(self, data_type):
+        assert POSTGRESQL.supports_distinct(data_type) is True
+
+
+class TestIsTextType:
+    """`NEW-AF`: only PostgreSQL's own character types, matched by whole name.
+
+    ``date``, ``timestamp``, ``boolean`` and ``uuid`` are all
+    orderable-but-not-numeric, which is precisely the set the old
+    ``_is_text_like`` inference misclassified as text -- and then asked for
+    ``LOWER(TRIM(...))`` over, which PostgreSQL has no implicit cast to
+    support.
+    """
+
+    @pytest.mark.parametrize(
+        "data_type",
+        ["text", "character varying", "varchar", "character", "char", "bpchar", "citext", "name"],
+    )
+    def test_character_types_are_text(self, data_type):
+        assert POSTGRESQL.is_text_type(data_type) is True
+
+    @pytest.mark.parametrize(
+        "data_type", ["date", "timestamp", "time", "interval", "boolean", "uuid", "integer"]
+    )
+    def test_orderable_non_character_types_are_not_text(self, data_type):
+        assert POSTGRESQL.is_text_type(data_type) is False
+
+
+class TestMeanExpression:
+    """`NEW-AF`: PostgreSQL has no ``AVG(money)`` at all."""
+
+    def test_money_is_cast_through_numeric(self):
+        assert POSTGRESQL.mean_expression('"price"', "money") == 'AVG(CAST("price" AS NUMERIC))'
+
+    def test_every_other_type_averages_directly(self):
+        assert POSTGRESQL.mean_expression('"score"', "integer") == 'AVG("score")'
+        assert POSTGRESQL.mean_expression('"score"', "numeric") == 'AVG("score")'
+
+
+class TestExactTextExpression:
+    """`NEW-AF`: a byte-comparison collation, regardless of the column's own."""
+
+    def test_casts_to_text_and_forces_c_collation(self):
+        assert POSTGRESQL.exact_text_expression('"city"') == 'CAST("city" AS TEXT) COLLATE "C"'
+
+
 class TestIntrospectionSql:
     def test_column_metadata_sql_reads_the_right_catalog(self):
         """The query still asks information_schema and excludes system schemas.
