@@ -467,6 +467,69 @@ deprecation policy, and until now no `CHANGELOG.md`. `CHANGELOG.md` is added
 alongside this fix; the other two are listed as hard gates for 1.0.0 in
 `docs/PROPOSAL-v1.0-roadmap.md` and need an owner decision.
 
+### `NEW-AF` · Profiling was broken on both production dialects — **fixed**
+
+**Severity:** high — PostgreSQL profiling failed outright on an ordinary
+schema, and a crashing SQL Server profile silently discarded an otherwise
+successful run · **Found:** 2026-09-24, by reproducing each defect against a
+live SQL Server 2022 instance and against the PostgreSQL manual
+
+Seven confirmed defects, all in `SqlProfiler` (`src/dqt/sql/profiling.py`)
+and the dialect layer:
+
+1. **Raw driver values in metric metadata crashed persistence.**
+   `SqlProfiler.build_metrics` copied `column.min_value`/`max_value` into
+   `DQMetric.metadata` unchanged. `RunStore._metric_row` then called
+   `json.dumps(metric.metadata)` with no `default`, so a `Decimal`
+   (`numeric`/`decimal`/`money`), a date/datetime/time, raw bytes, or a
+   `uuid.UUID` raised `TypeError` inside `_persist` — outside `run()`'s
+   stage guards. Every stage had already succeeded; nothing was stored, and
+   no report was written.
+2. **PostgreSQL: `SqlProfiler._is_text_like` misclassified every
+   orderable-but-not-numeric type as text** — `date`, `timestamp`, `time`,
+   `interval`, `boolean`, `uuid` — and asked for
+   `COUNT(DISTINCT LOWER(TRIM(col)))` over them. PostgreSQL has no implicit
+   cast to `text`, so the table's one aggregate query failed outright.
+3. **`COUNT(DISTINCT col)` was emitted for types the engine cannot compare
+   for equality at all**: PostgreSQL `json`, `xml`, and the geometric types
+   (`point`, `line`, `lseg`, `box`, `path`, `polygon`, `circle`); SQL Server
+   `text`, `ntext`, `image`, `xml`, `geography`, `geometry`.
+4. **SQL Server: `MIN`/`MAX` over `bit`** raised `Msg 8117`.
+5. **SQL Server: a bare `AVG(col)` over an integer column truncated**
+   (`AVG(1, 2)` returned `1`) **and could overflow** once the sum passed the
+   `int` range (`Msg 8115`).
+6. **PostgreSQL: `avg(money)`, `min`/`max(boolean)`, `min`/`max(uuid)`** do
+   not exist.
+7. **Consistency was blind under a case-insensitive collation.** The raw
+   distinct count ran under the column's own collation, so on SQL Server's
+   default `*_CI_AS` collation (and SQLite `COLLATE NOCASE`), `'Tehran'` and
+   `'tehran'` were already one value to the raw count itself — raw distinct
+   equalled folded distinct, and consistency reported a false `1.0` exactly
+   where it should have flagged the variant.
+
+Fixed by adding four methods to the `Dialect` Protocol
+(`src/dqt/sql/dialects/base.py`) — `supports_distinct`, `is_text_type`,
+`mean_expression`, `exact_text_expression` — implemented per dialect, and
+asked by the profiler instead of inferred. A text column's distinct count
+is now taken byte-exact (`exact_text_expression`) regardless of collation,
+which is a real behaviour change: see `CHANGELOG.md` under *Changed*. A
+small `_json_safe_metadata_value` helper in `profiling.py` makes metric
+metadata JSON-native before it is built; `RunStore` additionally serializes
+with `json.dumps(..., default=str)` as defence in depth.
+
+Proven by `tests/unit/sql/dialects/test_postgresql_dialect.py`,
+`tests/unit/sql/dialects/test_sqlite_dialect.py`,
+`tests/unit/sql/dialects/test_sqlserver_dialect.py`,
+`tests/unit/sql/test_profiling_dialect_rendering.py`,
+`tests/unit/sql/test_profiling_metadata_json_safety.py`,
+`tests/unit/sql/test_uniqueness_and_consistency.py`,
+`tests/unit/test_column_statistics_reach_the_reader.py`,
+`tests/unit/common/test_storage.py`,
+`tests/integration/test_postgresql.py::TestProfilingAcrossPostgresqlTypes`
+and
+`tests/integration/test_sqlserver.py::TestProfilingAcrossSqlServerTypes` —
+the last run live against a local SQL Server 2022 instance.
+
 ## 3. Open design questions — owner decisions, not agent decisions
 
 Each of these is a place where the conventions in this doc set propose something
