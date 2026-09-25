@@ -31,7 +31,6 @@ from dqt.sql.dialects.base import (
     ColumnMetadata,
     ForeignKeyMetadata,
     ReadOnlyEnforcement,
-    _unimplemented,
     ansi_select_aggregates_sql,
     normalized_type_name,
     quote_with_doubled_delimiter,
@@ -614,7 +613,7 @@ class SqliteDialect:
         Example:
             assert SqliteDialect().supports_distinct("blob") is True
         """
-        _unimplemented("SqliteDialect.supports_distinct")
+        return True
 
     def is_text_type(self, data_type: str) -> bool:
         """Whether this column stores text, by SQLite's own affinity rule.
@@ -637,7 +636,8 @@ class SqliteDialect:
         Example:
             assert SqliteDialect().is_text_type("VARCHAR(50)") is True
         """
-        _unimplemented("SqliteDialect.is_text_type")
+        normalized = normalized_type_name(data_type)
+        return any(keyword in normalized for keyword in ("char", "clob", "text"))
 
     def mean_expression(self, quoted_column: str, data_type: str) -> str:
         """Return a bare ``AVG`` expression; SQLite needs no cast.
@@ -652,7 +652,7 @@ class SqliteDialect:
         Example:
             assert SqliteDialect().mean_expression('"score"', "integer") == 'AVG("score")'
         """
-        _unimplemented("SqliteDialect.mean_expression")
+        return f"AVG({quoted_column})"
 
     def normalized_text_expression(self, quoted_column: str) -> str:
         """Fold case and surrounding whitespace for a consistency comparison.
@@ -686,7 +686,7 @@ class SqliteDialect:
             expression = SqliteDialect().exact_text_expression('"city"')
             assert expression == '"city" COLLATE BINARY'
         """
-        _unimplemented("SqliteDialect.exact_text_expression")
+        return f"{quoted_column} COLLATE BINARY"
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Report that SQLite has no approximate distinct count.

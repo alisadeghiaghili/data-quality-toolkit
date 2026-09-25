@@ -1020,7 +1020,22 @@ class RunStore:
 
     @staticmethod
     def _metric_row(run_id: str, metric: DQMetric) -> tuple[Any, ...]:
-        """Map a DQMetric dataclass to a parameter tuple for run_metrics INSERT."""
+        """Map a DQMetric dataclass to a parameter tuple for run_metrics INSERT.
+
+        ``metadata`` is serialized with ``default=str`` as defence in depth
+        (`NEW-AF`): the profiler already turns a raw driver value (a
+        ``Decimal``, a date, raw bytes, a UUID) into a JSON-native one before
+        it ever reaches a ``DQMetric``, but this is the last point before a
+        write, and the failure this guards against is severe -- before
+        `NEW-AF`, ``json.dumps(metric.metadata)`` with no ``default`` raised
+        ``TypeError`` here, inside the one transaction that persists a
+        completed run, so nothing was stored and no report was written even
+        though every stage had already succeeded. ``default=str`` cannot
+        misrepresent a value silently: every branch above already reduces a
+        value to something JSON-native, so this only ever fires for a future
+        producer that forgot to, and it fires as a readable string rather
+        than a crash that discards an otherwise-successful run.
+        """
         return (
             run_id,
             metric.schema_name,
@@ -1030,7 +1045,7 @@ class RunStore:
             metric.metric_name,
             metric.score,
             metric.value,
-            json.dumps(metric.metadata),
+            json.dumps(metric.metadata, default=str),
         )
 
     @staticmethod

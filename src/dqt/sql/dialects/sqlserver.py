@@ -53,7 +53,6 @@ from dqt.sql.dialects.base import (
     ForeignKeyMetadata,
     ReadOnlyEnforcement,
     _group_foreign_key_rows,
-    _unimplemented,
     ansi_select_aggregates_sql,
     normalized_type_name,
     validate_row_limit,
@@ -272,6 +271,8 @@ _NUMERIC_TYPES: frozenset[str] = frozenset(
 #: Types this dialect cannot order. ``text`` and ``ntext`` are the deprecated LOB types, and ``MIN``
 #: over either is an error -- which is why this question is asked of the
 #: dialect at all. Use ``varchar(max)`` instead; that one orders fine.
+#: ``bit`` is here (`NEW-AF`) because ``MIN``/``MAX`` over it is
+#: ``Msg 8117: Operand data type bit is invalid for min operator.``.
 _UNORDERED_TYPES: frozenset[str] = frozenset(
     {
         "varbinary",
@@ -285,6 +286,23 @@ _UNORDERED_TYPES: frozenset[str] = frozenset(
         "hierarchyid",
         "sql_variant",
         "blob",
+        "bit",
+    }
+)
+
+#: Types this dialect cannot compare for equality at all, so ``COUNT(DISTINCT
+#: ...)`` over them fails outright (`NEW-AF`) with ``Msg 8117: Operand data
+#: type ... is invalid for count operator.``. Deliberately a *different* set
+#: from ``_UNORDERED_TYPES``: ``varbinary``/``binary`` are excluded there for
+#: ordering but do support a distinct count.
+_NO_DISTINCT_TYPES: frozenset[str] = frozenset(
+    {
+        "text",
+        "ntext",
+        "image",
+        "xml",
+        "geography",
+        "geometry",
     }
 )
 
@@ -680,7 +698,7 @@ class SqlServerDialect:
             assert SqlServerDialect().supports_distinct("xml") is False
             assert SqlServerDialect().supports_distinct("varbinary") is True
         """
-        _unimplemented("SqlServerDialect.supports_distinct")
+        return normalized_type_name(data_type) not in _NO_DISTINCT_TYPES
 
     def is_text_type(self, data_type: str) -> bool:
         """Whether this type is one of SQL Server's character types.
@@ -698,7 +716,7 @@ class SqlServerDialect:
             assert SqlServerDialect().is_text_type("nvarchar") is True
             assert SqlServerDialect().is_text_type("datetime2") is False
         """
-        _unimplemented("SqlServerDialect.is_text_type")
+        return normalized_type_name(data_type) in {"char", "varchar", "nchar", "nvarchar"}
 
     def mean_expression(self, quoted_column: str, data_type: str) -> str:
         """Return the ``AVG`` expression, cast through ``FLOAT`` to avoid integer arithmetic.
@@ -724,7 +742,7 @@ class SqlServerDialect:
                 == "AVG(CAST([n] AS FLOAT))"
             )
         """
-        _unimplemented("SqlServerDialect.mean_expression")
+        return f"AVG(CAST({quoted_column} AS FLOAT))"
 
     def normalized_text_expression(self, quoted_column: str) -> str:
         """Fold case and surrounding whitespace for a consistency comparison.
@@ -763,7 +781,7 @@ class SqlServerDialect:
             expression = SqlServerDialect().exact_text_expression("[city]")
             assert expression == "CAST([city] AS VARBINARY(MAX))"
         """
-        _unimplemented("SqlServerDialect.exact_text_expression")
+        return f"CAST({quoted_column} AS VARBINARY(MAX))"
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Return SQL Server's built-in approximate distinct count.

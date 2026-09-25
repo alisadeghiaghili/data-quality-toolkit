@@ -31,7 +31,6 @@ from dqt.sql.dialects.base import (
     ForeignKeyMetadata,
     ReadOnlyEnforcement,
     _group_foreign_key_rows,
-    _unimplemented,
     ansi_select_aggregates_sql,
     normalized_type_name,
     quote_with_doubled_delimiter,
@@ -118,7 +117,9 @@ _NUMERIC_TYPES: frozenset[str] = frozenset(
 #: Types this dialect cannot order. The geometric types are the reason matching is by whole name:
 #: ``point`` and ``interval`` both contain the letters ``int``. ``blob`` is
 #: not a PostgreSQL type and is listed defensively -- if discovery ever
-#: reports one, refusing to order it is the safe answer.
+#: reports one, refusing to order it is the safe answer. ``boolean``/``bool``
+#: and ``uuid`` are here (`NEW-AF`) because PostgreSQL has no ``min``/``max``
+#: for either -- ``ERROR: function min(boolean) does not exist``.
 _UNORDERED_TYPES: frozenset[str] = frozenset(
     {
         "bytea",
@@ -133,6 +134,44 @@ _UNORDERED_TYPES: frozenset[str] = frozenset(
         "polygon",
         "circle",
         "blob",
+        "boolean",
+        "bool",
+        "uuid",
+    }
+)
+
+#: Types this dialect cannot compare for equality at all, so ``COUNT(DISTINCT
+#: ...)`` over them fails outright (`NEW-AF`). Deliberately a *different* set
+#: from ``_UNORDERED_TYPES``: ``jsonb`` and ``bytea`` are comparable, so they
+#: support a distinct count even though neither orders under ``MIN``/``MAX``.
+_NO_DISTINCT_TYPES: frozenset[str] = frozenset(
+    {
+        "json",
+        "xml",
+        "point",
+        "line",
+        "lseg",
+        "box",
+        "path",
+        "polygon",
+        "circle",
+    }
+)
+
+#: Types this dialect stores as character data (`NEW-AF`). Matched by whole
+#: name, unlike SQLite's substring affinity rule: PostgreSQL's
+#: ``information_schema.columns.data_type`` reports one of these exact
+#: spellings for a character column, never a superstring of one.
+_TEXT_TYPES: frozenset[str] = frozenset(
+    {
+        "text",
+        "character varying",
+        "varchar",
+        "character",
+        "char",
+        "bpchar",
+        "citext",
+        "name",
     }
 )
 
@@ -491,7 +530,7 @@ class PostgresqlDialect:
             assert PostgresqlDialect().supports_distinct("json") is False
             assert PostgresqlDialect().supports_distinct("jsonb") is True
         """
-        _unimplemented("PostgresqlDialect.supports_distinct")
+        return normalized_type_name(data_type) not in _NO_DISTINCT_TYPES
 
     def is_text_type(self, data_type: str) -> bool:
         """Whether this type is one of PostgreSQL's character types.
@@ -511,7 +550,7 @@ class PostgresqlDialect:
             assert PostgresqlDialect().is_text_type("character varying") is True
             assert PostgresqlDialect().is_text_type("timestamp") is False
         """
-        _unimplemented("PostgresqlDialect.is_text_type")
+        return normalized_type_name(data_type) in _TEXT_TYPES
 
     def mean_expression(self, quoted_column: str, data_type: str) -> str:
         """Return the ``AVG`` expression, casting ``money`` through ``numeric``.
@@ -535,7 +574,9 @@ class PostgresqlDialect:
                 == 'AVG(CAST("price" AS NUMERIC))'
             )
         """
-        _unimplemented("PostgresqlDialect.mean_expression")
+        if normalized_type_name(data_type) == "money":
+            return f"AVG(CAST({quoted_column} AS NUMERIC))"
+        return f"AVG({quoted_column})"
 
     def normalized_text_expression(self, quoted_column: str) -> str:
         """Fold case and surrounding whitespace for a consistency comparison.
@@ -570,7 +611,7 @@ class PostgresqlDialect:
             expression = PostgresqlDialect().exact_text_expression('"city"')
             assert expression == 'CAST("city" AS TEXT) COLLATE "C"'
         """
-        _unimplemented("PostgresqlDialect.exact_text_expression")
+        return f'CAST({quoted_column} AS TEXT) COLLATE "C"'
 
     def approximate_distinct_expression(self, quoted_column: str) -> str | None:
         """Report that stock PostgreSQL has no approximate distinct count.
